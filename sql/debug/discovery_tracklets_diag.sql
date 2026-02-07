@@ -4,7 +4,7 @@
 -- Project: CSS_SBN_derived
 -- Authors: Rob Seaman (Catalina Sky Survey) / Claude (Anthropic)
 -- Created: 2026-01-08
--- Updated: 2026-02-07
+-- Updated: 2026-02-08
 --
 -- Run these queries after sql/discovery_tracklets.sql to identify NEAs from
 -- NEA.txt that failed to match discovery observations in obs_sbn.
@@ -59,9 +59,10 @@ nea_list AS (
         np.is_numbered,
         np.asteroid_number,
         np.provisional_desig,
-        orb.unpacked_primary_provisional_designation as orb_provid
+        numid.unpacked_primary_provisional_designation as num_provid
     FROM nea_parsed np
-    LEFT JOIN mpc_orbits orb ON orb.packed_primary_provisional_designation = np.packed_desig
+    LEFT JOIN numbered_identifications numid
+        ON np.is_numbered AND numid.permid = np.asteroid_number
 ),
 matched_neas AS (
     SELECT DISTINCT neo.unpacked_desig
@@ -69,7 +70,7 @@ matched_neas AS (
     INNER JOIN obs_sbn obs ON (
         (neo.is_numbered AND obs.permid = neo.asteroid_number)
         OR (NOT neo.is_numbered AND obs.provid = neo.provisional_desig)
-        OR (neo.orb_provid IS NOT NULL AND obs.provid = neo.orb_provid)
+        OR (neo.num_provid IS NOT NULL AND obs.provid = neo.num_provid)
     )
     WHERE obs.disc = '*'
 )
@@ -81,7 +82,7 @@ SELECT
     COALESCE(nl.asteroid_number, '') as asteroid_number,
     -- Show what we tried to match on
     CASE WHEN nl.is_numbered THEN nl.asteroid_number ELSE '' END as match_attempt_permid,
-    COALESCE(nl.provisional_desig, nl.orb_provid, '') as match_attempt_provid
+    COALESCE(nl.provisional_desig, nl.num_provid, '') as match_attempt_provid
 FROM nea_list nl
 LEFT JOIN matched_neas mn ON nl.unpacked_desig = mn.unpacked_desig
 WHERE mn.unpacked_desig IS NULL
@@ -96,7 +97,7 @@ SELECT
     '' as packed_desig,
     '' as unpacked_desig,
     '' as permid_exists,
-    '' as provid_via_orb_exists,
+    '' as provid_via_numid_exists,
     '' as has_disc_star;
 
 WITH nea_parsed AS (
@@ -119,16 +120,17 @@ nea_list AS (
         np.unpacked_desig,
         np.is_numbered,
         np.asteroid_number,
-        orb.unpacked_primary_provisional_designation as orb_provid
+        numid.unpacked_primary_provisional_designation as num_provid
     FROM nea_parsed np
-    LEFT JOIN mpc_orbits orb ON orb.packed_primary_provisional_designation = np.packed_desig
+    LEFT JOIN numbered_identifications numid
+        ON np.is_numbered AND numid.permid = np.asteroid_number
 ),
 matched_neas AS (
     SELECT DISTINCT neo.unpacked_desig
     FROM nea_list neo
     INNER JOIN obs_sbn obs ON (
         (neo.is_numbered AND obs.permid = neo.asteroid_number)
-        OR (neo.orb_provid IS NOT NULL AND obs.provid = neo.orb_provid)
+        OR (neo.num_provid IS NOT NULL AND obs.provid = neo.num_provid)
     )
     WHERE obs.disc = '*'
 ),
@@ -145,7 +147,7 @@ SELECT
     un.packed_desig,
     un.unpacked_desig,
     EXISTS(SELECT 1 FROM obs_sbn WHERE permid = un.asteroid_number LIMIT 1)::text as permid_exists,
-    EXISTS(SELECT 1 FROM obs_sbn WHERE provid = un.orb_provid LIMIT 1)::text as provid_via_orb_exists,
+    EXISTS(SELECT 1 FROM obs_sbn WHERE provid = un.num_provid LIMIT 1)::text as provid_via_numid_exists,
     EXISTS(SELECT 1 FROM obs_sbn WHERE permid = un.asteroid_number AND disc = '*' LIMIT 1)::text as has_disc_star
 FROM unmatched_numbered un
 ORDER BY un.asteroid_number::integer;

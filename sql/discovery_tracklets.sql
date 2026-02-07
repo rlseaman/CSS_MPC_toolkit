@@ -4,7 +4,7 @@
 -- Project: CSS_SBN_derived
 -- Authors: Rob Seaman (Catalina Sky Survey) / Claude (Anthropic)
 -- Created: 2026-01-08
--- Updated: 2026-02-07
+-- Updated: 2026-02-08
 --
 -- Computes discovery tracklet statistics for all Near-Earth Asteroids listed
 -- in the MPC's NEA.txt catalog, queried against the MPC/SBN PostgreSQL database.
@@ -121,19 +121,21 @@ WITH nea_parsed AS (
 
 nea_list AS (
     -- Create a unified list with proper identifiers for matching obs_sbn
-    -- Note: mpc_orbits doesn't have a 'number' column, so we match only on packed designation
+    -- For numbered asteroids, get their principal provisional designation
+    -- from numbered_identifications (the authoritative number-to-designation
+    -- cross-reference, more reliable than the partially-populated mpc_orbits)
     SELECT
         np.packed_desig,
         np.unpacked_desig,
         np.is_numbered,
         np.asteroid_number,
         np.provisional_desig,
-        -- For numbered asteroids, get their principal provisional designation
-        -- from mpc_orbits if available (needed to find discovery observations)
-        orb.unpacked_primary_provisional_designation as orb_provid
+        -- For numbered asteroids: look up their provisional designation
+        -- so we can also search obs_sbn.provid for discovery observations
+        numid.unpacked_primary_provisional_designation as num_provid
     FROM nea_parsed np
-    LEFT JOIN mpc_orbits orb
-        ON orb.packed_primary_provisional_designation = np.packed_desig
+    LEFT JOIN numbered_identifications numid
+        ON np.is_numbered AND numid.permid = np.asteroid_number
 ),
 
 discovery_info AS (
@@ -145,7 +147,7 @@ discovery_info AS (
         neo.is_numbered,
         neo.asteroid_number,
         neo.provisional_desig,
-        neo.orb_provid,
+        neo.num_provid,
         obs.stn as discovery_stn,
         obs.trksub as discovery_trksub
     FROM nea_list neo
@@ -154,8 +156,9 @@ discovery_info AS (
         (neo.is_numbered AND obs.permid = neo.asteroid_number)
         -- For unnumbered asteroids: match on provid (provisional designation)
         OR (NOT neo.is_numbered AND obs.provid = neo.provisional_desig)
-        -- Also try matching via the orbital element's principal provisional designation
-        OR (neo.orb_provid IS NOT NULL AND obs.provid = neo.orb_provid)
+        -- For numbered asteroids: also try matching via provisional designation
+        -- from numbered_identifications (discovery obs may be stored under provid)
+        OR (neo.num_provid IS NOT NULL AND obs.provid = neo.num_provid)
     )
     WHERE obs.disc = '*'
     ORDER BY neo.unpacked_desig, obs.obstime
@@ -215,8 +218,8 @@ discovery_tracklet_stats AS (
         (di.is_numbered AND obs.permid = di.asteroid_number)
         -- For unnumbered asteroids: match on provid (provisional designation)
         OR (NOT di.is_numbered AND obs.provid = di.provisional_desig)
-        -- Also try matching via the orbital element's principal provisional designation
-        OR (di.orb_provid IS NOT NULL AND obs.provid = di.orb_provid)
+        -- For numbered asteroids: also try matching via provisional designation
+        OR (di.num_provid IS NOT NULL AND obs.provid = di.num_provid)
     )
     WHERE (
         -- If trksub is available, match the full discovery tracklet
