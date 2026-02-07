@@ -1,0 +1,20 @@
+# Output data files (distributed via GitHub Releases, not committed)
+*.csv
+
+# Temporary files
+*.tmp
+*.bak
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Pipeline working files
+/tmp/
