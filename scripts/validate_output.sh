@@ -26,7 +26,7 @@ MIN_ROWS=35000
 MAX_MISSING_PCT=2
 
 # Expected number of columns
-EXPECTED_COLS=7
+EXPECTED_COLS=12
 
 # --- Checks -------------------------------------------------------------------
 

@@ -20,7 +20,7 @@ products useful to the NEO community.
 Computes discovery circumstances for all Near-Earth Asteroids listed in the
 MPC's [NEA.txt](https://minorplanetcenter.net/iau/MPCORB/NEA.txt) catalog.
 
-**Output columns:**
+**Output columns (12):**
 
 | Column | Description |
 |--------|-------------|
@@ -30,7 +30,12 @@ MPC's [NEA.txt](https://minorplanetcenter.net/iau/MPCORB/NEA.txt) catalog.
 | `avg_ra_deg` | Mean Right Ascension (decimal degrees) |
 | `avg_dec_deg` | Mean Declination (decimal degrees) |
 | `median_v_magnitude` | Median V-band magnitude (with band corrections) |
+| `nobs` | Number of observations in discovery tracklet |
+| `span_hours` | Time span of discovery tracklet (hours) |
+| `rate_deg_per_day` | Great-circle rate of motion (deg/day) |
+| `position_angle_deg` | Position angle of motion (0°=N, 90°=E) |
 | `discovery_site_code` | MPC observatory code of the discovery site |
+| `discovery_site_name` | Observatory name |
 
 **Completeness:** 40,805 / 40,807 NEAs (99.995% as of 2026-02-07)
 

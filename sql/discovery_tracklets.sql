@@ -27,14 +27,19 @@
 --   2. Run: psql -h host -d mpc_sbn -f sql/discovery_tracklets.sql --csv -o output.csv
 --      (Ensure the \copy path below matches your download location)
 --
--- OUTPUT COLUMNS:
---   primary_designation                    Number (for numbered) or provisional designation
---   packed_primary_provisional_designation Packed format (e.g., "00433" or "K24A01A")
---   avg_mjd_discovery_tracklet             Mean MJD of discovery tracklet
---   avg_ra_deg                             Mean RA in decimal degrees
---   avg_dec_deg                            Mean Dec in decimal degrees
---   median_v_magnitude                     Median V-band magnitude (corrected)
---   discovery_site_code                    MPC observatory code
+-- OUTPUT COLUMNS (12):
+--   primary_designation                     Number (for numbered) or provisional designation
+--   packed_primary_provisional_designation  Packed format (e.g., "00433" or "K24A01A")
+--   avg_mjd_discovery_tracklet              Mean MJD of discovery tracklet
+--   avg_ra_deg                              Mean RA in decimal degrees
+--   avg_dec_deg                             Mean Dec in decimal degrees
+--   median_v_magnitude                      Median V-band magnitude (corrected)
+--   nobs                                    Number of observations in discovery tracklet
+--   span_hours                              Time span of discovery tracklet in hours
+--   rate_deg_per_day                        Great-circle rate of motion (deg/day)
+--   position_angle_deg                      Position angle of motion [0, 360) degrees
+--   discovery_site_code                     MPC observatory code
+--   discovery_site_name                     Observatory name from obscodes table
 --
 -- DESIGNATION FORMATS:
 --   Numbered asteroids in NEA.txt:
@@ -138,51 +143,167 @@ nea_list AS (
         ON np.is_numbered AND numid.permid = np.asteroid_number
 ),
 
-discovery_info AS (
-    -- Find discovery observation for each NEA
-    -- Must handle both numbered and unnumbered asteroids
-    SELECT DISTINCT ON (neo.unpacked_desig)
+-- ==============================================================================
+-- UNION-based discovery observation lookup
+-- Each branch targets a single index for efficient execution:
+--   Branch 1: Numbered asteroids via obs.permid  (idx_obs_sbn_permid)
+--   Branch 2: Unnumbered asteroids via obs.provid (idx_obs_sbn_provid)
+--   Branch 3: Numbered asteroids via obs.provid = num_provid (idx_obs_sbn_provid)
+-- UNION ALL is used here; DISTINCT ON deduplicates afterward.
+-- ==============================================================================
+discovery_obs_all AS (
+    -- Branch 1: Numbered asteroids matched by permid
+    SELECT
         neo.unpacked_desig,
         neo.packed_desig,
         neo.is_numbered,
         neo.asteroid_number,
         neo.provisional_desig,
         neo.num_provid,
-        obs.stn as discovery_stn,
-        obs.trksub as discovery_trksub
+        obs.stn,
+        obs.trksub,
+        obs.obstime
     FROM nea_list neo
-    INNER JOIN obs_sbn obs ON (
-        -- For numbered asteroids: match on permid (the number as string)
-        (neo.is_numbered AND obs.permid = neo.asteroid_number)
-        -- For unnumbered asteroids: match on provid (provisional designation)
-        OR (NOT neo.is_numbered AND obs.provid = neo.provisional_desig)
-        -- For numbered asteroids: also try matching via provisional designation
-        -- from numbered_identifications (discovery obs may be stored under provid)
-        OR (neo.num_provid IS NOT NULL AND obs.provid = neo.num_provid)
-    )
-    WHERE obs.disc = '*'
-    ORDER BY neo.unpacked_desig, obs.obstime
+    INNER JOIN obs_sbn obs ON obs.permid = neo.asteroid_number
+    WHERE neo.is_numbered
+      AND obs.disc = '*'
+
+    UNION ALL
+
+    -- Branch 2: Unnumbered asteroids matched by provid
+    SELECT
+        neo.unpacked_desig,
+        neo.packed_desig,
+        neo.is_numbered,
+        neo.asteroid_number,
+        neo.provisional_desig,
+        neo.num_provid,
+        obs.stn,
+        obs.trksub,
+        obs.obstime
+    FROM nea_list neo
+    INNER JOIN obs_sbn obs ON obs.provid = neo.provisional_desig
+    WHERE NOT neo.is_numbered
+      AND obs.disc = '*'
+
+    UNION ALL
+
+    -- Branch 3: Numbered asteroids matched by num_provid via provid
+    SELECT
+        neo.unpacked_desig,
+        neo.packed_desig,
+        neo.is_numbered,
+        neo.asteroid_number,
+        neo.provisional_desig,
+        neo.num_provid,
+        obs.stn,
+        obs.trksub,
+        obs.obstime
+    FROM nea_list neo
+    INNER JOIN obs_sbn obs ON obs.provid = neo.num_provid
+    WHERE neo.num_provid IS NOT NULL
+      AND obs.disc = '*'
+),
+
+discovery_info AS (
+    -- Pick the earliest discovery observation per NEA
+    -- DISTINCT ON deduplicates across the UNION ALL branches
+    SELECT DISTINCT ON (unpacked_desig)
+        unpacked_desig,
+        packed_desig,
+        is_numbered,
+        asteroid_number,
+        provisional_desig,
+        num_provid,
+        stn as discovery_stn,
+        trksub as discovery_trksub
+    FROM discovery_obs_all
+    ORDER BY unpacked_desig, obstime
+),
+
+-- ==============================================================================
+-- UNION-based tracklet observation lookup
+-- Same 3-branch pattern, but each branch also filters on the tracklet
+-- (trksub match or disc='*' fallback). Uses UNION (not UNION ALL) to
+-- deduplicate observations that match via both permid and provid for
+-- numbered asteroids, preventing double-counted aggregates.
+-- ==============================================================================
+tracklet_obs_all AS (
+    -- Branch 1: Numbered asteroids matched by permid
+    SELECT
+        di.unpacked_desig,
+        di.packed_desig,
+        obs.obstime,
+        obs.ra,
+        obs.dec,
+        obs.mag,
+        obs.band
+    FROM discovery_info di
+    INNER JOIN obs_sbn obs ON obs.permid = di.asteroid_number
+    WHERE di.is_numbered
+      AND (
+          (di.discovery_trksub IS NOT NULL AND obs.trksub = di.discovery_trksub)
+          OR (di.discovery_trksub IS NULL AND obs.disc = '*')
+      )
+
+    UNION
+
+    -- Branch 2: Unnumbered asteroids matched by provid
+    SELECT
+        di.unpacked_desig,
+        di.packed_desig,
+        obs.obstime,
+        obs.ra,
+        obs.dec,
+        obs.mag,
+        obs.band
+    FROM discovery_info di
+    INNER JOIN obs_sbn obs ON obs.provid = di.provisional_desig
+    WHERE NOT di.is_numbered
+      AND (
+          (di.discovery_trksub IS NOT NULL AND obs.trksub = di.discovery_trksub)
+          OR (di.discovery_trksub IS NULL AND obs.disc = '*')
+      )
+
+    UNION
+
+    -- Branch 3: Numbered asteroids matched by num_provid via provid
+    SELECT
+        di.unpacked_desig,
+        di.packed_desig,
+        obs.obstime,
+        obs.ra,
+        obs.dec,
+        obs.mag,
+        obs.band
+    FROM discovery_info di
+    INNER JOIN obs_sbn obs ON obs.provid = di.num_provid
+    WHERE di.num_provid IS NOT NULL
+      AND (
+          (di.discovery_trksub IS NOT NULL AND obs.trksub = di.discovery_trksub)
+          OR (di.discovery_trksub IS NULL AND obs.disc = '*')
+      )
 ),
 
 discovery_tracklet_stats AS (
     -- Calculate statistics from all observations in the discovery tracklet
     SELECT
-        di.unpacked_desig,
-        di.packed_desig,
+        unpacked_desig,
+        packed_desig,
 
         -- Average MJD of discovery tracklet
         AVG(
-            EXTRACT(EPOCH FROM obs.obstime) / 86400.0 + 40587.0
+            EXTRACT(EPOCH FROM obstime) / 86400.0 + 40587.0
         ) as avg_mjd,
 
         -- Average position
-        AVG(obs.ra) as avg_ra_deg,
-        AVG(obs.dec) as avg_dec_deg,
+        AVG(ra) as avg_ra_deg,
+        AVG(dec) as avg_dec_deg,
 
         -- Median V magnitude with band corrections
         -- Corrections from: https://minorplanetcenter.net/iau/info/BandConversion.txt
         PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY
-            obs.mag + CASE obs.band
+            mag + CASE band
                 WHEN 'V' THEN 0.0    -- V-band (reference)
                 WHEN 'v' THEN 0.0
                 WHEN 'B' THEN -0.8   -- Blue
@@ -209,28 +330,30 @@ discovery_tracklet_stats AS (
                 WHEN '' THEN -0.8    -- Blank = B-band default
                 ELSE 0.0             -- Unknown = assume V
             END
-        ) FILTER (WHERE obs.mag IS NOT NULL) as median_v_mag
+        ) FILTER (WHERE mag IS NOT NULL) as median_v_mag,
 
-    FROM discovery_info di
-    INNER JOIN obs_sbn obs ON (
-        -- Match tracklet observations using the same logic as discovery
-        -- For numbered asteroids: match on permid (the number as string)
-        (di.is_numbered AND obs.permid = di.asteroid_number)
-        -- For unnumbered asteroids: match on provid (provisional designation)
-        OR (NOT di.is_numbered AND obs.provid = di.provisional_desig)
-        -- For numbered asteroids: also try matching via provisional designation
-        OR (di.num_provid IS NOT NULL AND obs.provid = di.num_provid)
-    )
-    WHERE (
-        -- If trksub is available, match the full discovery tracklet
-        (di.discovery_trksub IS NOT NULL AND obs.trksub = di.discovery_trksub)
-        -- If trksub is NULL, fall back to just the discovery observation itself
-        OR (di.discovery_trksub IS NULL AND obs.disc = '*')
-    )
-    GROUP BY di.unpacked_desig, di.packed_desig
+        -- Observation count
+        COUNT(*) as nobs,
+
+        -- Time span of tracklet in hours
+        EXTRACT(EPOCH FROM (MAX(obstime) - MIN(obstime))) / 3600.0 as span_hours,
+
+        -- Time span in days (for rate computation)
+        EXTRACT(EPOCH FROM (MAX(obstime) - MIN(obstime))) / 86400.0 as span_days,
+
+        -- First and last observation coordinates for rate/PA computation
+        (array_agg(ra  ORDER BY obstime ASC))[1] as first_ra,
+        (array_agg(dec ORDER BY obstime ASC))[1] as first_dec,
+        (array_agg(ra  ORDER BY obstime DESC))[1] as last_ra,
+        (array_agg(dec ORDER BY obstime DESC))[1] as last_dec
+
+    FROM tracklet_obs_all
+    GROUP BY unpacked_desig, packed_desig
 )
 
--- Final output
+-- ==============================================================================
+-- Final output with derived motion columns and observatory name
+-- ==============================================================================
 SELECT
     -- For numbered objects, output just the number; for unnumbered, output the provisional designation
     CASE
@@ -242,10 +365,44 @@ SELECT
     ROUND(dts.avg_ra_deg::numeric, 5) as avg_ra_deg,
     ROUND(dts.avg_dec_deg::numeric, 5) as avg_dec_deg,
     ROUND(dts.median_v_mag::numeric, 2) as median_v_magnitude,
-    di.discovery_stn as discovery_site_code
+    dts.nobs,
+    ROUND(dts.span_hours::numeric, 4) as span_hours,
+
+    -- Great-circle rate of motion (degrees per day) via Haversine formula
+    -- Handles RA wraparound correctly (sin(dra/2)^2 is always positive)
+    -- NULL when span_days = 0 (single observation)
+    CASE WHEN dts.span_days > 0 THEN
+        ROUND((
+            2.0 * DEGREES(ASIN(SQRT(
+                SIN(RADIANS(dts.last_dec - dts.first_dec) / 2.0) ^ 2
+                + COS(RADIANS(dts.first_dec)) * COS(RADIANS(dts.last_dec))
+                  * SIN(RADIANS(dts.last_ra - dts.first_ra) / 2.0) ^ 2
+            ))) / dts.span_days
+        )::numeric, 4)
+    END as rate_deg_per_day,
+
+    -- Position angle of motion (degrees, 0=N, 90=E, [0,360))
+    -- Spherical bearing formula; handles RA wraparound via sin/cos of dra
+    -- NULL when span_days = 0 (single observation)
+    CASE WHEN dts.span_days > 0 THEN
+        ROUND((
+            (360.0 + DEGREES(ATAN2(
+                SIN(RADIANS(dts.last_ra - dts.first_ra)) * COS(RADIANS(dts.last_dec)),
+                COS(RADIANS(dts.first_dec)) * SIN(RADIANS(dts.last_dec))
+                - SIN(RADIANS(dts.first_dec)) * COS(RADIANS(dts.last_dec))
+                  * COS(RADIANS(dts.last_ra - dts.first_ra))
+            )))::numeric % 360.0
+        )::numeric, 2)
+    END as position_angle_deg,
+
+    di.discovery_stn as discovery_site_code,
+    oc.name as discovery_site_name
+
 FROM discovery_info di
 INNER JOIN discovery_tracklet_stats dts
     ON di.unpacked_desig = dts.unpacked_desig
+LEFT JOIN obscodes oc
+    ON oc.obscode = di.discovery_stn
 ORDER BY
     -- Sort numbered objects numerically first, then unnumbered alphabetically
     di.is_numbered DESC,

@@ -36,6 +36,7 @@ relevant to this project:
 |-------|--------|----------|
 | `obs_sbn` | Ready | All published observations including ITF data |
 | `numbered_identifications` | Ready | Number-to-provisional-designation mapping |
+| `obscodes` | Ready | Observatory name enrichment |
 
 ### Identified for future use
 
@@ -43,7 +44,7 @@ relevant to this project:
 |-------|--------|---------------|
 | `current_identifications` | Ready | Cross-matching secondary designations to primaries |
 | `primary_objects` | Ready | Object type classification, orbit status flags |
-| `obscodes` | Ready | Observatory metadata (name, location, type) |
+| `obscodes` | **Now used** | Observatory metadata (name used; location available) |
 | `mpc_orbits` | Partial | Orbital elements, Earth MOID, orbit type (when fully populated) |
 | `neocp_els` | Ready | Current NEOCP tracklet elements (Digest2 scores) |
 | `neocp_prev_des` | Ready | NEOCP removal reasons |
@@ -175,9 +176,33 @@ For community stakeholders who want derived tables in their own postgres:
   undergoing consistency work
 - Updated documentation to reflect the new dependency
 
+### Step 5: UNION refactor and tracklet metrics (2026-02-08)
+
+- Replaced OR-based joins in `discovery_info` and `discovery_tracklet_stats`
+  with 3× UNION branches, each targeting a single index (permid, provid,
+  num_provid) for efficient execution
+- `discovery_obs_all` uses UNION ALL (deduplicated by DISTINCT ON)
+- `tracklet_obs_all` uses UNION (deduplicates observations matching via
+  both permid and provid for numbered asteroids)
+- Added 5 new output columns: `nobs`, `span_hours`, `rate_deg_per_day`,
+  `position_angle_deg`, `discovery_site_name` — total now 12 columns
+- Rate uses Haversine formula; PA uses spherical bearing (both handle
+  RA wraparound correctly)
+- Updated schema docs, README, and validate_output.sh (EXPECTED_COLS=12)
+- **Needs validation** against database on CSS server
+
 ## Remaining Steps
 
-### Step 5: Set up cron on a CSS server
+### Step A: Validate refactored query on CSS server
+
+- Row count must remain 40,805
+- Original 7 columns must match previous output exactly
+- `nobs >= 1`, `span_hours >= 0` for all rows
+- `rate_deg_per_day IS NULL` iff `nobs = 1`; same for `position_angle_deg`
+- `position_angle_deg` in [0, 360) when not NULL
+- Spot-check known NEA (e.g., Apophis) against independent data
+
+### Step B: Set up cron on a CSS server
 
 - Daily cron job calling `scripts/run_pipeline.sh`
 - Log output for diagnostics
@@ -187,11 +212,10 @@ For community stakeholders who want derived tables in their own postgres:
   0 12 * * * /path/to/CSS_SBN_derived/scripts/run_pipeline.sh --upload >> /var/log/css_sbn_derived.log 2>&1
   ```
 
-### Step 6: Enrich with obscodes data
+### Step 6: Enrich with obscodes data ✅ (2026-02-08)
 
-- Join `obscodes` to add observatory name and location to discovery
-  tracklet output
-- Minimal query cost, significant usability improvement
+- Joined `obscodes` to add `discovery_site_name` to output
+- LEFT JOIN on `obscode = discovery_stn` (NULL if code not in obscodes)
 
 ### Step 7: Add current_identifications fallback matching
 

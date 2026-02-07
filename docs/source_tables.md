@@ -63,6 +63,18 @@ a numbered asteroid to its principal provisional designation.
   `numbered_identifications` is fully populated while `mpc_orbits` is
   partially populated and undergoing consistency work
 
+### obscodes
+
+Observatory metadata. One row per MPC observatory code. Used to enrich
+discovery tracklet output with human-readable observatory names.
+
+**Columns used:**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `obscode` | varchar(4) | MPC station code, e.g., `"703"` (unique) |
+| `name` | varchar | Observatory name |
+
 ## Tables Available for Future Use
 
 ### current_identifications
@@ -95,21 +107,19 @@ One row per designated object. Contains orbit status flags and object type.
 
 **Potential use:** Filter NEAs by `object_type` instead of downloading NEA.txt.
 
-### obscodes
+### obscodes (additional columns)
 
-Observatory metadata. One row per MPC observatory code.
+Now used by discovery_tracklets for `obscode` and `name` (see above).
+Additional columns available for future use:
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `obscode` | varchar(4) | MPC station code, e.g., `"703"` |
-| `name` | varchar | Observatory name |
 | `longitude` | numeric | Degrees east of Greenwich |
 | `rhocosphi` | numeric | Geocentric parallax constant |
 | `rhosinphi` | numeric | Geocentric parallax constant |
 | `observations_type` | varchar(255) | Type: optical, radar, satellite, occultation |
 
-**Potential use:** Enrich discovery tracklet output with observatory name and
-location.
+**Potential use:** Enrich with observatory location or filter by type.
 
 ### mpc_orbits (partially populated)
 
