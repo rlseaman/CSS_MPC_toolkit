@@ -60,6 +60,10 @@
 --     (as of 2026-02-07: 2009 US19 and 2024 TZ7; reported to MPC)
 -- ==============================================================================
 
+-- Suppress command-tag messages (CREATE INDEX, DROP TABLE, COPY nnn, etc.)
+-- so they don't contaminate CSV output
+\set QUIET on
+
 -- Performance indexes (create once, speeds up repeated queries)
 CREATE INDEX IF NOT EXISTS idx_obs_sbn_disc ON obs_sbn(disc) WHERE disc = '*';
 CREATE INDEX IF NOT EXISTS idx_obs_sbn_provid ON obs_sbn(provid);
@@ -396,7 +400,9 @@ SELECT
     END as position_angle_deg,
 
     di.discovery_stn as discovery_site_code,
-    oc.name as discovery_site_name
+    -- Clean observatory name: trim trailing spaces (dirty source data)
+    -- and fix backslash-escaped apostrophes (PostgreSQL loading artifact)
+    REPLACE(TRIM(oc.name), E'\\''', '''') as discovery_site_name
 
 FROM discovery_info di
 INNER JOIN discovery_tracklet_stats dts
