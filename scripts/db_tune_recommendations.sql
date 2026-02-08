@@ -1,13 +1,13 @@
 -- ==============================================================================
 -- MPC/SBN Database Tuning Recommendations
 -- ==============================================================================
--- Host: sibyl (RHEL 8.6 VM)
+-- Host: sibyl (RHEL 8.6 VM, 251 GB RAM, HDD)
 -- Database: mpc_sbn (PostgreSQL 15.2, 446 GB, logical replica)
 -- Generated: 2026-02-08
 --
 -- All current settings are at PostgreSQL defaults except max_connections,
--- shared_buffers, and WAL sizes.  This database has never been tuned for
--- its 446 GB / 526M-row workload.
+-- shared_buffers (128 MB!), and WAL sizes.  This database has never been
+-- tuned for its 446 GB / 526M-row workload despite having 251 GB RAM.
 --
 -- INSTRUCTIONS:
 --   1. Determine VM RAM (free -h)
@@ -28,31 +28,25 @@
 --
 -- EDIT postgresql.conf:
 --
---   ## For 32 GB RAM VM:
---   shared_buffers = '8GB'
---   effective_cache_size = '24GB'
---
---   ## For 64 GB RAM VM (recommended for this database):
---   shared_buffers = '16GB'
---   effective_cache_size = '48GB'
---
--- effective_cache_size does not allocate memory — it tells the query planner
--- how much OS page cache to expect.  Set to ~75% of total RAM.
+--   shared_buffers = '64GB'        -- 25% of 251 GB RAM.
+--   effective_cache_size = '192GB' -- 75% of RAM (planner hint, not allocation).
+--                                  -- OS buff/cache is currently 242 GB, so
+--                                  -- this is conservative.
 --
 -- Also set these related memory parameters:
 --
---   work_mem = '64MB'              -- Currently 4 MB (default); used per sort/hash
---                                  -- operation in queries.  64 MB helps complex
---                                  -- joins and aggregations.  With max_connections=100,
---                                  -- worst case is 100 * 64 MB = 6.4 GB, but in
---                                  -- practice few connections sort simultaneously.
+--   work_mem = '128MB'             -- Currently 4 MB (default); used per sort/hash
+--                                  -- operation in queries.  With 251 GB RAM and
+--                                  -- max_connections=100, worst case is 12.5 GB.
 --
 --   wal_buffers = '64MB'           -- Currently 4 MB (auto from shared_buffers).
 --                                  -- Helps write-heavy replication apply.
 --
---   huge_pages = 'try'             -- Already set.  On RHEL 8, configure OS:
---                                  --   sysctl -w vm.nr_hugepages=8192  (for 16 GB)
---                                  --   Add to /etc/sysctl.d/postgres.conf
+--   huge_pages = 'on'              -- Recommended for 64 GB shared_buffers.
+--                                  -- On RHEL 8, configure OS first:
+--                                  --   echo 'vm.nr_hugepages = 33000' > /etc/sysctl.d/postgres.conf
+--                                  --   echo 'vm.hugetlb_shm_group = <postgres_gid>' >> /etc/sysctl.d/postgres.conf
+--                                  --   sysctl --system
 --
 -- REQUIRES: PostgreSQL restart (sudo systemctl restart postgresql-15)
 
@@ -68,15 +62,17 @@
 --
 -- EDIT postgresql.conf:
 --
---   maintenance_work_mem = '2GB'   -- For manual VACUUM and index builds.
---                                  -- Allows ~85M dead tuple refs per pass —
---                                  -- enough to process obs_sbn in one pass.
+--   maintenance_work_mem = '4GB'   -- For manual VACUUM and index builds.
+--                                  -- Allows ~170M dead tuple refs per pass —
+--                                  -- well over the 82M dead rows in obs_sbn,
+--                                  -- so one pass suffices.
 --
---   autovacuum_work_mem = '1GB'    -- Separate limit for autovacuum workers.
+--   autovacuum_work_mem = '2GB'    -- Separate limit for autovacuum workers.
 --                                  -- Currently -1 (inherits maintenance_work_mem).
 --                                  -- Setting it independently prevents a manual
 --                                  -- VACUUM from starving autovacuum or vice versa.
---                                  -- With 3 workers: 3 * 1 GB = 3 GB worst case.
+--                                  -- With 3 workers: 3 * 2 GB = 6 GB worst case.
+--                                  -- Negligible with 251 GB RAM.
 --
 -- REQUIRES: PostgreSQL restart for maintenance_work_mem.
 -- autovacuum_work_mem can be changed with reload (no restart).
@@ -194,45 +190,81 @@ ALTER TABLE obs_sbn SET (
 
 
 -- ==============================================================================
--- ADDITIONAL: Storage-type tuning (SSD vs HDD)
+-- ADDITIONAL: Storage-type tuning
 -- ==============================================================================
 --
--- Current settings assume spinning disks (random_page_cost=4,
--- effective_io_concurrency=1).  If sibyl uses SSDs:
+-- sibyl uses spinning disks (lsblk ROTA=1).  Keep defaults:
+--   random_page_cost = 4             (already default — correct for HDD)
+--   effective_io_concurrency = 1     (already default — correct for HDD)
 --
---   random_page_cost = '1.1'          -- SSDs have near-sequential random reads
---   effective_io_concurrency = '200'  -- SSDs can handle many concurrent reads
---   seq_page_cost = '1.0'             -- Already default, keep as-is
---
--- If spinning disks, leave defaults.  Check with:
---   lsblk -d -o NAME,ROTA  (ROTA=1 means rotational/HDD, 0 means SSD)
+-- If storage is ever migrated to SSD, change to:
+--   random_page_cost = 1.1
+--   effective_io_concurrency = 200
 
 
 -- ==============================================================================
--- SUMMARY: postgresql.conf changes (all in one block)
+-- SUMMARY: postgresql.conf changes for sibyl
 -- ==============================================================================
 --
--- ## Memory (adjust shared_buffers/effective_cache_size for actual RAM)
--- shared_buffers = '16GB'                     # 25% of RAM (for 64 GB VM)
--- effective_cache_size = '48GB'               # 75% of RAM
--- work_mem = '64MB'                           # Per-sort/hash operation
--- maintenance_work_mem = '2GB'                # For VACUUM and CREATE INDEX
--- autovacuum_work_mem = '1GB'                 # Per autovacuum worker
--- wal_buffers = '64MB'                        # WAL write buffer
+-- VM: RHEL 8.6, 251 GB RAM, spinning disks (HDD)
+-- Current state: 242 GB in OS page cache, 1.5 GB used by processes
+--
+-- The OS page cache is already providing excellent read buffering (242 GB),
+-- which is why the database functions despite 128 MB shared_buffers.
+-- However, PostgreSQL-managed shared_buffers are more efficient: they
+-- respect buffer invalidation, track dirty pages, and avoid double-caching.
+-- With 251 GB RAM there is ample headroom.
+--
+-- ## Memory
+-- shared_buffers = '64GB'                     # 25% of 251 GB RAM
+--                                             # PostgreSQL docs recommend 25%
+--                                             # With HDD, large shared_buffers
+--                                             # reduces random reads significantly
+-- effective_cache_size = '192GB'              # 75% of RAM — tells planner how
+--                                             # much OS cache to expect (not an
+--                                             # allocation).  242 GB is currently
+--                                             # in buff/cache, so 192 GB is
+--                                             # conservative.
+-- work_mem = '128MB'                          # Currently 4 MB.  With 251 GB RAM
+--                                             # and max_connections=100, worst
+--                                             # case is 12.5 GB.  Eliminates
+--                                             # sort/hash spills to disk for
+--                                             # complex queries.
+-- maintenance_work_mem = '4GB'                # Currently 64 MB.  Allows VACUUM
+--                                             # to process obs_sbn's 82M dead
+--                                             # rows in a single pass.
+-- autovacuum_work_mem = '2GB'                 # Per autovacuum worker.
+--                                             # 3 workers * 2 GB = 6 GB max.
+-- wal_buffers = '64MB'                        # Currently 4 MB.  Helps write
+--                                             # throughput during replication
+--                                             # apply batches.
 --
 -- ## Autovacuum (more responsive)
 -- autovacuum_vacuum_scale_factor = 0.05       # Trigger at 5% dead (was 20%)
 -- autovacuum_analyze_scale_factor = 0.02      # Re-analyze at 2% changed
 -- autovacuum_vacuum_cost_limit = 2000         # 10x default throughput
+--                                             # With HDD, autovacuum I/O cost
+--                                             # is real; 2000 is aggressive but
+--                                             # appropriate for a dedicated VM
+--                                             # with no user-facing latency.
 --
 -- ## WAL / Checkpoint
--- max_wal_size = '4GB'                        # Currently 1 GB, increase for
---                                             # large replication apply batches
+-- max_wal_size = '4GB'                        # Currently 1 GB.  Larger WAL
+--                                             # allows longer intervals between
+--                                             # checkpoints, reducing I/O spikes.
+--                                             # Important with HDD.
 -- checkpoint_completion_target = 0.9          # Already set (good)
 --
--- ## SSD only (skip if spinning disks):
--- # random_page_cost = 1.1
--- # effective_io_concurrency = 200
+-- ## HDD — keep defaults:
+-- # random_page_cost = 4              (already correct)
+-- # effective_io_concurrency = 1      (already correct)
+--
+-- ## Huge pages (optional, reduces TLB misses for 64 GB shared_buffers)
+-- # In /etc/sysctl.d/postgres.conf:
+-- #   vm.nr_hugepages = 33000         # 64 GB / 2 MB per page + margin
+-- #   vm.hugetlb_shm_group = <postgres_gid>
+-- # Then: sysctl --system
+-- # huge_pages = 'on'  in postgresql.conf (change from 'try' to 'on')
 --
 -- REQUIRES: sudo systemctl restart postgresql-15
 --
