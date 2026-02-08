@@ -53,14 +53,13 @@
 -- so they don't contaminate CSV output
 \set QUIET on
 
--- Performance indexes (create once, speeds up repeated queries)
--- Wrapped in exception handler so readonly roles can run this script
+-- Partial index on disc='*' (not part of the MPC/SBN default index set).
+-- The other columns used in joins (permid, provid, trkid) already have
+-- MPC-provided indexes (obs_sbn_permid_idx, obs_sbn_provid_idx, etc.).
+-- Wrapped in exception handler so readonly roles can run this script.
 DO $$
 BEGIN
     CREATE INDEX IF NOT EXISTS idx_obs_sbn_disc ON obs_sbn(disc) WHERE disc = '*';
-    CREATE INDEX IF NOT EXISTS idx_obs_sbn_provid ON obs_sbn(provid);
-    CREATE INDEX IF NOT EXISTS idx_obs_sbn_permid ON obs_sbn(permid);
-    CREATE INDEX IF NOT EXISTS idx_obs_sbn_trkid ON obs_sbn(trkid);
 EXCEPTION WHEN insufficient_privilege THEN
     RAISE NOTICE 'Index creation skipped (insufficient privileges)';
 END
