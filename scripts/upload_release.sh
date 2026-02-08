@@ -52,7 +52,7 @@ else
     gh release create "$TAG" "$CSV_FILE" \
         --repo "$REPO" \
         --title "Latest data products ($DATE)" \
-        --notes "Automatically generated NEA discovery tracklet statistics.
+        --notes "Automatically generated NEO discovery tracklet statistics.
 
 Updated: $DATE
 

@@ -5,7 +5,7 @@
 # Checks that the output CSV is well-formed and complete before distribution.
 #
 # Usage:
-#   ./scripts/validate_output.sh <csv_file> [expected_input_lines]
+#   ./scripts/validate_output.sh <csv_file>
 #
 # Exit codes:
 #   0 - All checks passed
@@ -14,16 +14,12 @@
 
 set -euo pipefail
 
-CSV_FILE="${1:?Usage: validate_output.sh <csv_file> [expected_input_lines]}"
-EXPECTED_INPUT="${2:-0}"
+CSV_FILE="${1:?Usage: validate_output.sh <csv_file>}"
 
 # --- Configuration -----------------------------------------------------------
 
-# Minimum expected rows (NEA count grows ~2000/year, set a floor)
+# Minimum expected rows (NEO count grows ~2000/year, set a floor)
 MIN_ROWS=35000
-
-# Maximum acceptable gap between input NEAs and output rows
-MAX_MISSING_PCT=2
 
 # Expected number of columns
 EXPECTED_COLS=12
@@ -33,10 +29,6 @@ EXPECTED_COLS=12
 die() {
     echo "VALIDATION FAILED: $*" >&2
     exit 1
-}
-
-warn() {
-    echo "WARNING: $*" >&2
 }
 
 # Check file exists and is non-empty
@@ -58,20 +50,6 @@ fi
 HEADER_COLS=$(head -1 "$CSV_FILE" | awk -F',' '{print NF}')
 if [ "$HEADER_COLS" -ne "$EXPECTED_COLS" ]; then
     die "Header has $HEADER_COLS columns (expected $EXPECTED_COLS)"
-fi
-
-# Check completeness against input if provided
-if [ "$EXPECTED_INPUT" -gt 0 ]; then
-    MISSING=$((EXPECTED_INPUT - DATA_ROWS))
-    if [ "$MISSING" -lt 0 ]; then
-        warn "More output rows ($DATA_ROWS) than input lines ($EXPECTED_INPUT)"
-    elif [ "$MISSING" -gt 0 ]; then
-        MISSING_PCT=$((100 * MISSING / EXPECTED_INPUT))
-        echo "Completeness: $DATA_ROWS / $EXPECTED_INPUT ($MISSING missing)"
-        if [ "$MISSING_PCT" -gt "$MAX_MISSING_PCT" ]; then
-            die "$MISSING_PCT% missing exceeds threshold of $MAX_MISSING_PCT%"
-        fi
-    fi
 fi
 
 # Spot-check a sample data row for reasonable values

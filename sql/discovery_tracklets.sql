@@ -1,35 +1,27 @@
 -- ==============================================================================
--- NEA DISCOVERY TRACKLET STATISTICS
+-- NEO DISCOVERY TRACKLET STATISTICS
 -- ==============================================================================
 -- Project: CSS_SBN_derived
 -- Authors: Rob Seaman (Catalina Sky Survey) / Claude (Anthropic)
 -- Created: 2026-01-08
 -- Updated: 2026-02-08
 --
--- Computes discovery tracklet statistics for all Near-Earth Asteroids listed
--- in the MPC's NEA.txt catalog, queried against the MPC/SBN PostgreSQL database.
+-- Computes discovery tracklet statistics for Near-Earth Objects (NEOs)
+-- sourced directly from the MPC/SBN PostgreSQL database.  Includes both
+-- near-Earth asteroids (Atira, Aten, Apollo, Amor) and near-Earth comets.
 --
--- NEA.txt source: https://minorplanetcenter.net/iau/MPCORB/NEA.txt
--- NEA.txt uses MPCORB format with NO header lines (data starts at line 1)
---
--- HANDLES BOTH:
---   - Numbered asteroids: (433) Eros, (99942) Apophis, etc.
---   - Unnumbered asteroids: 2024 AA1, 2023 DZ2, etc.
+-- NEO SELECTION (from mpc_orbits):
+--   q < 1.32 AU  OR  orbit_type_int IN (0, 1, 2, 3, 20)
+--   Orbit types: 0=Atira, 1=Aten, 2=Apollo, 3=Amor, 20=dual-nature
+--   The q threshold slightly exceeds the IAU definition (q < 1.3 AU) to
+--   retain objects near the boundary whose orbits may shift on refinement.
 --
 -- USAGE:
---   This file is designed to be called from scripts/run_pipeline.sh which:
---   1. Downloads NEA.txt to a temp directory
---   2. Injects the \copy command with the correct path
---   3. Executes this query and exports to CSV
---
--- MANUAL USAGE:
---   1. Download: curl -o /tmp/NEA.txt https://minorplanetcenter.net/iau/MPCORB/NEA.txt
---   2. Run: psql -h host -d mpc_sbn -f sql/discovery_tracklets.sql --csv -o output.csv
---      (Ensure the \copy path below matches your download location)
+--   psql -h host -d mpc_sbn -f sql/discovery_tracklets.sql --csv -o output.csv
 --
 -- OUTPUT COLUMNS (12):
 --   primary_designation                     Number (for numbered) or provisional designation
---   packed_primary_provisional_designation  Packed format (e.g., "00433" or "K24A01A")
+--   packed_primary_provisional_designation  Packed format (e.g., "I98P00A" or "K24A01A")
 --   avg_mjd_discovery_tracklet              Mean MJD of discovery tracklet
 --   avg_ra_deg                              Mean RA in decimal degrees
 --   avg_dec_deg                             Mean Dec in decimal degrees
@@ -41,17 +33,6 @@
 --   discovery_site_code                     MPC observatory code
 --   discovery_site_name                     Observatory name from obscodes table
 --
--- DESIGNATION FORMATS:
---   Numbered asteroids in NEA.txt:
---     - Packed (cols 1-7): "00433" (numbers < 100000), "A0345" (100345), "~0000" (620000+)
---     - Unpacked (cols 167-194): "(433) Eros" or "(99942) Apophis"
---     - obs_sbn.permid: "433" or "99942" (number as string, no parentheses)
---
---   Unnumbered asteroids in NEA.txt:
---     - Packed (cols 1-7): "K24A01A" (2024 AA1), "J95X00A" (1995 XA)
---     - Unpacked (cols 167-194): "2024 AA1" or "1995 XA"
---     - obs_sbn.provid: "2024 AA1" or "1995 XA"
---
 -- TRACKLET GROUPING:
 --   Uses trkid (MPC-assigned, globally unique tracklet identifier) to group
 --   discovery observations.  A ±12 hour time cap around the disc='*' observation
@@ -60,8 +41,10 @@
 --   When trkid is NULL, falls back to the single disc='*' observation.
 --
 -- KNOWN LIMITATIONS:
---   - NEAs without any disc='*' observation in obs_sbn cannot be matched
+--   - NEOs without any disc='*' observation in obs_sbn cannot be matched
 --     (as of 2026-02-07: 2009 US19 and 2024 TZ7; reported to MPC)
+--   - NEOs without a published orbit in mpc_orbits cannot be selected
+--     (as of 2026-02-08: 2020 GZ1; primary_objects has no NEO classification)
 --   - A small number of older observations have NULL trkid; for these,
 --     statistics are computed from the single disc='*' observation
 -- ==============================================================================
@@ -83,81 +66,25 @@ EXCEPTION WHEN insufficient_privilege THEN
 END
 $$;
 
--- Temporary table for NEA.txt data
-DROP TABLE IF EXISTS nea_txt_import;
-CREATE TEMPORARY TABLE nea_txt_import (raw_line TEXT);
-
--- Load NEA.txt (this line is typically replaced by scripts/run_pipeline.sh)
--- NEA.txt has NO header lines - all lines are data in MPCORB format
-\copy nea_txt_import(raw_line) FROM '/tmp/NEA.txt'
-
 -- ==============================================================================
 -- MAIN QUERY
 -- ==============================================================================
 
-WITH nea_parsed AS (
-    -- Parse MPCORB fixed-width format from NEA.txt
-    -- Key columns (1-indexed):
-    --   1-7:     Packed designation (number or provisional)
-    --   167-194: Readable unpacked designation
-    --
-    -- PACKED NUMBER FORMAT (columns 1-5, columns 6-7 are spaces):
-    --   Numbers < 100000:    Right-justified, zero-padded (e.g., "00433" for 433)
-    --   Numbers 100000-619999: Letter prefix A-Z then a-z (e.g., "A0345" = 100345)
-    --   Numbers >= 620000:   Tilde prefix with base-62 (e.g., "~0000" = 620000)
-    --
-    -- PACKED PROVISIONAL FORMAT (all 7 columns):
-    --   Century letter + 2-digit year + half-month + cycle + second letter
-    --   E.g., "K24A01A" = 2024 AA1, "J95X00A" = 1995 XA
-    --
-    -- READABLE DESIGNATION (columns 167-194):
-    --   Numbered: "(433) Eros" or "(99942) Apophis"
-    --   Unnumbered: "2024 AA1" or "1995 XA"
+WITH neo_list AS (
+    -- NEOs from mpc_orbits: orbital element + classification filter
     SELECT
-        TRIM(SUBSTRING(raw_line FROM 1 FOR 7)) as packed_desig,
-        TRIM(SUBSTRING(raw_line FROM 167 FOR 28)) as unpacked_desig,
-        -- Detect if this is a numbered asteroid by checking if readable starts with "("
-        TRIM(SUBSTRING(raw_line FROM 167 FOR 28)) ~ '^\([0-9]+\)' as is_numbered,
-        -- Extract the number from "(NNN)" format if numbered
-        CASE
-            WHEN TRIM(SUBSTRING(raw_line FROM 167 FOR 28)) ~ '^\([0-9]+\)'
-            THEN REGEXP_REPLACE(
-                TRIM(SUBSTRING(raw_line FROM 167 FOR 28)),
-                '^\(([0-9]+)\).*$',
-                '\1'
-            )
-            ELSE NULL
-        END as asteroid_number,
-        -- Extract provisional designation (everything for unnumbered,
-        -- or the part after the name for numbered if they have one)
-        CASE
-            WHEN TRIM(SUBSTRING(raw_line FROM 167 FOR 28)) ~ '^\([0-9]+\)'
-            THEN NULL  -- Numbered asteroids: we use the number, not provisional
-            ELSE TRIM(SUBSTRING(raw_line FROM 167 FOR 28))
-        END as provisional_desig
-    FROM nea_txt_import
-    WHERE LENGTH(raw_line) >= 167      -- Valid data lines
-      AND raw_line !~ '^\s*$'          -- Skip blank lines
-      AND raw_line !~ '^-'             -- Skip any separator lines
-),
-
-nea_list AS (
-    -- Create a unified list with proper identifiers for matching obs_sbn
-    -- For numbered asteroids, get their principal provisional designation
-    -- from numbered_identifications (the authoritative number-to-designation
-    -- cross-reference, more reliable than the partially-populated mpc_orbits)
-    SELECT
-        np.packed_desig,
-        np.unpacked_desig,
-        np.is_numbered,
-        np.asteroid_number,
-        np.provisional_desig,
-        -- For numbered asteroids: look up their provisional designation
-        -- so we can also search obs_sbn.provid for discovery observations
-        numid.unpacked_primary_provisional_designation as num_provid
-    FROM nea_parsed np
-    LEFT JOIN numbered_identifications numid
-        ON np.is_numbered AND numid.permid = np.asteroid_number
+        mo.packed_primary_provisional_designation AS packed_desig,
+        mo.unpacked_primary_provisional_designation AS unpacked_desig,
+        ni.permid IS NOT NULL AS is_numbered,
+        ni.permid AS asteroid_number,
+        CASE WHEN ni.permid IS NULL
+             THEN mo.unpacked_primary_provisional_designation
+        END AS provisional_desig,
+        ni.unpacked_primary_provisional_designation AS num_provid
+    FROM mpc_orbits mo
+    LEFT JOIN numbered_identifications ni
+        ON ni.packed_primary_provisional_designation = mo.packed_primary_provisional_designation
+    WHERE mo.q < 1.32 OR mo.orbit_type_int IN (0, 1, 2, 3, 20)
 ),
 
 -- ==============================================================================
@@ -181,7 +108,7 @@ discovery_obs_all AS (
         obs.obsid,
         obs.trkid,
         obs.obstime
-    FROM nea_list neo
+    FROM neo_list neo
     INNER JOIN obs_sbn obs ON obs.permid = neo.asteroid_number
     WHERE neo.is_numbered
       AND obs.disc = '*'
@@ -200,7 +127,7 @@ discovery_obs_all AS (
         obs.obsid,
         obs.trkid,
         obs.obstime
-    FROM nea_list neo
+    FROM neo_list neo
     INNER JOIN obs_sbn obs ON obs.provid = neo.provisional_desig
     WHERE NOT neo.is_numbered
       AND obs.disc = '*'
@@ -219,7 +146,7 @@ discovery_obs_all AS (
         obs.obsid,
         obs.trkid,
         obs.obstime
-    FROM nea_list neo
+    FROM neo_list neo
     INNER JOIN obs_sbn obs ON obs.provid = neo.num_provid
     WHERE neo.num_provid IS NOT NULL
       AND obs.disc = '*'
