@@ -1,6 +1,9 @@
 # Output data files (distributed via GitHub Releases, not committed)
 *.csv
 
+# Downloaded MPC catalog files
+sandbox/*.txt
+
 # Temporary files
 *.tmp
 *.bak
