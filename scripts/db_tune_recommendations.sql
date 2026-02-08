@@ -1,0 +1,239 @@
+-- ==============================================================================
+-- MPC/SBN Database Tuning Recommendations
+-- ==============================================================================
+-- Host: sibyl (RHEL 8.6 VM)
+-- Database: mpc_sbn (PostgreSQL 15.2, 446 GB, logical replica)
+-- Generated: 2026-02-08
+--
+-- All current settings are at PostgreSQL defaults except max_connections,
+-- shared_buffers, and WAL sizes.  This database has never been tuned for
+-- its 446 GB / 526M-row workload.
+--
+-- INSTRUCTIONS:
+--   1. Determine VM RAM (free -h)
+--   2. Edit postgresql.conf with the values below
+--   3. Run the ALTER TABLE commands for per-table autovacuum settings
+--   4. Restart PostgreSQL for postgresql.conf changes
+--   5. Run the one-time manual VACUUM commands
+--
+-- ==============================================================================
+
+
+-- ==============================================================================
+-- FINDING 1: shared_buffers = 128 MB (default) for a 446 GB database
+-- ==============================================================================
+--
+-- This is the single most impactful setting.  PostgreSQL default is 128 MB
+-- regardless of database size.  Nearly every query hits disk.
+--
+-- EDIT postgresql.conf:
+--
+--   ## For 32 GB RAM VM:
+--   shared_buffers = '8GB'
+--   effective_cache_size = '24GB'
+--
+--   ## For 64 GB RAM VM (recommended for this database):
+--   shared_buffers = '16GB'
+--   effective_cache_size = '48GB'
+--
+-- effective_cache_size does not allocate memory — it tells the query planner
+-- how much OS page cache to expect.  Set to ~75% of total RAM.
+--
+-- Also set these related memory parameters:
+--
+--   work_mem = '64MB'              -- Currently 4 MB (default); used per sort/hash
+--                                  -- operation in queries.  64 MB helps complex
+--                                  -- joins and aggregations.  With max_connections=100,
+--                                  -- worst case is 100 * 64 MB = 6.4 GB, but in
+--                                  -- practice few connections sort simultaneously.
+--
+--   wal_buffers = '64MB'           -- Currently 4 MB (auto from shared_buffers).
+--                                  -- Helps write-heavy replication apply.
+--
+--   huge_pages = 'try'             -- Already set.  On RHEL 8, configure OS:
+--                                  --   sysctl -w vm.nr_hugepages=8192  (for 16 GB)
+--                                  --   Add to /etc/sysctl.d/postgres.conf
+--
+-- REQUIRES: PostgreSQL restart (sudo systemctl restart postgresql-15)
+
+
+-- ==============================================================================
+-- FINDING 2: maintenance_work_mem = 64 MB for VACUUM on 239 GB table
+-- ==============================================================================
+--
+-- maintenance_work_mem controls how much memory VACUUM and CREATE INDEX can
+-- use.  At 64 MB, vacuuming obs_sbn is agonizingly slow — it can only hold
+-- references to ~2.7M dead tuples per pass, requiring dozens of passes to
+-- process 82M dead rows.
+--
+-- EDIT postgresql.conf:
+--
+--   maintenance_work_mem = '2GB'   -- For manual VACUUM and index builds.
+--                                  -- Allows ~85M dead tuple refs per pass —
+--                                  -- enough to process obs_sbn in one pass.
+--
+--   autovacuum_work_mem = '1GB'    -- Separate limit for autovacuum workers.
+--                                  -- Currently -1 (inherits maintenance_work_mem).
+--                                  -- Setting it independently prevents a manual
+--                                  -- VACUUM from starving autovacuum or vice versa.
+--                                  -- With 3 workers: 3 * 1 GB = 3 GB worst case.
+--
+-- REQUIRES: PostgreSQL restart for maintenance_work_mem.
+-- autovacuum_work_mem can be changed with reload (no restart).
+
+
+-- ==============================================================================
+-- FINDING 3: obs_sbn not vacuumed in 186 days (82M dead rows, 15.5%)
+-- ==============================================================================
+--
+-- The default autovacuum threshold is: 50 + 0.2 * n_live_tup
+-- For obs_sbn: 50 + 0.2 * 526M = 105.3M dead rows needed to trigger.
+-- Current dead rows: 82M (77.6% of threshold).  At current accumulation
+-- rate it could be months before autovacuum triggers.
+--
+-- FIX: Two actions — immediate manual vacuum, then lower the threshold.
+--
+-- STEP A: Per-table autovacuum settings (run as database owner, no restart)
+
+ALTER TABLE obs_sbn SET (
+    autovacuum_vacuum_scale_factor = 0.05,      -- Trigger at 5% dead (was 20%)
+    autovacuum_vacuum_threshold = 1000000,       -- At least 1M dead rows
+    autovacuum_analyze_scale_factor = 0.02,      -- Re-analyze at 2% change
+    autovacuum_analyze_threshold = 500000,
+    autovacuum_vacuum_cost_delay = 0             -- No throttling for this table
+);
+
+-- autovacuum_vacuum_cost_delay = 0 is aggressive but appropriate for obs_sbn:
+-- the default 2ms delay per 200 cost units makes autovacuum process only
+-- ~80 MB/s, requiring ~50 minutes just to scan 239 GB before any cleanup.
+-- With delay=0, autovacuum uses full I/O bandwidth and finishes much faster.
+-- On a dedicated VM with no user-facing latency requirements, this is safe.
+--
+-- New trigger threshold: 1,000,000 + 0.05 * 526M = ~27.3M dead rows
+-- (instead of the current 105.3M).
+
+-- STEP B: Increase global autovacuum cost limits (in postgresql.conf)
+--
+--   autovacuum_vacuum_cost_delay = '0'    -- Currently 2ms (default).
+--   autovacuum_vacuum_cost_limit = '2000' -- Currently 200 (default via
+--                                         -- vacuum_cost_limit).  Shared across
+--                                         -- all workers.  2000 = 10x throughput.
+--
+-- ALTERNATIVE: instead of setting cost_delay=0 globally, set it only on
+-- obs_sbn (via ALTER TABLE above) and leave the global at 2ms for smaller
+-- tables where aggressive vacuum is unnecessary.
+--
+-- STEP C: One-time manual VACUUM (run after postgresql.conf changes are applied)
+--
+-- IMPORTANT: Run this AFTER increasing maintenance_work_mem to 2 GB.
+-- At 64 MB, this would take many passes and hours.  At 2 GB, one pass.
+--
+-- Run from psql as database owner (not in a transaction block):
+--
+--   VACUUM (VERBOSE) obs_sbn;
+--
+-- Expected duration: 30-90 minutes depending on I/O speed.
+-- This is a regular VACUUM, not VACUUM FULL — it does NOT lock the table
+-- and does NOT rewrite the table.  Replication continues during vacuum.
+-- The VERBOSE flag shows progress.
+--
+-- DO NOT run VACUUM FULL — it rewrites the entire table (239 GB),
+-- requires an ACCESS EXCLUSIVE lock, and would halt replication.
+
+
+-- ==============================================================================
+-- FINDING 4: Five tables not vacuumed in 367+ days
+-- ==============================================================================
+--
+-- These tables have low dead-tuple churn relative to their size, so the
+-- default 20% threshold never triggers:
+--
+--   obs_alterations_deletions      1.47M rows, 79K dead (5.4%)  367 days
+--   neocp_events                   310K rows,  114 dead (0.0%)  367 days
+--   neocp_obs_archive              777K rows,  42 dead (0.0%)   367 days
+--   numbered_identifications       876K rows,  360 dead (0.0%)  367 days
+--   current_identifications        2.04M rows, 57K dead (2.8%)  367 days
+--
+-- Also stale:
+--   primary_objects                1.55M rows, 2.7K dead (0.2%) 214 days
+--   obs_alterations_unassociations 536K rows,  89 dead (0.0%)   164 days
+--
+-- Even with few dead tuples, periodic vacuuming is needed to:
+--   - Update the visibility map (enables index-only scans)
+--   - Prevent transaction ID wraparound (autovacuum_freeze_max_age)
+--   - Keep planner statistics fresh (via auto-analyze)
+--
+-- FIX: Lower the global scale factor (in postgresql.conf):
+--
+--   autovacuum_vacuum_scale_factor = '0.05'     -- 5% instead of 20%
+--   autovacuum_analyze_scale_factor = '0.02'    -- 2% instead of 10%
+--
+-- This makes autovacuum more responsive for all tables.  For a dedicated
+-- database VM, the modest I/O increase is negligible.
+--
+-- For the immediate backlog, run manual vacuums (as database owner):
+--
+--   VACUUM (VERBOSE) obs_alterations_deletions;
+--   VACUUM (VERBOSE) current_identifications;
+--   VACUUM (VERBOSE) primary_objects;
+--   VACUUM (VERBOSE) numbered_identifications;
+--   VACUUM (VERBOSE) neocp_obs_archive;
+--   VACUUM (VERBOSE) neocp_events;
+--   VACUUM (VERBOSE) obs_alterations_unassociations;
+--
+-- These are small tables (< 350 MB each) — each should complete in seconds.
+-- Run ANALYZE afterward to refresh planner statistics:
+--
+--   ANALYZE obs_alterations_deletions;
+--   ANALYZE current_identifications;
+--   ANALYZE primary_objects;
+--   ANALYZE numbered_identifications;
+--   ANALYZE neocp_obs_archive;
+--   ANALYZE neocp_events;
+--   ANALYZE obs_alterations_unassociations;
+
+
+-- ==============================================================================
+-- ADDITIONAL: Storage-type tuning (SSD vs HDD)
+-- ==============================================================================
+--
+-- Current settings assume spinning disks (random_page_cost=4,
+-- effective_io_concurrency=1).  If sibyl uses SSDs:
+--
+--   random_page_cost = '1.1'          -- SSDs have near-sequential random reads
+--   effective_io_concurrency = '200'  -- SSDs can handle many concurrent reads
+--   seq_page_cost = '1.0'             -- Already default, keep as-is
+--
+-- If spinning disks, leave defaults.  Check with:
+--   lsblk -d -o NAME,ROTA  (ROTA=1 means rotational/HDD, 0 means SSD)
+
+
+-- ==============================================================================
+-- SUMMARY: postgresql.conf changes (all in one block)
+-- ==============================================================================
+--
+-- ## Memory (adjust shared_buffers/effective_cache_size for actual RAM)
+-- shared_buffers = '16GB'                     # 25% of RAM (for 64 GB VM)
+-- effective_cache_size = '48GB'               # 75% of RAM
+-- work_mem = '64MB'                           # Per-sort/hash operation
+-- maintenance_work_mem = '2GB'                # For VACUUM and CREATE INDEX
+-- autovacuum_work_mem = '1GB'                 # Per autovacuum worker
+-- wal_buffers = '64MB'                        # WAL write buffer
+--
+-- ## Autovacuum (more responsive)
+-- autovacuum_vacuum_scale_factor = 0.05       # Trigger at 5% dead (was 20%)
+-- autovacuum_analyze_scale_factor = 0.02      # Re-analyze at 2% changed
+-- autovacuum_vacuum_cost_limit = 2000         # 10x default throughput
+--
+-- ## WAL / Checkpoint
+-- max_wal_size = '4GB'                        # Currently 1 GB, increase for
+--                                             # large replication apply batches
+-- checkpoint_completion_target = 0.9          # Already set (good)
+--
+-- ## SSD only (skip if spinning disks):
+-- # random_page_cost = 1.1
+-- # effective_io_concurrency = 200
+--
+-- REQUIRES: sudo systemctl restart postgresql-15
+--
+-- After restart, run the ALTER TABLE and manual VACUUM/ANALYZE commands above.
