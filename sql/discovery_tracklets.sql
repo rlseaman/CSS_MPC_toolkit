@@ -52,12 +52,18 @@
 --     - Unpacked (cols 167-194): "2024 AA1" or "1995 XA"
 --     - obs_sbn.provid: "2024 AA1" or "1995 XA"
 --
+-- TRACKLET GROUPING:
+--   Uses trkid (MPC-assigned, globally unique tracklet identifier) to group
+--   discovery observations.  A ±12 hour time cap around the disc='*' observation
+--   guards against non-standard trkid semantics (e.g., older X05 submissions
+--   where a single trkid could span weeks; C51/WISE half-day arcs).
+--   When trkid is NULL, falls back to the single disc='*' observation.
+--
 -- KNOWN LIMITATIONS:
---   - ~7% of discovery observations have NULL trksub; for these, statistics
---     are computed from the single disc='*' observation rather than the full
---     tracklet
 --   - NEAs without any disc='*' observation in obs_sbn cannot be matched
 --     (as of 2026-02-07: 2009 US19 and 2024 TZ7; reported to MPC)
+--   - A small number of older observations have NULL trkid; for these,
+--     statistics are computed from the single disc='*' observation
 -- ==============================================================================
 
 -- Suppress command-tag messages (CREATE INDEX, DROP TABLE, COPY nnn, etc.)
@@ -65,10 +71,17 @@
 \set QUIET on
 
 -- Performance indexes (create once, speeds up repeated queries)
-CREATE INDEX IF NOT EXISTS idx_obs_sbn_disc ON obs_sbn(disc) WHERE disc = '*';
-CREATE INDEX IF NOT EXISTS idx_obs_sbn_provid ON obs_sbn(provid);
-CREATE INDEX IF NOT EXISTS idx_obs_sbn_permid ON obs_sbn(permid);
-CREATE INDEX IF NOT EXISTS idx_obs_sbn_trksub ON obs_sbn(trksub);
+-- Wrapped in exception handler so readonly roles can run this script
+DO $$
+BEGIN
+    CREATE INDEX IF NOT EXISTS idx_obs_sbn_disc ON obs_sbn(disc) WHERE disc = '*';
+    CREATE INDEX IF NOT EXISTS idx_obs_sbn_provid ON obs_sbn(provid);
+    CREATE INDEX IF NOT EXISTS idx_obs_sbn_permid ON obs_sbn(permid);
+    CREATE INDEX IF NOT EXISTS idx_obs_sbn_trkid ON obs_sbn(trkid);
+EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'Index creation skipped (insufficient privileges)';
+END
+$$;
 
 -- Temporary table for NEA.txt data
 DROP TABLE IF EXISTS nea_txt_import;
@@ -165,7 +178,8 @@ discovery_obs_all AS (
         neo.provisional_desig,
         neo.num_provid,
         obs.stn,
-        obs.trksub,
+        obs.obsid,
+        obs.trkid,
         obs.obstime
     FROM nea_list neo
     INNER JOIN obs_sbn obs ON obs.permid = neo.asteroid_number
@@ -183,7 +197,8 @@ discovery_obs_all AS (
         neo.provisional_desig,
         neo.num_provid,
         obs.stn,
-        obs.trksub,
+        obs.obsid,
+        obs.trkid,
         obs.obstime
     FROM nea_list neo
     INNER JOIN obs_sbn obs ON obs.provid = neo.provisional_desig
@@ -201,7 +216,8 @@ discovery_obs_all AS (
         neo.provisional_desig,
         neo.num_provid,
         obs.stn,
-        obs.trksub,
+        obs.obsid,
+        obs.trkid,
         obs.obstime
     FROM nea_list neo
     INNER JOIN obs_sbn obs ON obs.provid = neo.num_provid
@@ -220,20 +236,23 @@ discovery_info AS (
         provisional_desig,
         num_provid,
         stn as discovery_stn,
-        trksub as discovery_trksub
+        obsid as discovery_obsid,
+        NULLIF(trkid, '') as discovery_trkid,
+        obstime as discovery_obstime
     FROM discovery_obs_all
     ORDER BY unpacked_desig, obstime
 ),
 
 -- ==============================================================================
--- UNION-based tracklet observation lookup
--- Same 3-branch pattern, but each branch also filters on the tracklet
--- (trksub match or disc='*' fallback). Uses UNION (not UNION ALL) to
--- deduplicate observations that match via both permid and provid for
--- numbered asteroids, preventing double-counted aggregates.
+-- Tracklet observation lookup via trkid
+-- trkid is globally unique, so a single join suffices (no UNION needed).
+-- A ±12 hour window around the disc='*' observation guards against
+-- non-standard trkid semantics (e.g., older X05 multi-week arcs, C51
+-- half-day sessions).  When trkid is NULL, falls back to the single
+-- disc='*' observation via obsid.
 -- ==============================================================================
 tracklet_obs_all AS (
-    -- Branch 1: Numbered asteroids matched by permid
+    -- Primary path: trkid grouping with ±12 hour safety cap
     SELECT
         di.unpacked_desig,
         di.packed_desig,
@@ -243,16 +262,13 @@ tracklet_obs_all AS (
         obs.mag,
         obs.band
     FROM discovery_info di
-    INNER JOIN obs_sbn obs ON obs.permid = di.asteroid_number
-    WHERE di.is_numbered
-      AND (
-          (di.discovery_trksub IS NOT NULL AND obs.trksub = di.discovery_trksub)
-          OR (di.discovery_trksub IS NULL AND obs.disc = '*')
-      )
+    INNER JOIN obs_sbn obs ON obs.trkid = di.discovery_trkid
+    WHERE di.discovery_trkid IS NOT NULL
+      AND ABS(EXTRACT(EPOCH FROM (obs.obstime - di.discovery_obstime))) / 3600.0 <= 12.0
 
-    UNION
+    UNION ALL
 
-    -- Branch 2: Unnumbered asteroids matched by provid
+    -- Fallback: NULL trkid — return just the discovery observation itself
     SELECT
         di.unpacked_desig,
         di.packed_desig,
@@ -262,31 +278,8 @@ tracklet_obs_all AS (
         obs.mag,
         obs.band
     FROM discovery_info di
-    INNER JOIN obs_sbn obs ON obs.provid = di.provisional_desig
-    WHERE NOT di.is_numbered
-      AND (
-          (di.discovery_trksub IS NOT NULL AND obs.trksub = di.discovery_trksub)
-          OR (di.discovery_trksub IS NULL AND obs.disc = '*')
-      )
-
-    UNION
-
-    -- Branch 3: Numbered asteroids matched by num_provid via provid
-    SELECT
-        di.unpacked_desig,
-        di.packed_desig,
-        obs.obstime,
-        obs.ra,
-        obs.dec,
-        obs.mag,
-        obs.band
-    FROM discovery_info di
-    INNER JOIN obs_sbn obs ON obs.provid = di.num_provid
-    WHERE di.num_provid IS NOT NULL
-      AND (
-          (di.discovery_trksub IS NOT NULL AND obs.trksub = di.discovery_trksub)
-          OR (di.discovery_trksub IS NULL AND obs.disc = '*')
-      )
+    INNER JOIN obs_sbn obs ON obs.obsid = di.discovery_obsid
+    WHERE di.discovery_trkid IS NULL
 ),
 
 discovery_tracklet_stats AS (
