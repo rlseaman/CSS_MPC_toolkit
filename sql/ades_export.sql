@@ -5,7 +5,7 @@
 -- Produces ADES-ready columns from neocp_obs_archive, suitable for
 -- generating valid ADES XML (general.xsd) or PSV output.
 --
--- Requires: css_derived schema functions (css_derived_functions.sql)
+-- Requires: css_utilities schema functions (css_utilities_functions.sql)
 --
 -- Usage:
 --   psql -h sibyl -U claude_ro mpc_sbn -f ades_export.sql
@@ -40,7 +40,7 @@ SELECT
     -- Use resolved IAU designation if available; fall back to obs80 desig
     CASE
         WHEN r.iau_desig != '' THEN r.iau_desig
-        ELSE (css_derived.parse_obs80(r.obs80)).unpacked_desig
+        ELSE (css_utilities.parse_obs80(r.obs80)).unpacked_desig
     END AS desig,
     -- Determine if numbered (pure digits) or provisional
     CASE
@@ -48,17 +48,17 @@ SELECT
         ELSE 'provID'
     END AS id_type,
     -- Core ADES fields parsed from obs80
-    (css_derived.parse_obs80(r.obs80)).mode      AS mode,
-    (css_derived.parse_obs80(r.obs80)).stn        AS stn,
-    (css_derived.parse_obs80(r.obs80)).obs_time   AS "obsTime",
-    (css_derived.parse_obs80(r.obs80)).ra_deg     AS ra,
-    (css_derived.parse_obs80(r.obs80)).dec_deg    AS dec,
-    (css_derived.parse_obs80(r.obs80)).ast_cat    AS "astCat",
+    (css_utilities.parse_obs80(r.obs80)).mode      AS mode,
+    (css_utilities.parse_obs80(r.obs80)).stn        AS stn,
+    (css_utilities.parse_obs80(r.obs80)).obs_time   AS "obsTime",
+    (css_utilities.parse_obs80(r.obs80)).ra_deg     AS ra,
+    (css_utilities.parse_obs80(r.obs80)).dec_deg    AS dec,
+    (css_utilities.parse_obs80(r.obs80)).ast_cat    AS "astCat",
     -- Optional fields
-    (css_derived.parse_obs80(r.obs80)).disc       AS disc,
-    (css_derived.parse_obs80(r.obs80)).notes      AS notes,
-    (css_derived.parse_obs80(r.obs80)).mag        AS mag,
-    (css_derived.parse_obs80(r.obs80)).band       AS band,
+    (css_utilities.parse_obs80(r.obs80)).disc       AS disc,
+    (css_utilities.parse_obs80(r.obs80)).notes      AS notes,
+    (css_utilities.parse_obs80(r.obs80)).mag        AS mag,
+    (css_utilities.parse_obs80(r.obs80)).band       AS band,
     -- ADES-native uncertainty fields
     r.rmsra   AS "rmsRA",
     r.rmsdec  AS "rmsDec",
@@ -100,5 +100,5 @@ ORDER BY r.neocp_desig, r.created_at;
 --     r.rmscorr AS "rmsCorr", r.rmstime AS "rmsTime",
 --     r.trkid AS "trkSub", r.created_at AS db_created
 -- FROM resolved r,
---      LATERAL (SELECT (css_derived.parse_obs80(r.obs80)).*) p
+--      LATERAL (SELECT (css_utilities.parse_obs80(r.obs80)).*) p
 -- ORDER BY r.neocp_desig, r.created_at;

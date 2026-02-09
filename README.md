@@ -83,8 +83,8 @@ Reusable conversion functions for MPC 80-column observation format:
 | `parse_obs80()` | 80-col line | ADES field dict |
 
 PostgreSQL equivalents are in
-[`sql/css_derived_functions.sql`](sql/css_derived_functions.sql),
-designed for a `css_derived` schema on the local replica.
+[`sql/css_utilities_functions.sql`](sql/css_utilities_functions.sql),
+designed for a `css_utilities` schema on the local replica.
 
 ## Database Operations
 
@@ -129,7 +129,7 @@ CSS_SBN_derived/
 │   └── ades_export.py                  # ADES XML/PSV export
 ├── sql/
 │   ├── discovery_tracklets.sql         # NEO discovery tracklet statistics
-│   ├── css_derived_functions.sql       # PostgreSQL conversion functions
+│   ├── css_utilities_functions.sql       # PostgreSQL conversion functions
 │   ├── ades_export.sql                 # ADES-ready columns from NEOCP
 │   ├── common/
 │   │   └── indexes.sql                 # Shared index definitions
@@ -177,7 +177,7 @@ psql -h sibyl -d mpc_sbn -f sql/discovery_tracklets.sql \
 
 ```bash
 # Requires CREATE SCHEMA / CREATE FUNCTION privileges
-psql -h sibyl -U <owner> mpc_sbn -f sql/css_derived_functions.sql
+psql -h sibyl -U <owner> mpc_sbn -f sql/css_utilities_functions.sql
 ```
 
 ### Run the Health Check

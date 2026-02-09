@@ -345,7 +345,7 @@ receive changes from the publisher, the following are all safe:
 - **Functions and operators** (zero-cost catalog entries until called)
 - **Views** (just catalog definitions; no replication interaction)
 - **Materialized views** (refreshed locally, independent of replication)
-- **Separate schemas** (e.g., `css_derived`) for all local work
+- **Separate schemas** (e.g., `css_utilities`) for all local work
 
 ### Risks
 
@@ -382,7 +382,7 @@ sibyl (mpc_sbn database)
 │   ├── primary_objects    ← 1.50M rows
 │   └── ...                ← other MPC tables
 │
-└── css_derived schema     ← local, non-replicated
+└── css_utilities schema     ← local, non-replicated
     ├── MATERIALIZED VIEWS
     │   ├── neo_orbits_extended      (flat + extracted JSONB + Tisserand)
     │   ├── neo_last_observed        (permid/provid, max_obstime, count)

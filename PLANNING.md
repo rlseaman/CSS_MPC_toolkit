@@ -81,8 +81,8 @@ The replicated database contains 18 tables. Full analysis in
 8. **`lib/mpc_convert.py`** -- Python functions: date conversion (fractional
    day to ISO 8601), RA/Dec sexagesimal to decimal degrees, catalog/mode/band
    code mappings, packed designation encode/decode, full obs80 parser
-9. **`sql/css_derived_functions.sql`** -- PostgreSQL equivalents as
-   IMMUTABLE STRICT PARALLEL SAFE functions in `css_derived` schema
+9. **`sql/css_utilities_functions.sql`** -- PostgreSQL equivalents as
+   IMMUTABLE STRICT PARALLEL SAFE functions in `css_utilities` schema
 
 ### ADES Export
 
@@ -110,7 +110,7 @@ The replicated database contains 18 tables. Full analysis in
 
 ### Near-term
 
-- **Install `css_derived` schema** on sibyl (needs privileged user)
+- **Install `css_utilities` schema** on sibyl (needs privileged user)
 - **Install `postgresql15-contrib`** on sibyl for `pg_buffercache` and
   `pg_stat_statements` extensions
 - **Enable huge pages** at next maintenance reboot (instructions in
@@ -149,7 +149,7 @@ The replicated database contains 18 tables. Full analysis in
 ### Database enrichment
 
 - SQL scripts written to be idempotent (`CREATE IF NOT EXISTS`, etc.)
-- Local `css_derived` schema for functions and derived tables
+- Local `css_utilities` schema for functions and derived tables
 - Materialized views for refreshable computed datasets
 
 ### Downstream replication

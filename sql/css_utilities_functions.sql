@@ -3,11 +3,11 @@
 -- ===========================================================================
 --
 -- Conversion functions for MPC 80-column observation format fields.
--- Designed to be installed in a local css_derived schema on the
+-- Designed to be installed in a local css_utilities schema on the
 -- mpc_sbn replica, keeping them separate from replicated MPC tables.
 --
 -- Usage:
---   psql -h sibyl -U <owner> mpc_sbn -f css_derived_functions.sql
+--   psql -h sibyl -U <owner> mpc_sbn -f css_utilities_functions.sql
 --
 -- Requires: CREATE SCHEMA and CREATE FUNCTION privileges.
 --
@@ -17,7 +17,7 @@
 --   Catalog codes: https://minorplanetcenter.net/iau/info/CatalogueCodes.html
 -- ===========================================================================
 
-CREATE SCHEMA IF NOT EXISTS css_derived;
+CREATE SCHEMA IF NOT EXISTS css_utilities;
 
 
 -- ---------------------------------------------------------------------------
@@ -30,7 +30,7 @@ CREATE SCHEMA IF NOT EXISTS css_derived;
 --   5 decimal places on day -> integer seconds
 --   6 -> 1 decimal place, 7 -> 2, 8 -> 3
 
-CREATE OR REPLACE FUNCTION css_derived.mpc_date_to_iso8601(date_str text)
+CREATE OR REPLACE FUNCTION css_utilities.mpc_date_to_iso8601(date_str text)
 RETURNS text
 LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE
 AS $$
@@ -94,7 +94,7 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION css_derived.mpc_date_to_iso8601(text) IS
+COMMENT ON FUNCTION css_utilities.mpc_date_to_iso8601(text) IS
     'Convert MPC obs80 date (cols 16-32) to ISO 8601 UTC timestamp';
 
 
@@ -104,7 +104,7 @@ COMMENT ON FUNCTION css_derived.mpc_date_to_iso8601(text) IS
 -- Input:  '08 56 40.968' (obs80 cols 33-44)
 -- Output: 134.170700 (decimal degrees)
 
-CREATE OR REPLACE FUNCTION css_derived.ra_hms_to_deg(ra_str text)
+CREATE OR REPLACE FUNCTION css_utilities.ra_hms_to_deg(ra_str text)
 RETURNS double precision
 LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE
 AS $$
@@ -127,7 +127,7 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION css_derived.ra_hms_to_deg(text) IS
+COMMENT ON FUNCTION css_utilities.ra_hms_to_deg(text) IS
     'Convert RA from HH MM SS.sss to decimal degrees [0, 360)';
 
 
@@ -137,7 +137,7 @@ COMMENT ON FUNCTION css_derived.ra_hms_to_deg(text) IS
 -- Input:  '-00 16 11.93' (obs80 cols 45-56)
 -- Output: -0.269981 (decimal degrees)
 
-CREATE OR REPLACE FUNCTION css_derived.dec_dms_to_deg(dec_str text)
+CREATE OR REPLACE FUNCTION css_utilities.dec_dms_to_deg(dec_str text)
 RETURNS double precision
 LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE
 AS $$
@@ -170,7 +170,7 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION css_derived.dec_dms_to_deg(text) IS
+COMMENT ON FUNCTION css_utilities.dec_dms_to_deg(text) IS
     'Convert Dec from sDD MM SS.ss to decimal degrees [-90, 90]';
 
 
@@ -178,7 +178,7 @@ COMMENT ON FUNCTION css_derived.dec_dms_to_deg(text) IS
 -- Catalog code: MPC single-char -> ADES astCat name
 -- ---------------------------------------------------------------------------
 
-CREATE OR REPLACE FUNCTION css_derived.mpc_cat_to_ades(code char)
+CREATE OR REPLACE FUNCTION css_utilities.mpc_cat_to_ades(code char)
 RETURNS text
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
 AS $$
@@ -217,7 +217,7 @@ AS $$
     END;
 $$;
 
-COMMENT ON FUNCTION css_derived.mpc_cat_to_ades(char) IS
+COMMENT ON FUNCTION css_utilities.mpc_cat_to_ades(char) IS
     'Map MPC single-char catalog code to ADES astCat name';
 
 
@@ -225,7 +225,7 @@ COMMENT ON FUNCTION css_derived.mpc_cat_to_ades(char) IS
 -- Mode code: MPC col-15 -> ADES mode
 -- ---------------------------------------------------------------------------
 
-CREATE OR REPLACE FUNCTION css_derived.mpc_mode_to_ades(code char)
+CREATE OR REPLACE FUNCTION css_utilities.mpc_mode_to_ades(code char)
 RETURNS text
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
 AS $$
@@ -242,7 +242,7 @@ AS $$
     END;
 $$;
 
-COMMENT ON FUNCTION css_derived.mpc_mode_to_ades(char) IS
+COMMENT ON FUNCTION css_utilities.mpc_mode_to_ades(char) IS
     'Map MPC observation type code (col 15) to ADES mode';
 
 
@@ -250,7 +250,7 @@ COMMENT ON FUNCTION css_derived.mpc_mode_to_ades(char) IS
 -- Band code: MPC single-char -> ADES band
 -- ---------------------------------------------------------------------------
 
-CREATE OR REPLACE FUNCTION css_derived.mpc_band_to_ades(code char)
+CREATE OR REPLACE FUNCTION css_utilities.mpc_band_to_ades(code char)
 RETURNS text
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
 AS $$
@@ -270,7 +270,7 @@ AS $$
     END;
 $$;
 
-COMMENT ON FUNCTION css_derived.mpc_band_to_ades(char) IS
+COMMENT ON FUNCTION css_utilities.mpc_band_to_ades(char) IS
     'Map MPC photometric band character to ADES band code';
 
 
@@ -281,7 +281,7 @@ COMMENT ON FUNCTION css_derived.mpc_band_to_ades(char) IS
 -- Input:  '00433  ' -> '433'
 -- Handles century codes I=18xx, J=19xx, K=20xx and base-62 cycle counts.
 
-CREATE OR REPLACE FUNCTION css_derived.unpack_designation(packed text)
+CREATE OR REPLACE FUNCTION css_utilities.unpack_designation(packed text)
 RETURNS text
 LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE
 AS $$
@@ -348,7 +348,7 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION css_derived.unpack_designation(text) IS
+COMMENT ON FUNCTION css_utilities.unpack_designation(text) IS
     'Unpack MPC packed designation to human-readable form';
 
 
@@ -357,7 +357,7 @@ COMMENT ON FUNCTION css_derived.unpack_designation(text) IS
 -- ---------------------------------------------------------------------------
 -- Returns a composite row with all parseable fields.
 
-CREATE TYPE css_derived.ades_obs AS (
+CREATE TYPE css_utilities.ades_obs AS (
     packed_desig text,
     unpacked_desig text,
     disc         char,
@@ -372,40 +372,40 @@ CREATE TYPE css_derived.ades_obs AS (
     stn          text
 );
 
-CREATE OR REPLACE FUNCTION css_derived.parse_obs80(obs80 text)
-RETURNS css_derived.ades_obs
+CREATE OR REPLACE FUNCTION css_utilities.parse_obs80(obs80 text)
+RETURNS css_utilities.ades_obs
 LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE
 AS $$
 DECLARE
     line    text;
-    result  css_derived.ades_obs;
+    result  css_utilities.ades_obs;
     mag_str text;
 BEGIN
     line := rpad(obs80, 80);
 
     result.packed_desig  := trim(substring(line, 1, 12));
-    result.unpacked_desig := css_derived.unpack_designation(result.packed_desig);
+    result.unpacked_desig := css_utilities.unpack_designation(result.packed_desig);
     result.disc          := nullif(substring(line, 13, 1), ' ');
     result.notes         := nullif(substring(line, 14, 1), ' ');
-    result.mode          := css_derived.mpc_mode_to_ades(substring(line, 15, 1));
-    result.obs_time      := css_derived.mpc_date_to_iso8601(substring(line, 16, 17));
-    result.ra_deg        := css_derived.ra_hms_to_deg(substring(line, 33, 12));
-    result.dec_deg       := css_derived.dec_dms_to_deg(substring(line, 45, 12));
+    result.mode          := css_utilities.mpc_mode_to_ades(substring(line, 15, 1));
+    result.obs_time      := css_utilities.mpc_date_to_iso8601(substring(line, 16, 17));
+    result.ra_deg        := css_utilities.ra_hms_to_deg(substring(line, 33, 12));
+    result.dec_deg       := css_utilities.dec_dms_to_deg(substring(line, 45, 12));
 
     mag_str := trim(substring(line, 66, 5));
     IF mag_str != '' THEN
         result.mag := mag_str::double precision;
     END IF;
 
-    result.band    := css_derived.mpc_band_to_ades(substring(line, 71, 1));
-    result.ast_cat := css_derived.mpc_cat_to_ades(substring(line, 72, 1));
+    result.band    := css_utilities.mpc_band_to_ades(substring(line, 71, 1));
+    result.ast_cat := css_utilities.mpc_cat_to_ades(substring(line, 72, 1));
     result.stn     := trim(substring(line, 78, 3));
 
     RETURN result;
 END;
 $$;
 
-COMMENT ON FUNCTION css_derived.parse_obs80(text) IS
+COMMENT ON FUNCTION css_utilities.parse_obs80(text) IS
     'Parse MPC 80-col observation line into ADES-compatible fields';
 
 
@@ -414,20 +414,20 @@ COMMENT ON FUNCTION css_derived.parse_obs80(text) IS
 -- ===========================================================================
 
 -- Test date conversion
--- SELECT css_derived.mpc_date_to_iso8601('2024 12 27.238073');
+-- SELECT css_utilities.mpc_date_to_iso8601('2024 12 27.238073');
 --   -> '2024-12-27T05:42:49.5Z'
 
 -- Test RA/Dec conversion
--- SELECT css_derived.ra_hms_to_deg('08 56 40.968');
+-- SELECT css_utilities.ra_hms_to_deg('08 56 40.968');
 --   -> 134.17070000...
--- SELECT css_derived.dec_dms_to_deg('-00 16 11.93');
+-- SELECT css_utilities.dec_dms_to_deg('-00 16 11.93');
 --   -> -0.26998055...
 
 -- Test designation unpacking
--- SELECT css_derived.unpack_designation('K24Y04R');
+-- SELECT css_utilities.unpack_designation('K24Y04R');
 --   -> '2024 YR4'
 
 -- Test full obs80 parse against real data
--- SELECT (css_derived.parse_obs80(obs80)).*
+-- SELECT (css_utilities.parse_obs80(obs80)).*
 -- FROM neocp_obs_archive
 -- LIMIT 5;
