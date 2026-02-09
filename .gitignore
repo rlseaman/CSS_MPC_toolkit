@@ -4,6 +4,10 @@
 # Downloaded MPC catalog files
 sandbox/*.txt
 
+# Python
+__pycache__/
+*.pyc
+
 # Temporary files
 *.tmp
 *.bak
