@@ -1,8 +1,8 @@
-# Schema: NEA Discovery Tracklets
+# Schema: NEO Discovery Tracklets
 
 ## Output CSV
 
-**Filename:** `NEA_discovery_tracklets.csv`
+**Filename:** `NEO_discovery_tracklets.csv`
 
 | # | Column | Type | Example | Description |
 |---|--------|------|---------|-------------|
@@ -61,9 +61,15 @@ correction table.
 
 ## Coverage
 
-NEAs present in NEA.txt but lacking a discovery observation (`disc = '*'`)
-in obs_sbn will not appear in the output. As of 2026-02-07, this affects
-2 of 40,807 NEAs (2009 US19 and 2024 TZ7).
+NEOs are selected from `mpc_orbits` using orbital criteria
+(`q < 1.32 AU` or `orbit_type_int IN (0, 1, 2, 3, 20)`). This includes
+near-Earth comets. Objects without orbits in `mpc_orbits` are excluded.
+
+NEOs lacking a discovery observation (`disc = '*'`) in `obs_sbn` will not
+appear in the output. As of 2026-02-08, this affects 2009 US19 and
+2024 TZ7. Additionally, 2020 GZ1 has no orbit in `mpc_orbits`.
+
+Total output: 43,629 NEO discovery tracklets.
 
 For ~7% of NEAs where the discovery observation has no tracklet identifier
 (`trksub IS NULL`), statistics are computed from the single discovery

@@ -1,6 +1,6 @@
-# CSS SBN Derived — Project Planning
+# CSS SBN Derived -- Project Planning
 
-**Date:** 2026-02-08
+**Date:** 2026-02-08 (updated)
 **Author:** Rob Seaman (Catalina Sky Survey) / Claude (Anthropic)
 **Repository:** https://github.com/rlseaman/CSS_SBN_derived
 
@@ -8,302 +8,172 @@
 
 The [Catalina Sky Survey](https://catalina.lpl.arizona.edu) (CSS) at the
 University of Arizona's Lunar and Planetary Laboratory maintains a local
-PostgreSQL replica of the [Minor Planet Center](https://www.minorplanetcenter.net)
-(MPC) observation and orbit database. This replica is distributed through the
-[PDS Small Bodies Node](https://sbnmpc.astro.umd.edu) (SBN) at the University
-of Maryland. General information about the replicated database is at:
+PostgreSQL replica of the [Minor Planet Center's](https://www.minorplanetcenter.net)
+(MPC) observation and orbit catalogs distributed through the
+[PDS Small Bodies Node](https://sbnmpc.astro.umd.edu) (SBN).
 
 - Schema: https://www.minorplanetcenter.net/mpcops/documentation/replicated-tables-schema/
 - General info: https://www.minorplanetcenter.net/mpcops/documentation/replicated-tables-info-general/
 
-This project develops "value-added" SQL scripts that augment the replicated
-database with derived data products useful to the NEO community.
+The database resides on host `sibyl` (RHEL 8.6, 251 GB RAM, HDD), running
+PostgreSQL 15.2 with logical replication from MPC. The database is 446 GB
+with 18 tables in the public schema, dominated by `obs_sbn` (526M+ rows,
+239 GB).
 
-The first such script is `sql/discovery_tracklets.sql`, which computes
-discovery tracklet statistics (position, magnitude, epoch) for all NEAs
-listed in the MPC's NEA.txt catalog. Current completeness: 40,805 / 40,807
-(99.995%), with the 2 missing objects (2009 US19, 2024 TZ7) reported to MPC
-as having no discovery observation in the database.
+This project develops "value-added" data products: SQL scripts, Python
+libraries, and derived datasets useful to the NEO community.
 
-## MPC/SBN Database Schema Analysis
+## MPC/SBN Database Schema
 
-The replicated database contains 16 tables (as of 2026-02). Key tables
-relevant to this project:
+The replicated database contains 18 tables. Full analysis in
+`sandbox/schema_review.md`.
 
 ### Currently used
 
-| Table | Status | Used for |
-|-------|--------|----------|
-| `obs_sbn` | Ready | All published observations including ITF data |
-| `numbered_identifications` | Ready | Number-to-provisional-designation mapping |
-| `obscodes` | Ready | Observatory name enrichment |
+| Table | Rows | Used for |
+|-------|------|----------|
+| `obs_sbn` | 526M | All published observations (239 GB) |
+| `mpc_orbits` | 1.51M | NEO selection by orbital elements |
+| `numbered_identifications` | 876K | Number-to-designation mapping |
+| `obscodes` | 2.4K | Observatory name enrichment |
+| `neocp_obs_archive` | 777K | NEOCP archived observations (ADES export) |
+| `neocp_prev_des` | 71K | NEOCP designation resolution |
+| `neocp_events` | 310K | NEOCP operational audit log |
 
-### Identified for future use
+### Key schema insights
 
-| Table | Status | Potential use |
-|-------|--------|---------------|
-| `current_identifications` | Ready | Cross-matching secondary designations to primaries |
-| `primary_objects` | Ready | Object type classification, orbit status flags |
-| `obscodes` | **Now used** | Observatory metadata (name used; location available) |
-| `mpc_orbits` | Partial | Orbital elements, Earth MOID, orbit type (when fully populated) |
-| `neocp_els` | Ready | Current NEOCP tracklet elements (Digest2 scores) |
-| `neocp_prev_des` | Ready | NEOCP removal reasons |
+1. **No foreign keys** exist anywhere in the schema. Referential integrity
+   is unenforced -- all joins rely on matching text fields.
 
-### Schema insights
+2. **`orbit_type_int` is NULL for 35%** of `mpc_orbits`. These are objects
+   with computed orbits but no MPC classification.
 
-1. **`numbered_identifications`** is the authoritative cross-reference for
-   numbered asteroids. It maps `permid` (the number) to
-   `packed/unpacked_primary_provisional_designation`. This is more reliable
-   than `mpc_orbits` for designation lookup since `mpc_orbits` is partially
-   populated and undergoing orbit consistency work. (Refactored in
-   discovery_tracklets.sql as of 2026-02-08.)
+3. **`primary_objects.object_type = 0`** is generic "minor planet" (1.5M
+   objects). It cannot distinguish NEOs from the general population.
 
-2. **`current_identifications`** tracks all secondary designations linked to
-   a primary. Each object may appear multiple times — once per secondary
-   designation. This could recover observations stored under a secondary
-   provisional designation that doesn't match the primary.
+4. **NEOCP tables** carry ADES-native uncertainty fields (`rmsra`, `rmsdec`,
+   `rmscorr`, `rmstime`) not present in `obs_sbn`.
 
-3. **`primary_objects.object_type`** classifies objects (NEA, MBA, comet, etc.).
-   If the type codes are documented, this could eliminate the dependency on
-   downloading NEA.txt to determine which objects are NEAs. The query could
-   instead filter directly from the database.
+5. **Logical replication** means local DDL (schemas, functions, indexes) is
+   safe. MPC enforces a 5% XMIN lag threshold and 14 days/year maximum
+   downtime.
 
-4. **`obscodes`** has longitude, parallax constants (`rhocosphi`, `rhosinphi`),
-   observatory name, and observation type. Joining this to discovery tracklet
-   output would add observatory name and approximate location at negligible
-   query cost.
+## Completed Work
 
-5. **`mpc_orbits`** — partially populated, with comet and natural satellite
-   orbits not yet stored. Fields not fully populated. The `mpc_orb_jsonb`
-   column contains the complete MPC JSON orbit format which may have fields
-   not yet broken out into individual columns. `earth_moid` and
-   `orbit_type_int` are available but population completeness is unclear.
+### Discovery Tracklets Pipeline
 
-## Vision
+1. **Initial SQL** -- `sql/discovery_tracklets.sql` computing discovery
+   tracklet statistics for all NEOs
+2. **Pipeline scripts** -- `run_pipeline.sh`, `validate_output.sh`,
+   `upload_release.sh` for automated execution
+3. **UNION-based refactor** -- Replaced OR-based joins with 3x UNION
+   branches targeting single indexes (permid, provid, num_provid)
+4. **Refactored to use numbered_identifications** -- Replaced `mpc_orbits`
+   for designation lookup (more reliable, fully populated)
+5. **NEO list from mpc_orbits** -- Replaced NEA.txt download with orbital
+   criteria (`q < 1.32 OR orbit_type_int IN (0,1,2,3,20)`)
+6. **Tracklet metrics** -- Added nobs, span_hours, rate_deg_per_day,
+   position_angle_deg, discovery_site_name (12 columns total)
+7. **Output:** 43,629 NEO discovery tracklets
 
-This project will grow to include multiple SQL scripts, each producing
-value-added data products. Distribution needs fall into three categories:
+### Conversion Library
 
-1. **Flat files (CSV)** — For tools like [NEOlyzer](https://github.com/rlseaman/neolyzer) and general community use
-2. **Database enrichment** — New tables and indices in the CSS local postgres
-3. **Downstream replication** — Enabling community stakeholders to replicate
-   derived tables and indices into their own postgres instances
+8. **`lib/mpc_convert.py`** -- Python functions: date conversion (fractional
+   day to ISO 8601), RA/Dec sexagesimal to decimal degrees, catalog/mode/band
+   code mappings, packed designation encode/decode, full obs80 parser
+9. **`sql/css_derived_functions.sql`** -- PostgreSQL equivalents as
+   IMMUTABLE STRICT PARALLEL SAFE functions in `css_derived` schema
+
+### ADES Export
+
+10. **`lib/ades_export.py`** -- ADES XML and PSV generator conforming to
+    `general.xsd` (version 2022). Produces standalone `<optical>` elements
+    with all 7 required fields satisfied from NEOCP data.
+11. **`sql/ades_export.sql`** -- SQL query producing ADES-ready columns from
+    `neocp_obs_archive` with designation resolution via `neocp_prev_des`
+
+### Database Operations
+
+12. **Health check toolkit** -- `scripts/db_health_check.sh` with 9
+    diagnostic sections
+13. **Tuning applied** -- `shared_buffers` 128 MB -> 64 GB, `work_mem`
+    4 MB -> 128 MB, autovacuum thresholds lowered. obs_sbn dead rows:
+    82M -> 2,308.
+14. **Index cleanup** -- Identified and removed duplicate indexes created
+    by previous sessions. Retained only `idx_obs_sbn_disc` (partial index
+    on `disc = '*'`).
+15. **Schema review** -- Comprehensive analysis in `sandbox/schema_review.md`
+16. **NEOCP analysis** -- Table inventory, join paths, latency analysis,
+    ADES feasibility in `sandbox/neocp_ades_analysis.md`
+
+## Remaining Work
+
+### Near-term
+
+- **Install `css_derived` schema** on sibyl (needs privileged user)
+- **Install `postgresql15-contrib`** on sibyl for `pg_buffercache` and
+  `pg_stat_statements` extensions
+- **Enable huge pages** at next maintenance reboot (instructions in
+  `scripts/enable_huge_pages.md`)
+- **Contact MPC/SBN about unused indexes** -- `obs_sbn_submission_block_id_key`
+  (12 GB) and `obs_sbn_trkmpc_idx` (10 GB) are never used
+- **Run production pipeline** with finalized SQL and publish release
+
+### Medium-term
+
+- **Set up cron** on a CSS server for daily/weekly pipeline execution
+- **Materialized views** for discovery tracklets (refreshable, queryable)
+- **ADES validation** against `general.xsd` using the IAU's Python tools
+- **Extend ADES export to obs_sbn** for non-NEOCP observations (limited
+  to fields available in obs80)
+
+### Value-added derived products (from schema review)
+
+- **Observatory performance dashboard** -- per-station discovery rates,
+  follow-up contribution, astrometric quality trends
+- **Completeness analysis** -- sky coverage gaps, magnitude-dependent
+  completeness, temporal patterns
+- **JSONB materialization** -- Extract key fields from `mpc_orb_jsonb`
+  into flat columns (covariance, MOIDs, Tisserand parameter)
+- **Cross-match with external catalogs** -- JPL SBDB physical properties,
+  NEOWISE diameters/albedos, NEODyS impact probabilities
 
 ## Distribution Strategy
 
 ### Flat files via GitHub Releases
 
-For CSV outputs consumed by downstream tools (e.g., NEOlyzer):
+- Publish CSV outputs as GitHub Release assets
+- Daily/weekly updates via CSS cron using `gh release upload --clobber`
+- Gate uploads on validation (row counts, format checks)
 
-- Ship a baseline snapshot in the consuming project's repo (updated with
-  version tags every few months)
-- Publish daily/weekly updates as GitHub Release assets from a CSS cron job
-  using `gh release upload --clobber`
-- Gate uploads on validation (row counts, file size, format checks)
-- Consumers fetch the latest release asset on demand
+### Database enrichment
 
-This avoids git history bloat, makes failures harmless (a failed upload
-simply leaves the previous version in place), and keeps data updates
-decoupled from code changes.
-
-### Database enrichment (ELT pattern)
-
-SQL scripts should be written to be **idempotent** so they can be re-run
-safely:
-
-- `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS`
-- `INSERT ... ON CONFLICT` or truncate-and-reload patterns
-- Materialized views where appropriate (refreshable without downtime)
-
-For incorporating external data sources (JPL SBDB, NEOWISE, ESA NEODyS),
-this project adopts an **ELT** (Extract-Load-Transform) pattern rather than
-traditional ETL:
-
-- **Extract**: Pull external data via API or bulk download
-- **Load**: Insert into staging tables in the same postgres database
-- **Transform**: SQL views and materialized views join external data with
-  MPC tables
-
-The advantage: all transforms happen in SQL, inside the database where
-the MPC data already lives. No intermediate files, no Python glue code to
-maintain. The database optimizer handles join planning. This is a natural
-extension of what `discovery_tracklets.sql` already does — SQL-based
-in-database transformation.
-
-Candidate external data sources for fusion:
-
-| Source | Data | Method |
-|--------|------|--------|
-| [JPL SBDB](https://ssd.jpl.nasa.gov/tools/sbdb_lookup.html) | Physical properties, MOID, Tisserand | API fetch → staging table |
-| [NEOWISE](https://wise2.ipac.caltech.edu/docs/release/neowise/) | Thermal diameters, albedos | Bulk CSV → staging table |
-| [ESA NEODyS](https://newton.spacedys.com/neodys/) | Impact probabilities | Bulk download → staging table |
-| MPC NEA.txt | Authoritative NEA list | Download → temp table (current approach) |
+- SQL scripts written to be idempotent (`CREATE IF NOT EXISTS`, etc.)
+- Local `css_derived` schema for functions and derived tables
+- Materialized views for refreshable computed datasets
 
 ### Downstream replication
 
-For community stakeholders who want derived tables in their own postgres:
+- Provide SQL scripts for users with their own MPC replicas
+- Provide `pg_dump` extracts of derived tables as release assets
+- Document schema dependencies clearly
 
-- Provide the SQL scripts themselves (they can run against their own replica)
-- Additionally provide `pg_dump` extracts of specific tables as release
-  assets alongside the CSVs
-- Document schema, dependencies, and required source tables clearly
+## Open Questions (Resolved)
 
-## Completed Steps
+1. ~~**object_type codes**~~ -- `primary_objects.object_type = 0` is generic
+   minor planet; cannot distinguish NEOs. NEO selection uses orbital criteria
+   from `mpc_orbits` instead.
+2. ~~**mpc_orbits population**~~ -- 1.51M rows, 35% missing `orbit_type_int`.
+   Orbital elements (q, e, i, etc.) are well-populated. `earth_moid` is
+   available but not used for NEO selection.
+3. ~~**Update cadence**~~ -- Pipeline is self-contained; cadence is
+   operationally determined by cron scheduling.
 
-### Step 1: Create the GitHub repository
+## Open Questions (Active)
 
-- Repository created at https://github.com/rlseaman/CSS_SBN_derived
-- Initialized with directory structure, README, and documentation
-
-### Step 2: Move and rename the SQL script
-
-- `all_neas_from_nea_txt_v4.sql` renamed to `sql/discovery_tracklets.sql`
-- Version suffix dropped — git history tracks versions
-- Debug/diagnostic queries separated into `sql/debug/discovery_tracklets_diag.sql`
-
-### Step 3: Build the automation pipeline
-
-- `scripts/run_pipeline.sh`: Downloads NEA.txt, runs SQL, validates, uploads
-- `scripts/validate_output.sh`: Row count, column count, completeness checks
-- `scripts/upload_release.sh`: GitHub Release asset upload via `gh` CLI
-
-### Step 4: Refactor to use numbered_identifications (2026-02-08)
-
-- Replaced `mpc_orbits` join with `numbered_identifications` for
-  number-to-designation mapping in all SQL files
-- `numbered_identifications` is the authoritative, fully-populated
-  cross-reference table; `mpc_orbits` is partially populated and
-  undergoing consistency work
-- Updated documentation to reflect the new dependency
-
-### Step 5: UNION refactor and tracklet metrics (2026-02-08)
-
-- Replaced OR-based joins in `discovery_info` and `discovery_tracklet_stats`
-  with 3× UNION branches, each targeting a single index (permid, provid,
-  num_provid) for efficient execution
-- `discovery_obs_all` uses UNION ALL (deduplicated by DISTINCT ON)
-- `tracklet_obs_all` uses UNION (deduplicates observations matching via
-  both permid and provid for numbered asteroids)
-- Added 5 new output columns: `nobs`, `span_hours`, `rate_deg_per_day`,
-  `position_angle_deg`, `discovery_site_name` — total now 12 columns
-- Rate uses Haversine formula; PA uses spherical bearing (both handle
-  RA wraparound correctly)
-- Updated schema docs, README, and validate_output.sh (EXPECTED_COLS=12)
-- **Needs validation** against database on CSS server
-
-## Remaining Steps
-
-### Step A: Validate refactored query on CSS server
-
-- Row count must remain 40,805
-- Original 7 columns must match previous output exactly
-- `nobs >= 1`, `span_hours >= 0` for all rows
-- `rate_deg_per_day IS NULL` iff `nobs = 1`; same for `position_angle_deg`
-- `position_angle_deg` in [0, 360) when not NULL
-- Spot-check known NEA (e.g., Apophis) against independent data
-
-### Step B: Set up cron on a CSS server
-
-- Daily cron job calling `scripts/run_pipeline.sh`
-- Log output for diagnostics
-- Alert on failure (email or similar)
-- Example crontab entry:
-  ```
-  0 12 * * * /path/to/CSS_SBN_derived/scripts/run_pipeline.sh --upload >> /var/log/css_sbn_derived.log 2>&1
-  ```
-
-### Step 6: Enrich with obscodes data ✅ (2026-02-08)
-
-- Joined `obscodes` to add `discovery_site_name` to output
-- LEFT JOIN on `obscode = discovery_stn` (NULL if code not in obscodes)
-
-### Step 7: Add current_identifications fallback matching
-
-- Use `current_identifications` to match observations stored under
-  secondary designations
-- May recover additional NEAs currently unmatched
-
-### Step 8: Investigate primary_objects.object_type
-
-- Determine if `object_type` codes can replace NEA.txt as the source of
-  "which objects are NEAs"
-- Would simplify the pipeline by removing the external download dependency
-
-### Step 9: Document for downstream users
-
-- Announce availability to stakeholders
-- Provide instructions for running scripts against their own postgres replica
-- Establish communication channel for schema changes
-
-## Suggestions and Improvements
-
-### 1. Materialized views instead of (or alongside) flat files
-
-For database enrichment, consider creating the discovery tracklet output
-as a **materialized view** rather than a standalone query:
-
-```sql
-CREATE MATERIALIZED VIEW IF NOT EXISTS nea_discovery_tracklets AS
-  ( ... the main query ... );
-
-CREATE UNIQUE INDEX ON nea_discovery_tracklets (primary_designation);
-```
-
-Benefits: refreshable with `REFRESH MATERIALIZED VIEW CONCURRENTLY` (no
-downtime), queryable by other SQL scripts, exportable to CSV with `\copy`.
-This also means the flat file and the database table are always derived
-from the same source, avoiding drift.
-
-### 2. Provenance metadata
-
-Include a metadata sidecar file with each output:
-- Timestamp of generation
-- NEA.txt download timestamp and row count
-- Database snapshot date
-- Script version (git commit hash)
-- Match statistics (total, matched, unmatched)
-
-### 3. pg_dump for table distribution
-
-For downstream stakeholders who want postgres tables:
-
-```bash
-pg_dump -t nea_discovery_tracklets --no-owner --no-privileges \
-    mpc_sbn > release/nea_discovery_tracklets.sql
-```
-
-This produces a self-contained SQL file that creates and populates the
-table, which can be distributed as a release asset alongside the CSV.
-
-### 4. Future script candidates
-
-Natural extensions of this project might include:
-- **NEA orbital element enrichment** — derived parameters not in MPCORB
-- **Observatory statistics** — per-station discovery/follow-up counts
-- **Linkage tables** — cross-references between MPC designations and
-  other catalogs (JPL SBDB, ESA NEODyS, etc.)
-- **MOID-based risk tables** — objects sorted by Earth MOID
-- **Follow-up priority lists** — objects needing additional observations
-- **NEOCP history** — statistics on confirmation page lifecycle
-
-### 5. CI/CD with GitHub Actions
-
-Even though the main pipeline runs on CSS servers, GitHub Actions can:
-- Validate SQL syntax on push (using `pgsanity` or similar)
-- Check that schema documentation matches the SQL
-- Verify that release assets exist and are recent (staleness check)
-
-## Open Questions
-
-1. **Update cadence** — Daily? Weekly? Should different products have
-   different cadences?
-2. **Stakeholder communication** — How will downstream users know when
+1. **Stakeholder communication** -- How will downstream users know when
    new data products are available?
-3. **Database version coupling** — How tightly are the SQL scripts
-   coupled to specific versions of the MPC/SBN schema? How do we
-   handle schema changes upstream?
-4. **object_type codes** — What values in `primary_objects.object_type`
-   and `mpc_orbits.orbit_type_int` correspond to NEAs? Can these replace
-   the NEA.txt download?
-5. **mpc_orbits population** — Which fields in `mpc_orbits` are currently
-   populated for NEAs? Is `earth_moid` reliable enough to use?
+2. **Schema change handling** -- MPC schema is "beta release". How do we
+   handle upstream changes?
+3. **ADES validation scope** -- Should we validate against `submit.xsd`
+   (more restrictive) or only `general.xsd` for distribution?

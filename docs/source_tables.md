@@ -14,6 +14,26 @@ observation and orbit catalogs distributed through the
 
 ## Tables Used by This Project
 
+### mpc_orbits
+
+Orbital elements for minor planets. One row per object. Used to identify
+NEOs by orbital criteria rather than requiring an external NEA list download.
+
+**Columns used:**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `packed_primary_provisional_designation` | text | Primary designation (packed, unique key) |
+| `unpacked_primary_provisional_designation` | text | Primary designation (human-readable) |
+| `q` | double precision | Perihelion distance (au) |
+| `orbit_type_int` | integer | MPC orbital classification (nullable; NULL for 35%) |
+
+**NEO selection criteria:** `q < 1.32 OR orbit_type_int IN (0, 1, 2, 3, 20)`
+
+**Caveats:** `orbit_type_int` is NULL for ~530K of 1.51M objects. These are
+objects with computed orbits but no MPC classification. The perihelion
+criterion (`q < 1.32`) catches NEOs regardless of classification status.
+
 ### obs_sbn
 
 The primary observation table. Each row is a single astrometric observation
@@ -75,6 +95,44 @@ discovery tracklet output with human-readable observatory names.
 | `obscode` | varchar(4) | MPC station code, e.g., `"703"` (unique) |
 | `name` | varchar | Observatory name |
 
+### NEOCP Tables (for ADES Export)
+
+Six tables track the NEO Confirmation Page lifecycle. Used by
+`lib/ades_export.py` and `sql/ades_export.sql`.
+
+**neocp_obs_archive** -- Archived observations (777K rows)
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `desig` | varchar(16) | Temporary NEOCP designation |
+| `trkid` | text | Tracklet ID (links to obs_sbn) |
+| `obs80` | varchar(255) | Full 80-column MPC format observation line |
+| `rmsra` | numeric | RA*cos(Dec) uncertainty in arcsec (ADES-native) |
+| `rmsdec` | numeric | Dec uncertainty in arcsec (ADES-native) |
+| `rmscorr` | numeric | RA-Dec correlation (ADES-native) |
+| `rmstime` | numeric | Time uncertainty in seconds (ADES-native) |
+| `created_at` | timestamp | Database ingestion time |
+
+**neocp_prev_des** -- Designation resolution after NEOCP removal (71K rows)
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `desig` | text | Temporary NEOCP designation |
+| `iau_desig` | text | Final IAU designation (e.g., '2024 YR4') |
+| `pkd_desig` | text | Packed MPC designation |
+| `status` | text | Outcome: empty (designated), 'lost', 'dne', etc. |
+
+**neocp_events** -- Audit log (310K rows)
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `desig` | text | NEOCP designation |
+| `event_type` | text | ADDOBJ, UPDOBJ, REDOOBJ, REMOBJ, FLAG, COMBINEOBJ, REMOBS |
+| `event_user` | text | Operator or automated process name |
+
+All NEOCP tables join on `desig`. See `sandbox/neocp_ades_analysis.md` for
+full schema details, join paths, and latency analysis.
+
 ## Tables Available for Future Use
 
 ### current_identifications
@@ -121,24 +179,20 @@ Additional columns available for future use:
 
 **Potential use:** Enrich with observatory location or filter by type.
 
-### mpc_orbits (partially populated)
+### mpc_orbits (additional columns)
 
-Orbital elements. One row per object.
+Now used for NEO selection (see above). Additional columns available:
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `packed_primary_provisional_designation` | text | Primary designation (packed, unique key) |
-| `unpacked_primary_provisional_designation` | text | Primary designation (unpacked) |
 | `a`, `e`, `i`, `node`, `argperi` | double precision | Keplerian orbital elements |
 | `h`, `g` | double precision | Absolute magnitude and slope parameter |
 | `earth_moid` | double precision | Minimum orbit intersection distance (au) |
-| `orbit_type_int` | integer | Orbital classification |
-| `mpc_orb_jsonb` | jsonb | Complete MPC JSON orbit data |
+| `mpc_orb_jsonb` | jsonb | Complete MPC JSON orbit data (11 top-level keys) |
 
-**Caveats:** This table is not fully populated. Comet and natural satellite
-orbits are not stored. Fields are not all populated for existing entries.
-Orbit consistency work is ongoing. Previously used for designation lookup
-in this project, replaced by `numbered_identifications` as of 2026-02-08.
+**Potential use:** Earth MOID-based risk ranking, Tisserand parameter
+computation, covariance extraction from JSONB. See `sandbox/schema_review.md`
+for JSONB structure analysis.
 
 ## Recommended Indexes
 
