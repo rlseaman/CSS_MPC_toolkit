@@ -193,9 +193,24 @@ def mpc_date_to_iso8601(date_str):
         sec_decimals = input_decimals - 5
 
     if sec_decimals == 0:
-        sec_str = f"{int(round(secs)):02d}"
+        secs_rounded = int(round(secs))
     else:
-        sec_str = f"{secs:0{3 + sec_decimals}.{sec_decimals}f}"
+        # Round to the target precision, then check for carry
+        factor = 10 ** sec_decimals
+        secs_rounded = round(secs * factor) / factor
+
+    # Handle seconds rounding up to 60 -> carry to minutes/hours
+    if secs_rounded >= 60:
+        secs_rounded -= 60
+        minutes += 1
+    if minutes >= 60:
+        minutes -= 60
+        hours += 1
+
+    if sec_decimals == 0:
+        sec_str = f"{int(secs_rounded):02d}"
+    else:
+        sec_str = f"{secs_rounded:0{3 + sec_decimals}.{sec_decimals}f}"
 
     return f"{year}-{month}-{day:02d}T{hours:02d}:{minutes:02d}:{sec_str}Z"
 
@@ -478,10 +493,16 @@ def parse_obs80(obs80, rmsra=None, rmsdec=None, rmscorr=None, rmstime=None):
     if disc in ("*", "+"):
         result["disc"] = disc
 
-    # Note (col 14)
-    note = line[13]
-    if note.strip():
-        result["notes"] = note
+    # Note / program code (col 14)
+    # Alphabetic characters are publishable notes; numeric and other
+    # characters are observer program codes (assigned by MPC).
+    col14 = line[13]
+    if col14.strip():
+        if col14.isalpha():
+            result["notes"] = col14
+        elif col14.isalnum() or col14 == '_':
+            # ADES ProgType is [A-Za-z0-9_]{1,2}; drop chars like '|'
+            result["prog"] = col14
 
     # Mode (col 15)
     mode_code = line[14]

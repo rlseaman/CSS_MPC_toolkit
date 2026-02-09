@@ -3,8 +3,10 @@
 ADES XML and PSV export from MPC/SBN NEOCP observation data.
 
 Generates valid ADES format output conforming to general.xsd (IAU ADES
-version 2022) from neocp_obs_archive observations, optionally resolving
-temporary NEOCP designations to final IAU designations.
+version 2022) from NEOCP observations. For the live NEOCP table, temporary
+designations are placed in trkSub (not provID), since these objects are
+unconfirmed candidates. For the archive table, resolved IAU designations
+are used as provID or permID.
 
 Usage:
     # All current NEOCP observations
@@ -44,11 +46,13 @@ ADES_VERSION = "2022"
 OPTICAL_FIELD_ORDER = [
     "permID", "provID", "trkSub", "obsID", "obsSubID", "trkID", "trkMPC",
     "mode", "stn",
+    "prog",
     "obsTime", "rmsTime",
     "ra", "dec", "rmsRA", "rmsDec", "rmsCorr",
     "astCat",
     "mag", "rmsMag", "band",
-    "disc", "notes", "remarks",
+    "disc",
+    "notes", "remarks",
 ]
 
 # PSV default column order and widths
@@ -68,6 +72,7 @@ PSV_COLUMNS = [
     ("mag",      6),
     ("band",     3),
     ("disc",     1),
+    ("prog",     4),
     ("notes",    5),
 ]
 
@@ -259,19 +264,24 @@ def rows_to_ades_fields(rows):
         fields = parse_obs80(obs80, rmsra=rmsra_f, rmsdec=rmsdec_f,
                              rmscorr=rmscorr_f, rmstime=rmstime_f)
 
-        # Override designation with resolved IAU designation
         if iau_desig:
-            # Remove the temporary NEOCP provID
+            # Archive: replace NEOCP temp designation with resolved IAU designation
             fields.pop("provID", None)
             fields.pop("permID", None)
             if iau_desig.strip().isdigit():
                 fields["permID"] = iau_desig.strip()
             else:
                 fields["provID"] = iau_desig.strip()
-
-        # Add tracklet ID as trkSub
-        if trkid:
-            fields["trkSub"] = trkid.strip()
+            # In archive context, MPC trkid can serve as trkSub
+            if trkid:
+                fields["trkSub"] = trkid.strip()
+        else:
+            # Live NEOCP: temp designation is NOT a provisional ID.
+            # NEOCP objects are unconfirmed candidates; their temporary
+            # designation (e.g., CE6GWT2) belongs in trkSub, not provID.
+            neocp_desig = fields.pop("provID", None)
+            if neocp_desig:
+                fields["trkSub"] = neocp_desig
 
         observations.append(fields)
 

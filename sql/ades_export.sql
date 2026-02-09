@@ -20,7 +20,7 @@
 -- ===========================================================================
 
 SELECT
-    o.desig,
+    o.desig      AS "trkSub",
     p.mode,
     p.stn,
     p.obs_time   AS "obsTime",
@@ -28,6 +28,7 @@ SELECT
     p.dec_deg    AS dec,
     p.ast_cat    AS "astCat",
     p.disc,
+    p.prog,
     p.notes,
     p.mag,
     p.band,
@@ -35,7 +36,7 @@ SELECT
     o.rmsdec     AS "rmsDec",
     o.rmscorr    AS "rmsCorr",
     o.rmstime    AS "rmsTime",
-    o.trkid      AS "trkSub",
+    o.trkid,
     o.created_at AS db_created
 FROM neocp_obs o,
      LATERAL (SELECT (parse_obs80(o.obs80)).*) p

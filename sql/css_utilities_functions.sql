@@ -361,6 +361,7 @@ CREATE TYPE css_utilities.ades_obs AS (
     packed_desig text,
     unpacked_desig text,
     disc         char,
+    prog         char,
     notes        char,
     mode         text,
     obs_time     text,
@@ -386,7 +387,12 @@ BEGIN
     result.packed_desig  := trim(substring(line, 1, 12));
     result.unpacked_desig := css_utilities.unpack_designation(result.packed_desig);
     result.disc          := nullif(substring(line, 13, 1), ' ');
-    result.notes         := nullif(substring(line, 14, 1), ' ');
+    -- Column 14: alphabetic = publishable note; numeric/other = program code
+    IF substring(line, 14, 1) ~ '[A-Za-z]' THEN
+        result.notes     := substring(line, 14, 1);
+    ELSE
+        result.prog      := nullif(substring(line, 14, 1), ' ');
+    END IF;
     result.mode          := css_utilities.mpc_mode_to_ades(substring(line, 15, 1));
     result.obs_time      := css_utilities.mpc_date_to_iso8601(substring(line, 16, 17));
     result.ra_deg        := css_utilities.ra_hms_to_deg(substring(line, 33, 12));
