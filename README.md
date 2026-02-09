@@ -59,8 +59,14 @@ not available in the main `obs_sbn` table.
 
 **Usage:**
 ```bash
-python3 -m lib.ades_export --host sibyl --format xml --desig "2024 YR4" -o output.xml
-python3 -m lib.ades_export --host sibyl --format psv --all --limit 1000 -o neocp.psv
+# All current NEOCP observations
+python3 -m lib.ades_export --host sibyl --format xml --all -o neocp_live.xml
+
+# Single designation from live NEOCP
+python3 -m lib.ades_export --host sibyl --format psv --desig CE5W292 -o output.psv
+
+# Historical lookup from archive
+python3 -m lib.ades_export --host sibyl --archive --desig "2024 YR4" -o yr4.xml
 ```
 
 Requires `psycopg2`: `pip install psycopg2-binary`

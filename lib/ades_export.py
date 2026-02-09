@@ -7,9 +7,14 @@ version 2022) from neocp_obs_archive observations, optionally resolving
 temporary NEOCP designations to final IAU designations.
 
 Usage:
-    python3 -m lib.ades_export --host sibyl --format xml --desig "2024 YR4" -o output.xml
-    python3 -m lib.ades_export --host sibyl --format psv --desig "2024 YR4" -o output.psv
-    python3 -m lib.ades_export --host sibyl --format xml --all --limit 1000 -o neocp_all.xml
+    # All current NEOCP observations
+    python3 -m lib.ades_export --host sibyl --format xml --all -o neocp_live.xml
+
+    # Single designation from the live NEOCP
+    python3 -m lib.ades_export --host sibyl --format psv --desig CE5W292 -o output.psv
+
+    # Historical lookup from the archive (by IAU or NEOCP designation)
+    python3 -m lib.ades_export --host sibyl --archive --desig "2024 YR4" -o yr4.xml
 
 Requires: psycopg2 (pip install psycopg2-binary)
 """
@@ -204,7 +209,24 @@ def build_psv(observations, columns=None):
 # Database query
 # ---------------------------------------------------------------------------
 
+# Live NEOCP table -- objects currently on the confirmation page
 QUERY_BY_DESIG = """
+    SELECT o.obs80, o.trkid, o.rmsra, o.rmsdec, o.rmscorr, o.rmstime,
+           NULL::text AS iau_desig, NULL::text AS pkd_desig
+    FROM neocp_obs o
+    WHERE o.desig = %(desig)s
+    ORDER BY o.created_at
+"""
+
+QUERY_ALL = """
+    SELECT o.obs80, o.trkid, o.rmsra, o.rmsdec, o.rmscorr, o.rmstime,
+           NULL::text AS iau_desig, NULL::text AS pkd_desig
+    FROM neocp_obs o
+    ORDER BY o.desig, o.created_at
+"""
+
+# Archive table -- for historical lookups by resolved IAU designation
+QUERY_ARCHIVE_BY_DESIG = """
     SELECT oa.obs80, oa.trkid, oa.rmsra, oa.rmsdec, oa.rmscorr, oa.rmstime,
            pd.iau_desig, pd.pkd_desig
     FROM neocp_obs_archive oa
@@ -213,15 +235,6 @@ QUERY_BY_DESIG = """
        OR pd.pkd_desig = %(desig)s
        OR oa.desig = %(desig)s
     ORDER BY oa.created_at
-"""
-
-QUERY_ALL = """
-    SELECT oa.obs80, oa.trkid, oa.rmsra, oa.rmsdec, oa.rmscorr, oa.rmstime,
-           pd.iau_desig, pd.pkd_desig
-    FROM neocp_obs_archive oa
-    LEFT JOIN neocp_prev_des pd ON pd.desig = oa.desig
-    ORDER BY oa.desig, oa.created_at
-    LIMIT %(limit)s
 """
 
 
@@ -282,11 +295,11 @@ def main():
     parser.add_argument("--format", choices=["xml", "psv"], default="xml",
                         help="Output format (default: xml)")
     parser.add_argument("--desig",
-                        help="Object designation (IAU, packed, or NEOCP temp)")
+                        help="NEOCP temporary designation (e.g. CE5W292)")
     parser.add_argument("--all", action="store_true",
-                        help="Export all archived observations")
-    parser.add_argument("--limit", type=int, default=10000,
-                        help="Row limit for --all (default: 10000)")
+                        help="Export all current NEOCP observations")
+    parser.add_argument("--archive", action="store_true",
+                        help="Query neocp_obs_archive instead of live table")
     parser.add_argument("-o", "--output",
                         help="Output file (default: stdout)")
     parser.add_argument("--compact", action="store_true",
@@ -307,9 +320,12 @@ def main():
     cur = conn.cursor()
 
     if args.desig:
-        cur.execute(QUERY_BY_DESIG, {"desig": args.desig})
+        if args.archive:
+            cur.execute(QUERY_ARCHIVE_BY_DESIG, {"desig": args.desig})
+        else:
+            cur.execute(QUERY_BY_DESIG, {"desig": args.desig})
     else:
-        cur.execute(QUERY_ALL, {"limit": args.limit})
+        cur.execute(QUERY_ALL)
 
     rows = cur.fetchall()
     cur.close()
