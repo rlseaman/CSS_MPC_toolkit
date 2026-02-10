@@ -1,0 +1,21 @@
+# MPC Catalog Visualization Toolkit
+# Install: pip install -r requirements.txt
+
+# Database
+psycopg2-binary>=2.9
+
+# Data manipulation
+pandas>=2.1
+numpy>=1.26
+
+# Interactive charting (Jupyter + future Dash/HTML)
+plotly>=5.18
+
+# Static image export from Plotly (PNG/SVG)
+kaleido>=0.2
+
+# Notebook server
+jupyterlab>=4.0
+
+# XML processing (ADES export)
+lxml>=4.9
