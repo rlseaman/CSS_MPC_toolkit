@@ -28,5 +28,20 @@ Thumbs.db
 notebooks/.ipynb_checkpoints/
 .ipynb_checkpoints/
 
+# Claude Code
+.claude/
+
+# App runtime cache
+app/.neo_cache*
+
+# Downloaded / generated data files
+downloads/
+*.xml
+*.xml_SAVE
+
+# Local health checks and output images
+health_check_*.txt
+sandbox/*.png
+
 # Pipeline working files
 /tmp/

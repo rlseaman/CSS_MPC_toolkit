@@ -1,0 +1,68 @@
+/* Theme-aware text colors for Dash components.
+   The page-container's `color` is set by the theme callback;
+   these rules force all children to inherit that color.
+   CSS custom properties (--subtext-color, --hr-color, --paper-bg,
+   --tab-border) are set on #page-container by the theme callback. */
+
+/* Force all text inside the themed container to inherit color */
+#page-container label,
+#page-container span,
+#page-container div,
+#page-container p,
+#page-container h1,
+#page-container h2,
+#page-container h3 {
+    color: inherit !important;
+}
+
+/* Subtext (descriptions, secondary info) uses a CSS variable */
+#page-container .subtext {
+    color: var(--subtext-color, #888) !important;
+}
+
+/* Dash range-slider mark labels (RC slider sets inline styles) */
+#page-container .rc-slider-mark-text {
+    color: inherit !important;
+}
+
+/* Dropdown menu: must stay dark text on white background */
+.Select-menu-outer,
+.Select-menu-outer * {
+    color: #222 !important;
+}
+
+/* Horizontal rule */
+#page-container hr {
+    border-color: var(--hr-color, #ccc);
+    opacity: 0.3;
+}
+
+/* ── Tab navigation ── */
+.nav-tabs {
+    border-bottom: 2px solid var(--tab-border, #ccc) !important;
+    padding: 0 !important;
+}
+
+.nav-tab {
+    color: inherit !important;
+    background-color: transparent !important;
+    border: none !important;
+    border-bottom: 3px solid transparent !important;
+    padding: 10px 24px !important;
+    margin-bottom: -2px !important;
+    font-family: sans-serif !important;
+    font-size: 14px !important;
+    cursor: pointer !important;
+    opacity: 0.55;
+    transition: opacity 0.15s, border-color 0.15s;
+}
+
+.nav-tab:hover {
+    opacity: 0.8;
+}
+
+.nav-tab--selected {
+    opacity: 1 !important;
+    border-bottom-color: currentColor !important;
+    font-weight: 600 !important;
+}
