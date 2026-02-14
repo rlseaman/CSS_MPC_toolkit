@@ -41,7 +41,7 @@ Survey at the University of Arizona.
 
 ```
 app/                          # Interactive Dash web application
-  discovery_stats.py          #   NEO discovery explorer (4 tabs, ~2400 lines)
+  discovery_stats.py          #   NEO discovery explorer (5 tabs, ~3000 lines)
   assets/                     #   CSS, logo, static files
 lib/                          # Python library layer
   db.py                       #   DB connections, timed queries, QueryLog
@@ -70,7 +70,7 @@ sandbox/                      # Analysis notes, exploratory outputs
 
 ## Interactive App (`app/discovery_stats.py`)
 
-Dash web application at http://127.0.0.1:8050/ with four tabbed pages:
+Dash web application at http://127.0.0.1:8050/ with five tabbed pages:
 
 ### Tab 1: Discoveries by Year
 - Stacked bar chart of NEO discoveries by year/survey
@@ -103,6 +103,16 @@ Dash web application at http://127.0.0.1:8050/ with four tabbed pages:
 - Follow-up network heatmap: discoverer -> first follow-up survey
 - Median follow-up time trend by discovery year with IQR band
 
+### Tab 5: Discovery Circumstances
+- Sky map (RA/Dec scatter) of discovery positions with ecliptic and
+  galactic plane overlays; WebGL for ~40K points
+- Apparent V magnitude histogram (band-corrected) at discovery
+- Rate of motion vs. absolute magnitude H scatter (log y-scale)
+- Position angle rose diagram (15° bins, 0=N/90=E convention)
+- Controls: year range, size class filter, color by (survey/size/year)
+- Data: `tracklet_obs_all` and `discovery_tracklet_stats` CTEs added
+  to `LOAD_SQL`; same ~44K rows, 6 new columns
+
 ### Survey Groupings
 Stations are mapped to project groups via `STATION_TO_PROJECT`:
 - **Catalina Survey** (703, E12, G96) — core CSS telescopes
@@ -120,7 +130,8 @@ Stations are mapped to project groups via `STATION_TO_PROJECT`:
 
 ### Architecture
 - **Two SQL queries** cached to CSV (1-day auto-invalidation):
-  - `LOAD_SQL` — discovery data (~43K NEOs, ~30s query)
+  - `LOAD_SQL` — discovery data + tracklet circumstances
+    (~43K NEOs, 6 extra columns for RA/Dec/Vmag/rate/PA, ~30s query)
   - `APPARITION_SQL` — station-level observations within +/-200 days
     of discovery (~362K station rows, ~1-2 min query)
 - Both caches load at startup; `--refresh` forces re-query

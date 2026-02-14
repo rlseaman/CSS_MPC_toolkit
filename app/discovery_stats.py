@@ -142,6 +142,62 @@ H_BINS = [
 SIZE_COLORS = ["#440154", "#31688e", "#35b779", "#90d743", "#fde725"]
 
 # ---------------------------------------------------------------------------
+# Ecliptic and galactic plane coordinates for sky map overlays
+# ---------------------------------------------------------------------------
+
+# Ecliptic plane: parametric (RA, Dec) from ecliptic longitude 0→360°
+_ECL_LON = np.linspace(0, 360, 361)
+_OBLIQUITY = 23.44  # degrees
+_ECL_RA_360 = np.degrees(np.arctan2(
+    np.sin(np.radians(_ECL_LON)) * np.cos(np.radians(_OBLIQUITY)),
+    np.cos(np.radians(_ECL_LON)),
+)) % 360
+_ECL_DEC = np.degrees(np.arcsin(
+    np.sin(np.radians(_ECL_LON)) * np.sin(np.radians(_OBLIQUITY))
+))
+
+# Galactic plane (b=0): standard J2000 rotation matrix (Hipparcos/IAU).
+# Columns are galactic x̂, ŷ, ẑ (=NGP) basis vectors in equatorial coords.
+# Verified: GC at (266.4°, -28.9°), NGP at (192.86°, 27.13°).
+_R_GAL_TO_EQ = np.array([
+    [-0.05487554,  0.49410943, -0.86766615],
+    [-0.87343711, -0.44482963, -0.19807637],
+    [-0.48383502,  0.74698224,  0.45598378],
+])
+_GAL_L_RAD = np.radians(np.linspace(0, 360, 361))
+_gal_xyz = np.vstack([np.cos(_GAL_L_RAD), np.sin(_GAL_L_RAD),
+                       np.zeros_like(_GAL_L_RAD)])
+_eq_xyz = _R_GAL_TO_EQ @ _gal_xyz
+_GAL_DEC = np.degrees(np.arcsin(np.clip(_eq_xyz[2], -1, 1)))
+_GAL_RA_360 = np.degrees(np.arctan2(_eq_xyz[1], _eq_xyz[0])) % 360
+
+# Convert RA from [0,360) to centered (-180,180] for sky map display
+# Convention: 180° (East) on left, 0° center, -180° (West) on right
+
+
+def _ra_to_centered(ra):
+    """Map RA from [0, 360) to (-180, 180]: values > 180 become negative."""
+    return np.where(ra > 180, ra - 360, ra)
+
+
+def _split_at_wraparound(ra, dec, threshold=90):
+    """Insert NaN where RA jumps by more than threshold degrees."""
+    out_ra, out_dec = [ra[0]], [dec[0]]
+    for i in range(1, len(ra)):
+        if abs(ra[i] - ra[i - 1]) > threshold:
+            out_ra.append(np.nan)
+            out_dec.append(np.nan)
+        out_ra.append(ra[i])
+        out_dec.append(dec[i])
+    return np.array(out_ra), np.array(out_dec)
+
+
+ECL_RA, ECL_DEC = _split_at_wraparound(
+    _ra_to_centered(_ECL_RA_360), _ECL_DEC)
+GAL_RA, GAL_DEC = _split_at_wraparound(
+    _ra_to_centered(_GAL_RA_360), _GAL_DEC)
+
+# ---------------------------------------------------------------------------
 # NEOMOD3 population model (Nesvorny et al. 2024, Icarus 411, Table 3)
 # Half-magnitude bins: (H1, H2, dN, N_cumulative, N_min, N_max)
 # dN = estimated NEOs in bin; N = cumulative N(H < H2)
@@ -302,26 +358,82 @@ WITH neo_list AS (
     WHERE mo.q <= 1.30
 ),
 discovery_obs_all AS (
-    SELECT neo.unpacked_desig, obs.stn, obs.obstime
+    SELECT neo.unpacked_desig, obs.stn, obs.obsid, obs.trkid, obs.obstime
     FROM neo_list neo
     INNER JOIN obs_sbn obs ON obs.permid = neo.asteroid_number
     WHERE neo.is_numbered AND obs.disc = '*'
     UNION ALL
-    SELECT neo.unpacked_desig, obs.stn, obs.obstime
+    SELECT neo.unpacked_desig, obs.stn, obs.obsid, obs.trkid, obs.obstime
     FROM neo_list neo
     INNER JOIN obs_sbn obs ON obs.provid = neo.provisional_desig
     WHERE NOT neo.is_numbered AND obs.disc = '*'
     UNION ALL
-    SELECT neo.unpacked_desig, obs.stn, obs.obstime
+    SELECT neo.unpacked_desig, obs.stn, obs.obsid, obs.trkid, obs.obstime
     FROM neo_list neo
     INNER JOIN obs_sbn obs ON obs.provid = neo.num_provid
     WHERE neo.num_provid IS NOT NULL AND obs.disc = '*'
 ),
 discovery_info AS (
     SELECT DISTINCT ON (unpacked_desig)
-        unpacked_desig, stn, obstime
+        unpacked_desig, stn, obsid, NULLIF(trkid, '') AS trkid, obstime
     FROM discovery_obs_all
     ORDER BY unpacked_desig, obstime
+),
+tracklet_obs_all AS (
+    SELECT di.unpacked_desig, obs.obstime, obs.ra, obs.dec, obs.mag, obs.band
+    FROM discovery_info di
+    INNER JOIN obs_sbn obs ON obs.trkid = di.trkid
+    WHERE di.trkid IS NOT NULL
+      AND ABS(EXTRACT(EPOCH FROM (obs.obstime - di.obstime))) / 3600.0 <= 12.0
+    UNION ALL
+    SELECT di.unpacked_desig, obs.obstime, obs.ra, obs.dec, obs.mag, obs.band
+    FROM discovery_info di
+    INNER JOIN obs_sbn obs ON obs.obsid = di.obsid
+    WHERE di.trkid IS NULL
+),
+discovery_tracklet_stats AS (
+    SELECT
+        unpacked_desig,
+        AVG(ra) AS avg_ra_deg,
+        AVG(dec) AS avg_dec_deg,
+        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY
+            mag + CASE band
+                WHEN 'V' THEN 0.0
+                WHEN 'v' THEN 0.0
+                WHEN 'B' THEN -0.8
+                WHEN 'U' THEN -1.3
+                WHEN 'R' THEN 0.4
+                WHEN 'I' THEN 0.8
+                WHEN 'g' THEN -0.35
+                WHEN 'r' THEN 0.14
+                WHEN 'i' THEN 0.32
+                WHEN 'z' THEN 0.26
+                WHEN 'y' THEN 0.32
+                WHEN 'u' THEN 2.5
+                WHEN 'w' THEN -0.13
+                WHEN 'c' THEN -0.05
+                WHEN 'o' THEN 0.33
+                WHEN 'G' THEN 0.28
+                WHEN 'J' THEN 1.2
+                WHEN 'H' THEN 1.4
+                WHEN 'K' THEN 1.7
+                WHEN 'C' THEN 0.4
+                WHEN 'W' THEN 0.4
+                WHEN 'L' THEN 0.2
+                WHEN 'Y' THEN 0.7
+                WHEN '' THEN -0.8
+                ELSE 0.0
+            END
+        ) FILTER (WHERE mag IS NOT NULL) AS median_v_mag,
+        COUNT(*) AS nobs,
+        EXTRACT(EPOCH FROM (MAX(obstime) - MIN(obstime))) / 86400.0
+            AS span_days,
+        (array_agg(ra  ORDER BY obstime ASC))[1]  AS first_ra,
+        (array_agg(dec ORDER BY obstime ASC))[1]  AS first_dec,
+        (array_agg(ra  ORDER BY obstime DESC))[1] AS last_ra,
+        (array_agg(dec ORDER BY obstime DESC))[1] AS last_dec
+    FROM tracklet_obs_all
+    GROUP BY unpacked_desig
 )
 SELECT
     di.unpacked_desig AS designation,
@@ -330,9 +442,31 @@ SELECT
     di.stn AS station_code,
     neo.h,
     neo.orbit_type_int,
-    neo.q, neo.e, neo.i
+    neo.q, neo.e, neo.i,
+    dts.avg_ra_deg,
+    dts.avg_dec_deg,
+    dts.median_v_mag,
+    dts.nobs AS tracklet_nobs,
+    CASE WHEN dts.span_days > 0 THEN
+        2.0 * DEGREES(ASIN(SQRT(
+            SIN(RADIANS(dts.last_dec - dts.first_dec) / 2.0) ^ 2
+            + COS(RADIANS(dts.first_dec)) * COS(RADIANS(dts.last_dec))
+              * SIN(RADIANS(dts.last_ra - dts.first_ra) / 2.0) ^ 2
+        ))) / dts.span_days
+    END AS rate_deg_per_day,
+    CASE WHEN dts.span_days > 0 THEN
+        (360.0 + DEGREES(ATAN2(
+            SIN(RADIANS(dts.last_ra - dts.first_ra))
+                * COS(RADIANS(dts.last_dec)),
+            COS(RADIANS(dts.first_dec)) * SIN(RADIANS(dts.last_dec))
+            - SIN(RADIANS(dts.first_dec)) * COS(RADIANS(dts.last_dec))
+              * COS(RADIANS(dts.last_ra - dts.first_ra))
+        )))::numeric % 360.0
+    END AS position_angle_deg
 FROM discovery_info di
 JOIN neo_list neo ON neo.unpacked_desig = di.unpacked_desig
+LEFT JOIN discovery_tracklet_stats dts
+    ON dts.unpacked_desig = di.unpacked_desig
 ORDER BY di.obstime
 """
 
@@ -1183,6 +1317,325 @@ def _make_comparison_summary(survey_sets, all_desigs, t, height):
 
 
 # ---------------------------------------------------------------------------
+# Discovery circumstances helpers
+# ---------------------------------------------------------------------------
+
+def _make_sky_map(dff, color_by, group_by, t, height):
+    """RA/Dec scatter of discovery positions with ecliptic/galactic planes.
+
+    Uses centered RA: 180° (E) on left, 0° center, -180° (W) on right.
+    """
+    fig = go.Figure()
+
+    # Ecliptic plane
+    fig.add_trace(go.Scatter(
+        x=ECL_RA, y=ECL_DEC, mode="lines",
+        line=dict(color="gold", width=1.5, dash="dash"),
+        name="Ecliptic", hoverinfo="skip",
+    ))
+    # Galactic plane
+    fig.add_trace(go.Scatter(
+        x=GAL_RA, y=GAL_DEC, mode="lines",
+        line=dict(color="gray", width=1.5, dash="dash"),
+        name="Galactic plane", hoverinfo="skip",
+    ))
+
+    valid = dff[dff["avg_ra_deg"].notna() & dff["avg_dec_deg"].notna()].copy()
+    if len(valid) == 0:
+        fig.update_layout(
+            template=t["template"],
+            paper_bgcolor=t["paper"], plot_bgcolor=t["plot"],
+            height=height,
+            title="Discovery sky positions (no data)",
+        )
+        return fig
+
+    # Convert RA to centered coordinates for plotting
+    valid["ra_c"] = np.where(
+        valid["avg_ra_deg"] > 180,
+        valid["avg_ra_deg"] - 360,
+        valid["avg_ra_deg"])
+
+    if color_by == "year":
+        fig.add_trace(go.Scattergl(
+            x=valid["ra_c"], y=valid["avg_dec_deg"],
+            mode="markers",
+            marker=dict(size=3, opacity=0.3,
+                        color=valid["disc_year"],
+                        colorscale="Viridis", showscale=True,
+                        colorbar=dict(title="Year")),
+            name="NEOs",
+            hovertemplate=(
+                "RA %{customdata:.1f}\u00b0  Dec %{y:.1f}\u00b0<br>"
+                "%{text}<extra></extra>"
+            ),
+            customdata=valid["avg_ra_deg"],
+            text=valid["designation"],
+        ))
+    elif color_by == "size":
+        for i, (label, _, _) in enumerate(H_BINS):
+            subset = valid[valid["size_class"] == label]
+            if len(subset) == 0:
+                continue
+            fig.add_trace(go.Scattergl(
+                x=subset["ra_c"], y=subset["avg_dec_deg"],
+                mode="markers",
+                marker=dict(size=3, opacity=0.3,
+                            color=SIZE_COLORS[i]),
+                name=label,
+                hovertemplate=(
+                    "RA %{customdata:.1f}\u00b0  Dec %{y:.1f}\u00b0<br>"
+                    "%{text}<extra></extra>"
+                ),
+                customdata=subset["avg_ra_deg"],
+                text=subset["designation"],
+            ))
+    else:
+        # Color by survey project
+        col = "project" if group_by != "station" else "station_name"
+        if col == "project":
+            groups = [p for p in PROJECT_ORDER
+                      if p in valid[col].unique()]
+            cmap = PROJECT_COLORS
+        else:
+            groups = valid[col].value_counts().head(10).index.tolist()
+            cmap = {}
+        for gname in groups:
+            subset = valid[valid[col] == gname]
+            if len(subset) == 0:
+                continue
+            fig.add_trace(go.Scattergl(
+                x=subset["ra_c"], y=subset["avg_dec_deg"],
+                mode="markers",
+                marker=dict(size=3, opacity=0.3,
+                            color=cmap.get(gname)),
+                name=gname,
+                hovertemplate=(
+                    "RA %{customdata:.1f}\u00b0  Dec %{y:.1f}\u00b0<br>"
+                    "%{text}<extra></extra>"
+                ),
+                customdata=subset["avg_ra_deg"],
+                text=subset["designation"],
+            ))
+
+    fig.update_layout(
+        template=t["template"],
+        paper_bgcolor=t["paper"], plot_bgcolor=t["plot"],
+        height=height,
+        title="Discovery sky positions",
+        xaxis=dict(
+            title="Right Ascension (\u00b0)",
+            range=[180, -180], dtick=30,
+        ),
+        yaxis=dict(title="Dec (\u00b0)", range=[-90, 90], dtick=30),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02,
+                    xanchor="right", x=1),
+        margin=dict(l=60, r=20, t=60, b=60),
+    )
+    return fig
+
+
+def _make_mag_distribution(dff, color_by, group_by, t, height):
+    """Histogram of apparent V magnitude at discovery."""
+    valid = dff[dff["median_v_mag"].notna()]
+    if len(valid) == 0:
+        return _empty_figure("No magnitude data", t, height)
+
+    fig = go.Figure()
+
+    if color_by == "size":
+        for i, (label, _, _) in enumerate(H_BINS):
+            subset = valid[valid["size_class"] == label]
+            if len(subset) == 0:
+                continue
+            fig.add_trace(go.Histogram(
+                x=subset["median_v_mag"], name=label,
+                marker_color=SIZE_COLORS[i],
+                xbins=dict(start=10, end=28, size=0.5),
+                hovertemplate="V=%{x:.1f}: %{y}<extra></extra>",
+            ))
+    elif color_by == "survey":
+        col = "project" if group_by != "station" else "station_name"
+        if col == "project":
+            groups = [p for p in PROJECT_ORDER
+                      if p in valid[col].unique()]
+            cmap = PROJECT_COLORS
+        else:
+            groups = valid[col].value_counts().head(10).index.tolist()
+            cmap = {}
+        for gname in groups:
+            subset = valid[valid[col] == gname]
+            if len(subset) == 0:
+                continue
+            fig.add_trace(go.Histogram(
+                x=subset["median_v_mag"], name=gname,
+                marker_color=cmap.get(gname),
+                xbins=dict(start=10, end=28, size=0.5),
+                hovertemplate="V=%{x:.1f}: %{y}<extra></extra>",
+            ))
+    else:
+        fig.add_trace(go.Histogram(
+            x=valid["median_v_mag"], name="NEOs",
+            marker_color="#607D8B",
+            xbins=dict(start=10, end=28, size=0.5),
+            hovertemplate="V=%{x:.1f}: %{y}<extra></extra>",
+        ))
+
+    fig.update_layout(
+        barmode="stack",
+        template=t["template"],
+        paper_bgcolor=t["paper"], plot_bgcolor=t["plot"],
+        height=height,
+        title="Apparent V magnitude at discovery",
+        xaxis=dict(title="Apparent V magnitude"),
+        yaxis=dict(title="Count"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02,
+                    xanchor="right", x=1),
+        margin=dict(l=60, r=20, t=60, b=60),
+    )
+    return fig
+
+
+def _make_rate_plot(dff, color_by, group_by, t, height):
+    """Scatter of rate of motion vs absolute magnitude H."""
+    valid = dff[dff["rate_deg_per_day"].notna() & dff["h"].notna()]
+    n_excluded = len(dff) - len(
+        dff[dff["rate_deg_per_day"].notna()])
+
+    if len(valid) == 0:
+        return _empty_figure("No rate data", t, height)
+
+    fig = go.Figure()
+
+    if color_by == "year":
+        fig.add_trace(go.Scattergl(
+            x=valid["h"], y=valid["rate_deg_per_day"],
+            mode="markers",
+            marker=dict(size=3, opacity=0.3,
+                        color=valid["disc_year"],
+                        colorscale="Viridis", showscale=True,
+                        colorbar=dict(title="Year")),
+            name="NEOs",
+            hovertemplate=(
+                "H=%{x:.1f}  Rate=%{y:.2f} \u00b0/day<br>"
+                "%{text}<extra></extra>"
+            ),
+            text=valid["designation"],
+        ))
+    elif color_by == "size":
+        for i, (label, _, _) in enumerate(H_BINS):
+            subset = valid[valid["size_class"] == label]
+            if len(subset) == 0:
+                continue
+            fig.add_trace(go.Scattergl(
+                x=subset["h"], y=subset["rate_deg_per_day"],
+                mode="markers",
+                marker=dict(size=3, opacity=0.3,
+                            color=SIZE_COLORS[i]),
+                name=label,
+                hovertemplate=(
+                    "H=%{x:.1f}  Rate=%{y:.2f} \u00b0/day<br>"
+                    "%{text}<extra></extra>"
+                ),
+                text=subset["designation"],
+            ))
+    else:
+        col = "project" if group_by != "station" else "station_name"
+        if col == "project":
+            groups = [p for p in PROJECT_ORDER
+                      if p in valid[col].unique()]
+            cmap = PROJECT_COLORS
+        else:
+            groups = valid[col].value_counts().head(10).index.tolist()
+            cmap = {}
+        for gname in groups:
+            subset = valid[valid[col] == gname]
+            if len(subset) == 0:
+                continue
+            fig.add_trace(go.Scattergl(
+                x=subset["h"], y=subset["rate_deg_per_day"],
+                mode="markers",
+                marker=dict(size=3, opacity=0.3,
+                            color=cmap.get(gname)),
+                name=gname,
+                hovertemplate=(
+                    "H=%{x:.1f}  Rate=%{y:.2f} \u00b0/day<br>"
+                    "%{text}<extra></extra>"
+                ),
+                text=subset["designation"],
+            ))
+
+    fig.update_layout(
+        template=t["template"],
+        paper_bgcolor=t["paper"], plot_bgcolor=t["plot"],
+        height=height,
+        title="Rate of motion vs. absolute magnitude",
+        xaxis=dict(title="Absolute magnitude H"),
+        yaxis=dict(title="Rate (\u00b0/day)", type="log"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02,
+                    xanchor="right", x=1),
+        margin=dict(l=60, r=20, t=60, b=60),
+    )
+    if n_excluded > 0:
+        fig.add_annotation(
+            text=f"{n_excluded:,} single-obs tracklets excluded",
+            xref="paper", yref="paper", x=0.98, y=0.02,
+            showarrow=False,
+            font=dict(size=10, color=t["subtext"]),
+            xanchor="right",
+        )
+    return fig
+
+
+def _make_pa_rose(dff, t, height):
+    """Polar histogram of position angle of motion."""
+    valid = dff[dff["position_angle_deg"].notna()]
+    n_excluded = len(dff) - len(valid)
+
+    if len(valid) == 0:
+        return _empty_figure("No position angle data", t, height)
+
+    bin_size = 15
+    bins = np.arange(0, 360, bin_size)
+    counts, _ = np.histogram(valid["position_angle_deg"], bins=np.append(bins, 360))
+
+    fig = go.Figure(go.Barpolar(
+        r=counts, theta=bins + bin_size / 2,
+        width=bin_size,
+        marker_color="#607D8B",
+        marker_line_color=t["paper"],
+        marker_line_width=0.5,
+        hovertemplate="PA %{theta:.0f}\u00b0: %{r:,}<extra></extra>",
+    ))
+
+    fig.update_layout(
+        template=t["template"],
+        paper_bgcolor=t["paper"],
+        height=height,
+        title="Position angle of motion",
+        polar=dict(
+            angularaxis=dict(
+                direction="clockwise", rotation=90,
+                tickmode="array",
+                tickvals=[0, 45, 90, 135, 180, 225, 270, 315],
+                ticktext=["N", "NE", "E", "SE", "S", "SW", "W", "NW"],
+            ),
+            bgcolor=t["plot"],
+        ),
+        margin=dict(l=40, r=40, t=60, b=40),
+    )
+    if n_excluded > 0:
+        fig.add_annotation(
+            text=f"{n_excluded:,} single-obs excluded",
+            xref="paper", yref="paper", x=0.98, y=0.02,
+            showarrow=False,
+            font=dict(size=10, color=t["subtext"]),
+            xanchor="right",
+        )
+    return fig
+
+
+# ---------------------------------------------------------------------------
 # Dash app
 # ---------------------------------------------------------------------------
 
@@ -1897,6 +2350,103 @@ app.layout = html.Div(
                         ]),
                     ],
                 ),
+                # ━━━ Tab 5: Discovery Circumstances ━━━━━━━━━━━━━━━━━━━
+                dcc.Tab(
+                    label="Discovery Circumstances",
+                    value="tab-circumstances",
+                    className="nav-tab",
+                    selected_className="nav-tab--selected",
+                    children=[
+                        html.Div(style={"paddingTop": "15px"}, children=[
+                            # Year slider — full width
+                            html.Div(
+                                style={"marginBottom": "10px"},
+                                children=[
+                                    html.Label("Discovery years",
+                                               style=LABEL_STYLE),
+                                    dcc.RangeSlider(
+                                        id="circ-year-range",
+                                        min=year_min,
+                                        max=year_max,
+                                        value=[2004, year_max],
+                                        marks={
+                                            y: {"label": str(y)}
+                                            for y in range(
+                                                year_min,
+                                                year_max + 1, 5)
+                                        },
+                                        tooltip={
+                                            "placement": "bottom",
+                                            "always_visible": False},
+                                    ),
+                                ],
+                            ),
+                            # Controls row
+                            html.Div(
+                                style={"display": "flex", "gap": "20px",
+                                        "flexWrap": "wrap",
+                                        "alignItems": "flex-end",
+                                        "marginBottom": "15px"},
+                                children=[
+                                    html.Div(children=[
+                                        html.Label("Size class",
+                                                   style=LABEL_STYLE),
+                                        dcc.Dropdown(
+                                            id="circ-size-filter",
+                                            options=(
+                                                [{"label": "All sizes",
+                                                  "value": "all"}]
+                                                + [{"label": l,
+                                                    "value": l}
+                                                   for l, _, _ in H_BINS]
+                                            ),
+                                            value="all",
+                                            clearable=False,
+                                            style={"width": "270px"},
+                                        ),
+                                    ]),
+                                    html.Div(children=[
+                                        html.Label("Color by",
+                                                   style=LABEL_STYLE),
+                                        dcc.RadioItems(
+                                            id="circ-color-by",
+                                            options=[
+                                                {"label": " Survey",
+                                                 "value": "survey"},
+                                                {"label": " Size class",
+                                                 "value": "size"},
+                                                {"label": " Year",
+                                                 "value": "year"},
+                                            ],
+                                            value="survey",
+                                            inline=True,
+                                            style=RADIO_STYLE,
+                                            labelStyle=
+                                                RADIO_LABEL_STYLE,
+                                        ),
+                                    ]),
+                                ],
+                            ),
+                            # 2x2 visualization grid
+                            html.Div(
+                                style={
+                                    "display": "grid",
+                                    "gridTemplateColumns": "1fr 1fr",
+                                    "gap": "10px"},
+                                children=[
+                                    dcc.Graph(id="sky-map",
+                                              config=GRAPH_CONFIG),
+                                    dcc.Graph(id="mag-distribution",
+                                              config=GRAPH_CONFIG),
+                                    dcc.Graph(id="rate-plot",
+                                              config=GRAPH_CONFIG),
+                                    dcc.Graph(id="pa-rose",
+                                              config=GRAPH_CONFIG),
+                                ],
+                            ),
+                        ]),
+                    ],
+                ),
             ],
         ),
     ],
@@ -2030,9 +2580,13 @@ def _get_defaults():
         "fu-year-range": [2004, year_max],
         "fu-size-filter": "all",
         "fu-max-days": 90,
+        # Tab 5
+        "circ-year-range": [2004, year_max],
+        "circ-size-filter": "all",
+        "circ-color-by": "survey",
         # Shared
         "group-by": "combined",
-    "plot-height": "700",
+        "plot-height": "700",
     }
 
 _TAB_KEYS = {
@@ -2042,6 +2596,8 @@ _TAB_KEYS = {
     "tab-comparison": {"comp-year-range", "comp-size-filter",
                        "comp-survey-select", "comp-precovery"},
     "tab-followup": {"fu-year-range", "fu-size-filter", "fu-max-days"},
+    "tab-circumstances": {"circ-year-range", "circ-size-filter",
+                          "circ-color-by"},
 }
 _SHARED_KEYS = {"group-by", "plot-height"}
 
@@ -2053,6 +2609,7 @@ _RESET_ORDER = [
     "comp-year-range", "comp-size-filter", "comp-survey-select",
     "comp-precovery",
     "fu-year-range", "fu-size-filter", "fu-max-days",
+    "circ-year-range", "circ-size-filter", "circ-color-by",
     "group-by", "plot-height",
 ]
 
@@ -2790,6 +3347,44 @@ def update_followup(year_range, size_filter, max_days, theme_name,
     trend = _make_followup_trend(fu_data, t, height)
 
     return curve, boxes, network, trend
+
+
+# ---------------------------------------------------------------------------
+# Discovery circumstances callback
+# ---------------------------------------------------------------------------
+
+@app.callback(
+    Output("sky-map", "figure"),
+    Output("mag-distribution", "figure"),
+    Output("rate-plot", "figure"),
+    Output("pa-rose", "figure"),
+    Input("circ-year-range", "value"),
+    Input("circ-size-filter", "value"),
+    Input("circ-color-by", "value"),
+    Input("group-by", "value"),
+    Input("theme-toggle", "value"),
+    Input("plot-height", "value"),
+    Input("tabs", "value"),
+)
+def update_circumstances(year_range, size_filter, color_by, group_by,
+                          theme_name, plot_height, active_tab):
+    if active_tab != "tab-circumstances" or df is None:
+        raise PreventUpdate
+
+    t = theme(theme_name)
+    height = int(plot_height)
+    y0, y1 = year_range
+
+    filtered = df[(df["disc_year"] >= y0) & (df["disc_year"] <= y1)]
+    if size_filter != "all":
+        filtered = filtered[filtered["size_class"] == size_filter]
+
+    sky = _make_sky_map(filtered, color_by, group_by, t, height)
+    mag = _make_mag_distribution(filtered, color_by, group_by, t, height)
+    rate = _make_rate_plot(filtered, color_by, group_by, t, height)
+    pa = _make_pa_rose(filtered, t, height)
+
+    return sky, mag, rate, pa
 
 
 # ---------------------------------------------------------------------------
