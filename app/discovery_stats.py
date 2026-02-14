@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from dash import Dash, Input, Output, State, ctx, dcc, html, no_update
+from dash.dcc import send_data_frame
 from dash.exceptions import PreventUpdate
 from plotly.subplots import make_subplots
 
@@ -1687,6 +1688,13 @@ LABEL_STYLE = {"fontFamily": "sans-serif", "fontSize": "13px"}
 # RadioItems label style — "inherit" lets the page-container color propagate
 RADIO_LABEL_STYLE = {"color": "inherit", "fontFamily": "sans-serif"}
 RADIO_STYLE = {"fontFamily": "sans-serif"}
+DOWNLOAD_BTN_STYLE = {
+    "padding": "6px 14px",
+    "fontSize": "12px",
+    "fontFamily": "sans-serif",
+    "cursor": "pointer",
+    "whiteSpace": "nowrap",
+}
 
 app.layout = html.Div(
     id="page-container",
@@ -1707,6 +1715,12 @@ app.layout = html.Div(
         # ── Loading banner (shown while data loads at startup) ────────
         html.Div(id="loading-banner"),
         dcc.Interval(id="loading-check", interval=2_000, n_intervals=0),
+        # ── Download components (hidden, one per tab) ─────────────────
+        dcc.Download(id="download-discovery"),
+        dcc.Download(id="download-neomod"),
+        dcc.Download(id="download-comparison"),
+        dcc.Download(id="download-followup"),
+        dcc.Download(id="download-circumstances"),
         # ── Banner: logo + title + shared controls ───────────────────
         html.Div(
             style={"display": "flex", "gap": "15px", "alignItems": "center",
@@ -1896,6 +1910,17 @@ app.layout = html.Div(
                                             labelStyle=RADIO_LABEL_STYLE,
                                         ),
                                     ]),
+                                    html.Div(
+                                        style={"alignSelf": "flex-end"},
+                                        children=[
+                                            html.Button(
+                                                "Download CSV",
+                                                id="btn-download-discovery",
+                                                n_clicks=0,
+                                                style=DOWNLOAD_BTN_STYLE,
+                                            ),
+                                        ],
+                                    ),
                                 ],
                             ),
                             # Main chart
@@ -2052,6 +2077,17 @@ app.layout = html.Div(
                                         ],
                                         style={"alignSelf": "flex-end"},
                                     ),
+                                    html.Div(
+                                        style={"alignSelf": "flex-end"},
+                                        children=[
+                                            html.Button(
+                                                "Download CSV",
+                                                id="btn-download-neomod",
+                                                n_clicks=0,
+                                                style=DOWNLOAD_BTN_STYLE,
+                                            ),
+                                        ],
+                                    ),
                                 ],
                             ),
                             # Distribution chart
@@ -2182,6 +2218,17 @@ app.layout = html.Div(
                                                 RADIO_LABEL_STYLE,
                                         ),
                                     ]),
+                                    html.Div(
+                                        style={"alignSelf": "flex-end"},
+                                        children=[
+                                            html.Button(
+                                                "Download CSV",
+                                                id="btn-download-comparison",
+                                                n_clicks=0,
+                                                style=DOWNLOAD_BTN_STYLE,
+                                            ),
+                                        ],
+                                    ),
                                 ],
                             ),
                             # MPC codes reference
@@ -2318,6 +2365,17 @@ app.layout = html.Div(
                                             ),
                                         ],
                                     ),
+                                    html.Div(
+                                        style={"alignSelf": "flex-end"},
+                                        children=[
+                                            html.Button(
+                                                "Download CSV",
+                                                id="btn-download-followup",
+                                                n_clicks=0,
+                                                style=DOWNLOAD_BTN_STYLE,
+                                            ),
+                                        ],
+                                    ),
                                 ],
                             ),
                             # Note
@@ -2425,6 +2483,17 @@ app.layout = html.Div(
                                                 RADIO_LABEL_STYLE,
                                         ),
                                     ]),
+                                    html.Div(
+                                        style={"alignSelf": "flex-end"},
+                                        children=[
+                                            html.Button(
+                                                "Download CSV",
+                                                id="btn-download-circumstances",
+                                                n_clicks=0,
+                                                style=DOWNLOAD_BTN_STYLE,
+                                            ),
+                                        ],
+                                    ),
                                 ],
                             ),
                             # 2x2 visualization grid
@@ -3385,6 +3454,161 @@ def update_circumstances(year_range, size_filter, color_by, group_by,
     pa = _make_pa_rose(filtered, t, height)
 
     return sky, mag, rate, pa
+
+
+# ---------------------------------------------------------------------------
+# Download CSV callbacks
+# ---------------------------------------------------------------------------
+
+# Columns to export for the discovery dataset (excludes internal indices)
+_DISCOVERY_EXPORT_COLS = [
+    "designation", "disc_year", "disc_month", "station_code", "station_name",
+    "project", "h", "size_class", "orbit_type_int", "q", "e", "i",
+    "avg_ra_deg", "avg_dec_deg", "median_v_mag", "tracklet_nobs",
+    "rate_deg_per_day", "position_angle_deg",
+]
+
+
+@app.callback(
+    Output("download-discovery", "data"),
+    Input("btn-download-discovery", "n_clicks"),
+    State("year-range", "value"),
+    State("size-filter", "value"),
+    prevent_initial_call=True,
+)
+def download_discovery(n_clicks, year_range, size_filter):
+    if not n_clicks or df is None:
+        raise PreventUpdate
+    y0, y1 = year_range
+    filtered = df[(df["disc_year"] >= y0) & (df["disc_year"] <= y1)]
+    if size_filter not in ("all", "split"):
+        filtered = filtered[filtered["size_class"] == size_filter]
+    cols = [c for c in _DISCOVERY_EXPORT_COLS if c in filtered.columns]
+    return send_data_frame(
+        filtered[cols].to_csv, "neo_discoveries.csv", index=False)
+
+
+@app.callback(
+    Output("download-neomod", "data"),
+    Input("btn-download-neomod", "n_clicks"),
+    State("h-year-range", "value"),
+    State("h-range", "value"),
+    prevent_initial_call=True,
+)
+def download_neomod(n_clicks, h_year_range, h_range):
+    if not n_clicks or df is None:
+        raise PreventUpdate
+    hy0, hy1 = h_year_range
+    h_lo = round(h_range[0] * 4) / 4
+    h_hi = round(h_range[1] * 4) / 4
+    filtered = df[(df["disc_year"] >= hy0) & (df["disc_year"] <= hy1)]
+    valid = filtered[
+        (filtered["h_bin_idx"] >= 0)
+        & (filtered["h_bin_idx"] < len(H_BIN_CENTERS))
+    ].copy()
+    valid["h_bin_center"] = H_BIN_CENTERS[valid["h_bin_idx"]]
+    valid = valid[
+        (valid["h_bin_center"] >= h_lo) & (valid["h_bin_center"] <= h_hi)]
+    # Build per-bin summary with NEOMOD3 comparison
+    bin_counts = valid.groupby("h_bin_idx").size()
+    rows = []
+    for idx in range(len(H_BIN_CENTERS)):
+        center = H_BIN_CENTERS[idx]
+        if center < h_lo or center > h_hi:
+            continue
+        discovered = int(bin_counts.get(idx, 0))
+        neomod_row = NEOMOD3_DF[
+            (NEOMOD3_DF["h_center"] - center).abs() < 0.01]
+        if len(neomod_row):
+            nr = neomod_row.iloc[0]
+            rows.append({
+                "h_bin": f"{nr['h1']:.2f}-{nr['h2']:.2f}",
+                "h_center": center,
+                "discovered": discovered,
+                "neomod3_estimated": int(nr["dn_model"]),
+                "neomod3_cumulative": int(nr["n_cumul"]),
+                "neomod3_min": int(nr["n_min"]),
+                "neomod3_max": int(nr["n_max"]),
+                "completeness_pct": round(
+                    discovered / nr["dn_model"] * 100, 1)
+                if nr["dn_model"] > 0 else None,
+            })
+    out = pd.DataFrame(rows)
+    return send_data_frame(
+        out.to_csv, "neo_size_distribution_vs_neomod3.csv", index=False)
+
+
+@app.callback(
+    Output("download-comparison", "data"),
+    Input("btn-download-comparison", "n_clicks"),
+    State("comp-year-range", "value"),
+    State("comp-size-filter", "value"),
+    State("comp-precovery", "value"),
+    prevent_initial_call=True,
+)
+def download_comparison(n_clicks, year_range, size_filter, precovery):
+    if not n_clicks or df is None or df_apparition is None:
+        raise PreventUpdate
+    exclude_precovery = precovery == "post_only"
+    survey_sets, eligible = build_survey_sets(
+        df, df_apparition, year_range, size_filter, exclude_precovery)
+    # Build per-survey summary
+    rows = []
+    for proj in PROJECT_ORDER:
+        s = survey_sets.get(proj, set())
+        if s:
+            rows.append({
+                "survey": proj,
+                "neos_observed": len(s),
+                "fraction_of_eligible": round(
+                    len(s) / len(eligible) * 100, 1)
+                if eligible else 0,
+            })
+    out = pd.DataFrame(rows)
+    out.loc[len(out)] = {
+        "survey": "TOTAL eligible",
+        "neos_observed": len(eligible),
+        "fraction_of_eligible": 100.0,
+    }
+    return send_data_frame(
+        out.to_csv, "neo_survey_comparison.csv", index=False)
+
+
+@app.callback(
+    Output("download-followup", "data"),
+    Input("btn-download-followup", "n_clicks"),
+    State("fu-year-range", "value"),
+    State("fu-size-filter", "value"),
+    prevent_initial_call=True,
+)
+def download_followup(n_clicks, year_range, size_filter):
+    if not n_clicks or df is None or df_apparition is None:
+        raise PreventUpdate
+    fu_data, total = build_followup_data(
+        df, df_apparition, year_range, size_filter)
+    if len(fu_data) == 0:
+        raise PreventUpdate
+    return send_data_frame(
+        fu_data.to_csv, "neo_followup_timing.csv", index=False)
+
+
+@app.callback(
+    Output("download-circumstances", "data"),
+    Input("btn-download-circumstances", "n_clicks"),
+    State("circ-year-range", "value"),
+    State("circ-size-filter", "value"),
+    prevent_initial_call=True,
+)
+def download_circumstances(n_clicks, year_range, size_filter):
+    if not n_clicks or df is None:
+        raise PreventUpdate
+    y0, y1 = year_range
+    filtered = df[(df["disc_year"] >= y0) & (df["disc_year"] <= y1)]
+    if size_filter != "all":
+        filtered = filtered[filtered["size_class"] == size_filter]
+    cols = [c for c in _DISCOVERY_EXPORT_COLS if c in filtered.columns]
+    return send_data_frame(
+        filtered[cols].to_csv, "neo_discovery_circumstances.csv", index=False)
 
 
 # ---------------------------------------------------------------------------

@@ -127,6 +127,7 @@ Stations are mapped to project groups via `STATION_TO_PROJECT`:
 - CSS logo (linked to catalina.lpl.arizona.edu) at upper left
 - Group by, Plot height, Theme toggle (Light/Dark)
 - Reset buttons: "Tab" (resets current tab), "All" (resets all tabs)
+- Per-tab "Download CSV" buttons export currently filtered data
 
 ### Architecture
 - **Two SQL queries** cached to CSV (1-day auto-invalidation):

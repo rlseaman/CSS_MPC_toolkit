@@ -18,7 +18,7 @@ libraries, and derived data products useful to the NEO community.
 **App:** [`app/discovery_stats.py`](app/discovery_stats.py)
 
 Interactive Dash web application for exploring NEO discovery statistics,
-survey performance, and follow-up timing. Four tabbed pages:
+survey performance, and follow-up timing. Five tabbed pages:
 
 | Tab | Content |
 |-----|---------|
@@ -26,9 +26,11 @@ survey performance, and follow-up timing. Four tabbed pages:
 | **Size Distribution vs. NEOMOD3** | Half-magnitude bin chart comparing MPC discoveries to the NEOMOD3 population model (Nesvorny et al. 2024, Icarus 411); completeness curve with 1-sigma errors; reference table |
 | **Multi-survey Comparison** | Venn diagrams (1–3 surveys) showing co-detection during discovery apparitions (±200 days); pairwise co-detection heatmap; survey reach |
 | **Follow-up Timing** | Response curves showing how quickly other surveys observe newly-discovered NEOs; per-survey response time distributions; follow-up network heatmap; trend by year |
+| **Discovery Circumstances** | Sky map (RA/Dec) of discovery positions with ecliptic and galactic plane overlays; apparent V magnitude histogram; rate of motion vs. H scatter; position angle rose diagram |
 
-Shared banner controls: survey grouping, plot height, light/dark theme, reset
-buttons. Data sourced from two SQL queries cached to CSV with 1-day
+Each tab has a **Download CSV** button that exports the currently filtered
+data. Shared banner controls: survey grouping, plot height, light/dark theme,
+reset buttons. Data sourced from two SQL queries cached to CSV with 1-day
 auto-invalidation.
 
 **Survey groupings:** Catalina Survey (703, G96, E12), Catalina Follow-up
@@ -165,7 +167,7 @@ CSS_MPC_toolkit/
 ├── README.md                           # This file
 ├── CLAUDE.md                           # Claude Code project guide
 ├── app/                                # Interactive Dash web application
-│   ├── discovery_stats.py              #   NEO discovery explorer (4 tabs)
+│   ├── discovery_stats.py              #   NEO discovery explorer (5 tabs)
 │   └── assets/                         #   CSS, logo, static files
 ├── lib/                                # Python library layer
 │   ├── db.py                           #   DB connections, timed queries
