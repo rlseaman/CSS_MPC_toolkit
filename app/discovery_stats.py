@@ -937,14 +937,14 @@ def _make_venn2(sets, names, colors, t, height):
         fig.add_trace(_circle_trace(
             cx[i], cy[i], r, colors[i], names[i]))
 
-    # Region counts
-    fig.add_annotation(x=2.3, y=3.5, text=f"<b>{a_only:,}</b>",
+    # Region counts — positions are geometric centroids of each region
+    fig.add_annotation(x=3.0, y=3.5, text=f"<b>{a_only:,}</b>",
                        showarrow=False,
                        font=dict(size=20, color=t["text"]))
     fig.add_annotation(x=5.0, y=3.5, text=f"<b>{both:,}</b>",
                        showarrow=False,
                        font=dict(size=20, color=t["text"]))
-    fig.add_annotation(x=7.7, y=3.5, text=f"<b>{b_only:,}</b>",
+    fig.add_annotation(x=7.0, y=3.5, text=f"<b>{b_only:,}</b>",
                        showarrow=False,
                        font=dict(size=20, color=t["text"]))
 
@@ -999,14 +999,14 @@ def _make_venn3(sets, names, colors, t, height):
         fig.add_trace(_circle_trace(
             cx[i], cy[i], r, colors[i], names[i]))
 
-    # Region annotations (positions verified against circle geometry)
+    # Region annotations — positions are geometric centroids of each region
     regions = [
-        (2.0, 5.8, a_only),
-        (8.0, 5.8, b_only),
-        (5.0, 0.5, c_only),
-        (5.0, 6.0, ab_only),
-        (3.4, 2.8, ac_only),
-        (6.6, 2.8, bc_only),
+        (2.9, 5.1, a_only),
+        (7.1, 5.1, b_only),
+        (5.0, 1.5, c_only),
+        (5.0, 5.2, ab_only),
+        (3.9, 3.3, ac_only),
+        (6.1, 3.3, bc_only),
         (5.0, 3.9, abc),
     ]
     for x, y, val in regions:
