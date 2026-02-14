@@ -441,6 +441,7 @@ SELECT
     di.unpacked_desig AS designation,
     EXTRACT(YEAR FROM di.obstime)::int AS disc_year,
     EXTRACT(MONTH FROM di.obstime)::int AS disc_month,
+    di.obstime::date AS disc_date,
     di.stn AS station_code,
     neo.h,
     neo.orbit_type_int,
@@ -653,6 +654,32 @@ def load_data():
         return "Unknown H"
 
     raw["size_class"] = raw["h"].apply(h_bin)
+
+    # Compute signed solar elongation at discovery
+    if "disc_date" in raw.columns and "avg_ra_deg" in raw.columns:
+        obs_dates = pd.to_datetime(raw["disc_date"])
+        jd_offset = (obs_dates - pd.Timestamp("2000-01-01")).dt.days.values
+        T = jd_offset / 36525.0
+        L0 = (280.466 + 36000.77 * T) % 360
+        M = (357.529 + 35999.05 * T) % 360
+        C = 1.915 * np.sin(np.radians(M))
+        sun_lon = (L0 + C) % 360
+        obliquity = 23.439 - 0.013 * T
+        sun_ra = np.degrees(np.arctan2(
+            np.cos(np.radians(obliquity)) * np.sin(np.radians(sun_lon)),
+            np.cos(np.radians(sun_lon)))) % 360
+        sun_dec = np.degrees(np.arcsin(
+            np.sin(np.radians(obliquity)) * np.sin(np.radians(sun_lon))))
+        ra = raw["avg_ra_deg"].astype(float).values
+        dec = raw["avg_dec_deg"].astype(float).values
+        cos_elong = (np.sin(np.radians(dec)) * np.sin(np.radians(sun_dec))
+                     + np.cos(np.radians(dec)) * np.cos(np.radians(sun_dec))
+                       * np.cos(np.radians(ra - sun_ra)))
+        elong = np.degrees(np.arccos(np.clip(cos_elong, -1, 1)))
+        dra = (ra - sun_ra + 360) % 360
+        sign = np.where(dra <= 180, 1, -1)
+        raw["solar_elong_deg"] = np.where(
+            raw["avg_ra_deg"].notna(), sign * elong, np.nan)
 
     # Pre-compute half-magnitude bin index
     raw["h_bin_idx"] = np.where(
@@ -1686,6 +1713,114 @@ def _make_pa_rose(dff, t, height):
     return fig
 
 
+def _make_elongation_hist(dff, color_by, group_by, t, height):
+    """Solar elongation histogram with opposition (180\u00b0) centred."""
+    valid = dff[dff["solar_elong_deg"].notna()]
+    if len(valid) == 0:
+        return _empty_figure("No elongation data", t, height)
+
+    # Transform so opposition (±180°) maps to x=0 (centre) and
+    # near-Sun (small elongation) maps to the edges (±180).
+    # sign preserved: +evening(E), -morning(W).
+    elong = valid["solar_elong_deg"].values
+    sign = np.sign(elong)
+    x_opp = sign * (180.0 - np.abs(elong))
+
+    bin_size = 5
+    fig = go.Figure()
+
+    def _add_hist(x_data, **kwargs):
+        fig.add_trace(go.Histogram(
+            x=x_data,
+            xbins=dict(start=-180, end=180, size=bin_size),
+            **kwargs,
+        ))
+
+    if color_by == "size":
+        for i, (label, _, _) in enumerate(H_BINS):
+            mask = valid["size_class"].values == label
+            if not mask.any():
+                continue
+            _add_hist(
+                x_opp[mask], name=label,
+                marker_color=SIZE_COLORS[i],
+                hovertemplate="%{y}<extra></extra>",
+            )
+    elif color_by == "survey":
+        col = "project" if group_by != "station" else "station_name"
+        if col == "project":
+            groups = [p for p in PROJECT_ORDER
+                      if p in valid[col].unique()]
+            cmap = PROJECT_COLORS
+        else:
+            groups = valid[col].value_counts().head(10).index.tolist()
+            cmap = {}
+        col_vals = valid[col].values
+        for gname in groups:
+            mask = col_vals == gname
+            if not mask.any():
+                continue
+            _add_hist(
+                x_opp[mask], name=gname,
+                marker_color=cmap.get(gname),
+                hovertemplate="%{y}<extra></extra>",
+            )
+    else:
+        _add_hist(
+            x_opp, name="NEOs",
+            marker_color="#607D8B",
+            hovertemplate="%{y}<extra></extra>",
+        )
+
+    # Custom tick labels: show actual solar elongation at each position
+    # x_opp=0 → elong 180° (opposition), x_opp=±180 → elong 0° (Sun)
+    tickvals = list(range(-180, 181, 30))
+    ticktext = [f"{180 - abs(v)}\u00b0" for v in tickvals]
+
+    fig.update_layout(
+        barmode="stack",
+        template=t["template"],
+        paper_bgcolor=t["paper"], plot_bgcolor=t["plot"],
+        height=height,
+        title="Solar elongation at discovery",
+        xaxis=dict(title="Solar Elongation",
+                   range=[-180, 180],
+                   tickmode="array",
+                   tickvals=tickvals, ticktext=ticktext),
+        yaxis=dict(title="Count"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02,
+                    xanchor="right", x=1),
+        margin=dict(l=60, r=20, t=60, b=80),
+    )
+    # Axis annotations: Sun at edges, Opposition at centre
+    fig.add_annotation(
+        text="\u2190 Morning sky", xref="paper", yref="paper",
+        x=0.22, y=-0.15, showarrow=False,
+        font=dict(size=11, color=t["subtext"]), xanchor="center",
+    )
+    fig.add_annotation(
+        text="Evening sky \u2192", xref="paper", yref="paper",
+        x=0.78, y=-0.15, showarrow=False,
+        font=dict(size=11, color=t["subtext"]), xanchor="center",
+    )
+    fig.add_annotation(
+        text="\u2600", xref="paper", yref="paper",
+        x=0.0, y=-0.15, showarrow=False,
+        font=dict(size=12, color=t["subtext"]), xanchor="left",
+    )
+    fig.add_annotation(
+        text="\u2600", xref="paper", yref="paper",
+        x=1.0, y=-0.15, showarrow=False,
+        font=dict(size=12, color=t["subtext"]), xanchor="right",
+    )
+    fig.add_annotation(
+        text="Opposition", xref="paper", yref="paper",
+        x=0.5, y=-0.15, showarrow=False,
+        font=dict(size=11, color=t["subtext"]), xanchor="center",
+    )
+    return fig
+
+
 # ---------------------------------------------------------------------------
 # Dash app
 # ---------------------------------------------------------------------------
@@ -2546,16 +2681,19 @@ app.layout = html.Div(
                                     ),
                                 ],
                             ),
-                            # 2x2 visualization grid
+                            # Full-width sky map
+                            dcc.Graph(id="sky-map",
+                                      config=GRAPH_CONFIG),
+                            # 2x2 grid for remaining plots
                             html.Div(
                                 style={
                                     "display": "grid",
                                     "gridTemplateColumns": "1fr 1fr",
                                     "gap": "10px"},
                                 children=[
-                                    dcc.Graph(id="sky-map",
-                                              config=GRAPH_CONFIG),
                                     dcc.Graph(id="mag-distribution",
+                                              config=GRAPH_CONFIG),
+                                    dcc.Graph(id="elongation-hist",
                                               config=GRAPH_CONFIG),
                                     dcc.Graph(id="rate-plot",
                                               config=GRAPH_CONFIG),
@@ -3475,6 +3613,7 @@ def update_followup(year_range, size_filter, max_days, theme_name,
 @app.callback(
     Output("sky-map", "figure"),
     Output("mag-distribution", "figure"),
+    Output("elongation-hist", "figure"),
     Output("rate-plot", "figure"),
     Output("pa-rose", "figure"),
     Input("circ-year-range", "value"),
@@ -3500,10 +3639,11 @@ def update_circumstances(year_range, size_filter, color_by, group_by,
 
     sky = _make_sky_map(filtered, color_by, group_by, t, height)
     mag = _make_mag_distribution(filtered, color_by, group_by, t, height)
+    elong = _make_elongation_hist(filtered, color_by, group_by, t, height)
     rate = _make_rate_plot(filtered, color_by, group_by, t, height)
     pa = _make_pa_rose(filtered, t, height)
 
-    return sky, mag, rate, pa
+    return sky, mag, elong, rate, pa
 
 
 # ---------------------------------------------------------------------------
@@ -3516,7 +3656,7 @@ _DISCOVERY_EXPORT_COLS = [
     "project", "h", "h_nea", "h_mpc", "size_class",
     "orbit_type_int", "q", "e", "i",
     "avg_ra_deg", "avg_dec_deg", "median_v_mag", "tracklet_nobs",
-    "rate_deg_per_day", "position_angle_deg",
+    "rate_deg_per_day", "position_angle_deg", "solar_elong_deg",
 ]
 
 
