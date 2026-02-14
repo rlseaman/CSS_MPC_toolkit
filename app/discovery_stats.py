@@ -130,13 +130,13 @@ PROJECT_COLORS = {
     "Others": "#a9a9a9",
 }
 
-# H magnitude size classes
+# H magnitude size classes (standard p_v = 0.14 boundaries)
 H_BINS = [
-    ("H < 18 (~1 km+)", None, 18),
-    ("18 \u2264 H < 22 (~140 m\u20131 km)", 18, 22),
-    ("22 \u2264 H < 25 (~30\u2013140 m)", 22, 25),
-    ("25 \u2264 H < 28 (~10\u201330 m)", 25, 28),
-    ("H \u2265 28 (< 10 m)", 28, None),
+    ("H < 17.75 (~1 km+)", None, 17.75),
+    ("17.75 \u2264 H < 22 (~140 m\u20131 km)", 17.75, 22),
+    ("22 \u2264 H < 24.25 (~50\u2013140 m)", 22, 24.25),
+    ("24.25 \u2264 H < 27.75 (~10\u201350 m)", 24.25, 27.75),
+    ("H \u2265 27.75 (< 10 m)", 27.75, None),
 ]
 
 # Colors for size-class stacking (viridis palette, matching size histogram)
