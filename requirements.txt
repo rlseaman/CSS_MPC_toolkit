@@ -8,6 +8,9 @@ psycopg2-binary>=2.9
 pandas>=2.1
 numpy>=1.26
 
+# MPC designation pack/unpack (github.com/rlseaman/MPC_designations)
+mpc-designation @ git+https://github.com/rlseaman/MPC_designations.git#subdirectory=python
+
 # Interactive charting (Jupyter + future Dash/HTML)
 plotly>=5.18
 

@@ -33,6 +33,8 @@ notebooks/.ipynb_checkpoints/
 
 # App runtime cache
 app/.neo_cache*
+app/.nea_*
+app/.apparition_cache*
 
 # Downloaded / generated data files
 downloads/

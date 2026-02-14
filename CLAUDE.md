@@ -135,6 +135,12 @@ Stations are mapped to project groups via `STATION_TO_PROJECT`:
     (~43K NEOs, 6 extra columns for RA/Dec/Vmag/rate/PA, ~30s query)
   - `APPARITION_SQL` — station-level observations within +/-200 days
     of discovery (~362K station rows, ~1-2 min query)
+- **NEA.txt H magnitude override** (`lib/nea_catalog.py`): downloads
+  the MPC's curated NEA catalog, resolves designations via
+  `numbered_identifications` and `mpc_designation`, and overrides
+  `mpc_orbits.h` where NEA.txt provides a reliable value.  Cached
+  as `.nea_h_cache.csv` with same 1-day invalidation.  Removable
+  when MPC completes mpc_orbits cleanup.
 - Both caches load at startup; `--refresh` forces re-query
 - Theming via CSS custom properties set on `#page-container`
 - `SIZE_COLORS` (viridis) for size-class stacking

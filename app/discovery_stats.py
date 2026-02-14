@@ -29,6 +29,7 @@ from dash.exceptions import PreventUpdate
 from plotly.subplots import make_subplots
 
 from lib.db import connect, timed_query
+from lib.nea_catalog import load_nea_h_lookup
 
 # ---------------------------------------------------------------------------
 # Data constants
@@ -591,6 +592,25 @@ def load_data():
     # Sanitize H magnitude: sentinel values (0, -9.99) in mpc_orbits
     # represent missing data, not real measurements.  Treat as unknown.
     raw.loc[raw["h"] <= 0, "h"] = np.nan
+
+    # Override H with NEA.txt values where available.
+    # NEA.txt is the MPC's curated NEA catalog and is currently the most
+    # reliable H source.  When MPC finishes mpc_orbits cleanup, this
+    # override can be removed.
+    try:
+        h_lookup = load_nea_h_lookup(_APP_DIR, force_refresh=_FORCE_REFRESH)
+        raw["h_mpc"] = raw["h"]  # preserve original for reference
+        raw["h_nea"] = raw["designation"].map(
+            lambda d: h_lookup.get(d))
+        # Use NEA.txt H where available; fall back to (sanitized) mpc_orbits
+        raw["h"] = raw["h_nea"].where(raw["h_nea"].notna(), raw["h_mpc"])
+        n_override = (raw["h_nea"].notna() & (raw["h_mpc"] != raw["h_nea"])
+                      ).sum()
+        n_nea = raw["h_nea"].notna().sum()
+        print(f"NEA.txt H applied: {n_nea:,} matched, "
+              f"{n_override:,} values changed")
+    except Exception as e:
+        print(f"Warning: NEA.txt H override skipped: {e}")
 
     # Derived columns
     raw["station_name"] = (raw["station_code"].map(STATION_NAMES)
@@ -3467,7 +3487,8 @@ def update_circumstances(year_range, size_filter, color_by, group_by,
 # Columns to export for the discovery dataset (excludes internal indices)
 _DISCOVERY_EXPORT_COLS = [
     "designation", "disc_year", "disc_month", "station_code", "station_name",
-    "project", "h", "size_class", "orbit_type_int", "q", "e", "i",
+    "project", "h", "h_nea", "h_mpc", "size_class",
+    "orbit_type_int", "q", "e", "i",
     "avg_ra_deg", "avg_dec_deg", "median_v_mag", "tracklet_nobs",
     "rate_deg_per_day", "position_angle_deg",
 ]
