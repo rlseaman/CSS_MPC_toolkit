@@ -1,4 +1,4 @@
-# CSS SBN Derived Data Products
+# CSS MPC Toolkit
 
 Value-added data products derived from the MPC/SBN PostgreSQL database,
 developed by the Catalina Sky Survey at the University of Arizona.
@@ -161,7 +161,7 @@ fragmentation.
 ## Project Structure
 
 ```
-CSS_SBN_derived/
+CSS_MPC_toolkit/
 ├── README.md                           # This file
 ├── CLAUDE.md                           # Claude Code project guide
 ├── app/                                # Interactive Dash web application
@@ -243,7 +243,7 @@ bash scripts/db_health_check.sh --host sibyl
 
 Data products are distributed in two ways:
 
-1. **CSV files** via [GitHub Releases](https://github.com/rlseaman/CSS_SBN_derived/releases) --
+1. **CSV files** via [GitHub Releases](https://github.com/rlseaman/CSS_MPC_toolkit/releases) --
    download the latest release asset for flat-file access
 2. **SQL scripts** in this repository -- run directly against your own
    MPC/SBN database replica to generate the data locally

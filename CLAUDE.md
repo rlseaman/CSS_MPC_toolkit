@@ -2,10 +2,10 @@
 
 ## Project Overview
 
-CSS SBN Derived Data Products — SQL scripts, Python libraries, and
-interactive applications for deriving value-added datasets from the MPC
-(Minor Planet Center) PostgreSQL database, maintained by the Catalina Sky
-Survey at the University of Arizona.
+CSS MPC Toolkit — SQL scripts, Python libraries, and interactive
+applications for deriving value-added datasets from the MPC (Minor Planet
+Center) PostgreSQL database, maintained by the Catalina Sky Survey at the
+University of Arizona.
 
 ## Database Access
 

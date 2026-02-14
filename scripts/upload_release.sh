@@ -15,7 +15,7 @@
 set -euo pipefail
 
 CSV_FILE="${1:?Usage: upload_release.sh <csv_file>}"
-REPO="rlseaman/CSS_SBN_derived"
+REPO="rlseaman/CSS_MPC_toolkit"
 TAG="latest"
 DATE=$(date '+%Y-%m-%d')
 

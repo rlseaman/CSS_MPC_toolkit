@@ -1,8 +1,8 @@
-# CSS SBN Derived -- Project Planning
+# CSS MPC Toolkit -- Project Planning
 
 **Date:** 2026-02-08 (updated)
 **Author:** Rob Seaman (Catalina Sky Survey) / Claude (Anthropic)
-**Repository:** https://github.com/rlseaman/CSS_SBN_derived
+**Repository:** https://github.com/rlseaman/CSS_MPC_toolkit
 
 ## Context
 

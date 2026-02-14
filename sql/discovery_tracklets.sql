@@ -1,7 +1,7 @@
 -- ==============================================================================
 -- NEO DISCOVERY TRACKLET STATISTICS
 -- ==============================================================================
--- Project: CSS_SBN_derived
+-- Project: CSS_MPC_toolkit
 -- Authors: Rob Seaman (Catalina Sky Survey) / Claude (Anthropic)
 -- Created: 2026-01-08
 -- Updated: 2026-02-08

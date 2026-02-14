@@ -53,8 +53,8 @@ sudo su - neo-dash
 
 ```bash
 # Clone the repository
-git clone https://github.com/rlseaman/CSS_SBN_derived.git
-cd CSS_SBN_derived
+git clone https://github.com/rlseaman/CSS_MPC_toolkit.git
+cd CSS_MPC_toolkit
 
 # Create and activate virtual environment
 python3.11 -m venv venv
@@ -90,7 +90,7 @@ The first run queries PostgreSQL and builds two CSV caches. This takes
 2–4 minutes and must succeed before starting the service:
 
 ```bash
-cd CSS_SBN_derived
+cd CSS_MPC_toolkit
 source venv/bin/activate
 python app/discovery_stats.py --refresh-only
 ```
@@ -122,9 +122,9 @@ Wants=network-online.target
 Type=simple
 User=neo-dash
 Group=neo-dash
-WorkingDirectory=/home/neo-dash/CSS_SBN_derived
-Environment=PATH=/home/neo-dash/CSS_SBN_derived/venv/bin:/usr/bin
-ExecStart=/home/neo-dash/CSS_SBN_derived/venv/bin/gunicorn \
+WorkingDirectory=/home/neo-dash/CSS_MPC_toolkit
+Environment=PATH=/home/neo-dash/CSS_MPC_toolkit/venv/bin:/usr/bin
+ExecStart=/home/neo-dash/CSS_MPC_toolkit/venv/bin/gunicorn \
     --bind 127.0.0.1:8050 \
     --workers 2 \
     --timeout 120 \
@@ -244,8 +244,8 @@ If the service account's home directory has a non-standard context:
 
 ```bash
 sudo semanage fcontext -a -t httpd_sys_content_t \
-    "/home/neo-dash/CSS_SBN_derived/app/assets(/.*)?"
-sudo restorecon -Rv /home/neo-dash/CSS_SBN_derived/app/assets
+    "/home/neo-dash/CSS_MPC_toolkit/app/assets(/.*)?"
+sudo restorecon -Rv /home/neo-dash/CSS_MPC_toolkit/app/assets
 ```
 
 ## 7. Daily Data Refresh (Cron)
@@ -302,7 +302,7 @@ sudo -u neo-dash crontab -e
 ```
 
 ```cron
-0 6 * * * /home/neo-dash/CSS_SBN_derived/scripts/daily_refresh.sh
+0 6 * * * /home/neo-dash/CSS_MPC_toolkit/scripts/daily_refresh.sh
 ```
 
 ### How the refresh banner works
@@ -345,7 +345,7 @@ neo-dash ALL=(root) NOPASSWD: /usr/bin/systemctl reload neo-dash
 
 ```bash
 sudo su - neo-dash
-cd CSS_SBN_derived
+cd CSS_MPC_toolkit
 git pull origin main
 
 # If requirements changed:
@@ -396,7 +396,7 @@ check:
 
 ```bash
 # Alert if neo_cache is older than 36 hours
-find /home/neo-dash/CSS_SBN_derived/app -name '.neo_cache_*.csv' \
+find /home/neo-dash/CSS_MPC_toolkit/app -name '.neo_cache_*.csv' \
     -mmin +2160 -exec echo "STALE: {}" \;
 ```
 

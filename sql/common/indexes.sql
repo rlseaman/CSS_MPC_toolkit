@@ -1,7 +1,7 @@
 -- ==============================================================================
 -- SHARED INDEX DEFINITIONS
 -- ==============================================================================
--- Project: CSS_SBN_derived
+-- Project: CSS_MPC_toolkit
 --
 -- Performance indexes on MPC/SBN tables used by multiple scripts in this
 -- project.  Safe to run repeatedly (CREATE IF NOT EXISTS).

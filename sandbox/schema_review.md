@@ -1,6 +1,6 @@
 # MPC/SBN Database Schema Review and Value-Added Opportunities
 
-**Project:** CSS_SBN_derived
+**Project:** CSS_MPC_toolkit
 **Authors:** Rob Seaman (Catalina Sky Survey) / Claude (Anthropic)
 **Date:** 2026-02-08
 **Database:** PostgreSQL 15.2, host `sibyl`, database `mpc_sbn`
