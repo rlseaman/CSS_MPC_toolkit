@@ -15,6 +15,7 @@ Then open http://127.0.0.1:8050/ in a browser.
 import hashlib
 import os
 import sys
+import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -1188,9 +1189,45 @@ def _make_comparison_summary(survey_sets, all_desigs, t, height):
 app = Dash(__name__)
 server = app.server  # Flask WSGI server for gunicorn deployment
 
-df, query_timestamp = load_data()
-df_apparition = load_apparition_data()
-year_min, year_max = int(df["disc_year"].min()), int(df["disc_year"].max())
+# ---------------------------------------------------------------------------
+# Data loading — background thread so the server starts immediately
+# ---------------------------------------------------------------------------
+
+# For --refresh-only, load synchronously (no server needed)
+if _REFRESH_ONLY:
+    df, query_timestamp = load_data()
+    df_apparition = load_apparition_data()
+    print("Cache refresh complete.")
+    sys.exit(0)
+
+# For normal operation, load in background thread
+df = None
+df_apparition = None
+query_timestamp = "loading..."
+year_min, year_max = 1990, 2026
+_data_ready = threading.Event()
+_data_error = None
+
+
+def _load_all_data():
+    """Load both datasets in a background thread."""
+    global df, df_apparition, query_timestamp, year_min, year_max, _data_error
+    try:
+        df, query_timestamp = load_data()
+        df_apparition = load_apparition_data()
+        year_min = int(df["disc_year"].min())
+        year_max = int(df["disc_year"].max())
+        print(f"Data ready: {len(df):,} NEOs, "
+              f"{len(df_apparition):,} apparition rows")
+    except Exception as e:
+        _data_error = str(e)
+        print(f"ERROR loading data: {e}")
+    finally:
+        _data_ready.set()
+
+
+_loader_thread = threading.Thread(target=_load_all_data, daemon=True)
+_loader_thread.start()
 
 # Label style helper
 LABEL_STYLE = {"fontFamily": "sans-serif", "fontSize": "13px"}
@@ -1214,6 +1251,9 @@ app.layout = html.Div(
         # ── Refresh banner (shown when cron job is updating caches) ──
         html.Div(id="refresh-banner"),
         dcc.Interval(id="refresh-check", interval=30_000, n_intervals=0),
+        # ── Loading banner (shown while data loads at startup) ────────
+        html.Div(id="loading-banner"),
+        dcc.Interval(id="loading-check", interval=2_000, n_intervals=0),
         # ── Banner: logo + title + shared controls ───────────────────
         html.Div(
             style={"display": "flex", "gap": "15px", "alignItems": "center",
@@ -1242,8 +1282,7 @@ app.layout = html.Div(
                                    "marginBottom": "0", "marginTop": "0"},
                         ),
                         html.P(
-                            f"Source: MPC/SBN database "
-                            f"({len(df):,} NEO discoveries)",
+                            id="subtitle-text",
                             className="subtext",
                             style={"fontFamily": "sans-serif",
                                    "marginTop": "2px",
@@ -1918,35 +1957,83 @@ def check_refresh_status(_n):
 
 
 # ---------------------------------------------------------------------------
+# Loading-banner callback — shown while data loads at startup
+# ---------------------------------------------------------------------------
+
+@app.callback(
+    Output("loading-banner", "children"),
+    Output("loading-check", "disabled"),
+    Output("subtitle-text", "children"),
+    Input("loading-check", "n_intervals"),
+)
+def check_loading_status(_n):
+    if _data_ready.is_set():
+        if _data_error:
+            banner = html.Div(
+                f"Error loading data: {_data_error}",
+                style={
+                    "backgroundColor": "#f8d7da",
+                    "color": "#721c24",
+                    "padding": "10px 20px",
+                    "borderRadius": "4px",
+                    "marginBottom": "10px",
+                    "fontFamily": "sans-serif",
+                    "fontSize": "14px",
+                    "textAlign": "center",
+                    "border": "1px solid #f5c6cb",
+                },
+            )
+            return banner, True, "Data load failed"
+        count = f"{len(df):,}" if df is not None else "?"
+        subtitle = f"Source: MPC/SBN database ({count} NEO discoveries)"
+        return None, True, subtitle
+    return html.Div(
+        "Loading data from cache (please wait)...",
+        style={
+            "backgroundColor": "#cce5ff",
+            "color": "#004085",
+            "padding": "10px 20px",
+            "borderRadius": "4px",
+            "marginBottom": "10px",
+            "fontFamily": "sans-serif",
+            "fontSize": "14px",
+            "textAlign": "center",
+            "border": "1px solid #b8daff",
+        },
+    ), False, "Loading data..."
+
+
+# ---------------------------------------------------------------------------
 # Reset callback — restore default control values
 # ---------------------------------------------------------------------------
 
-# Default values for all resettable controls
-_DEFAULTS = {
-    # Tab 1
-    "year-range": [1995, year_max],
-    "size-filter": "split",
-    "cumulative-toggle": "annual",
-    # Tab 2
-    "h-year-range": [year_min, year_max],
-    "h-range": [16.25, 22.75],
-    "h-yscale": "linear",
-    "h-mode": "cumul",
-    "size-mapping": "neomod3",
-    "comp-labels-toggle": ["show"],
-    # Tab 3
-    "comp-year-range": [2004, year_max],
-    "comp-size-filter": "all",
-    "comp-survey-select": ["Catalina Survey", "Pan-STARRS", "ATLAS"],
-    "comp-precovery": "post_only",
-    # Tab 4
-    "fu-year-range": [2004, year_max],
-    "fu-size-filter": "all",
-    "fu-max-days": 90,
-    # Shared
-    "group-by": "combined",
+def _get_defaults():
+    """Return default control values using current year_min/year_max."""
+    return {
+        # Tab 1
+        "year-range": [1995, year_max],
+        "size-filter": "split",
+        "cumulative-toggle": "annual",
+        # Tab 2
+        "h-year-range": [year_min, year_max],
+        "h-range": [16.25, 22.75],
+        "h-yscale": "linear",
+        "h-mode": "cumul",
+        "size-mapping": "neomod3",
+        "comp-labels-toggle": ["show"],
+        # Tab 3
+        "comp-year-range": [2004, year_max],
+        "comp-size-filter": "all",
+        "comp-survey-select": ["Catalina Survey", "Pan-STARRS", "ATLAS"],
+        "comp-precovery": "post_only",
+        # Tab 4
+        "fu-year-range": [2004, year_max],
+        "fu-size-filter": "all",
+        "fu-max-days": 90,
+        # Shared
+        "group-by": "combined",
     "plot-height": "700",
-}
+    }
 
 _TAB_KEYS = {
     "tab-discovery": {"year-range", "size-filter", "cumulative-toggle"},
@@ -1979,14 +2066,15 @@ _RESET_ORDER = [
 )
 def reset_controls(_tab_clicks, _all_clicks, active_tab):
     triggered = ctx.triggered_id
+    defaults = _get_defaults()
     if triggered == "reset-all-btn":
-        reset_keys = set(_DEFAULTS)
+        reset_keys = set(defaults)
     elif triggered == "reset-tab-btn":
         reset_keys = _TAB_KEYS.get(active_tab, set()) | _SHARED_KEYS
     else:
         raise PreventUpdate
     return tuple(
-        _DEFAULTS[k] if k in reset_keys else no_update
+        defaults[k] if k in reset_keys else no_update
         for k in _RESET_ORDER
     )
 
@@ -2009,6 +2097,8 @@ def reset_controls(_tab_clicks, _all_clicks, active_tab):
 )
 def update_charts(year_range, group_by, size_filter, view_mode, theme_name,
                   plot_height, _tab):
+    if df is None:
+        raise PreventUpdate
     t = theme(theme_name)
     y0, y1 = year_range
     filtered = df[(df["disc_year"] >= y0) & (df["disc_year"] <= y1)]
@@ -2194,6 +2284,8 @@ def update_charts(year_range, group_by, size_filter, view_mode, theme_name,
 def update_h_distribution(h_year_range, group_by, h_range, yscale, h_mode,
                           size_mapping, comp_labels, theme_name, plot_height,
                           _tab):
+    if df is None:
+        raise PreventUpdate
     t = theme(theme_name)
     hy0, hy1 = h_year_range
     # Snap slider values to nearest bin center to avoid floating-point drift
@@ -2533,6 +2625,8 @@ def update_h_distribution(h_year_range, group_by, h_range, yscale, h_mode,
     Input("tabs", "value"),
 )
 def update_neomod3_table(h_year_range, theme_name, _tab):
+    if df is None:
+        raise PreventUpdate
     t = theme(theme_name)
     hy0, hy1 = h_year_range
     filtered = df[(df["disc_year"] >= hy0) & (df["disc_year"] <= hy1)]
@@ -2618,7 +2712,7 @@ def update_neomod3_table(h_year_range, theme_name, _tab):
 )
 def update_comparison(year_range, size_filter, survey_select,
                       precovery, theme_name, plot_height, active_tab):
-    if active_tab != "tab-comparison":
+    if active_tab != "tab-comparison" or df is None or df_apparition is None:
         raise PreventUpdate
 
     t = theme(theme_name)
@@ -2676,7 +2770,7 @@ def update_comparison(year_range, size_filter, survey_select,
 )
 def update_followup(year_range, size_filter, max_days, theme_name,
                     plot_height, active_tab):
-    if active_tab != "tab-followup":
+    if active_tab != "tab-followup" or df is None or df_apparition is None:
         raise PreventUpdate
 
     t = theme(theme_name)
@@ -2718,8 +2812,7 @@ def cap_survey_selection(value):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    if _REFRESH_ONLY:
-        print("Cache refresh complete.")
-        sys.exit(0)
     print("\nStarting Dash server at http://127.0.0.1:8050/")
+    print("Data loading in background..." if not _data_ready.is_set()
+          else "Data ready.")
     app.run(debug=True, use_reloader=False)
