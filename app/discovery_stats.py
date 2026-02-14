@@ -1204,7 +1204,7 @@ if _REFRESH_ONLY:
 df = None
 df_apparition = None
 query_timestamp = "loading..."
-year_min, year_max = 1990, 2026
+year_min, year_max = 1898, 2026
 _data_ready = threading.Event()
 _data_error = None
 
