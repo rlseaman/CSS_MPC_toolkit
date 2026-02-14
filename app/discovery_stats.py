@@ -2815,4 +2815,4 @@ if __name__ == "__main__":
     print("\nStarting Dash server at http://127.0.0.1:8050/")
     print("Data loading in background..." if not _data_ready.is_set()
           else "Data ready.")
-    app.run(debug=True, use_reloader=False)
+    app.run(host="127.0.0.1", debug=True, use_reloader=False)
