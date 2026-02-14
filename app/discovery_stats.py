@@ -588,6 +588,10 @@ def load_data():
     raw, meta_file = _load_cached_query(
         LOAD_SQL, "neo_cache", "NEO discoveries")
 
+    # Sanitize H magnitude: sentinel values (0, -9.99) in mpc_orbits
+    # represent missing data, not real measurements.  Treat as unknown.
+    raw.loc[raw["h"] <= 0, "h"] = np.nan
+
     # Derived columns
     raw["station_name"] = (raw["station_code"].map(STATION_NAMES)
                            .fillna(raw["station_code"]))
