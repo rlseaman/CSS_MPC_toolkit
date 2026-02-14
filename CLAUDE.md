@@ -41,7 +41,7 @@ Survey at the University of Arizona.
 
 ```
 app/                          # Interactive Dash web application
-  discovery_stats.py          #   NEO discovery explorer (main app)
+  discovery_stats.py          #   NEO discovery explorer (4 tabs, ~2400 lines)
   assets/                     #   CSS, logo, static files
 lib/                          # Python library layer
   db.py                       #   DB connections, timed queries, QueryLog
@@ -70,9 +70,9 @@ sandbox/                      # Analysis notes, exploratory outputs
 
 ## Interactive App (`app/discovery_stats.py`)
 
-Dash web application at http://127.0.0.1:8050/ with two tabbed pages:
+Dash web application at http://127.0.0.1:8050/ with four tabbed pages:
 
-### Tab 1: Discovery by Year
+### Tab 1: Discoveries by Year
 - Stacked bar chart of NEO discoveries by year/survey
 - Grouping: Combined, by Project (CNEOS definitions), or by Station
 - Size class filtering with "Split sizes" mode (viridis-colored
@@ -87,16 +87,47 @@ Dash web application at http://127.0.0.1:8050/ with two tabbed pages:
 - Differential or cumulative modes
 - NEOMOD3 reference table with per-bin completeness
 
+### Tab 3: Multi-survey Comparison
+- Venn diagrams (1-3 surveys) showing co-detection during discovery
+  apparitions (observations within +/-200 days of discovery)
+- Survey reach bar chart, pairwise co-detection heatmap, summary stats
+- Precovery toggle, collapsible MPC codes reference
+- Data: `APPARITION_SQL` uses `CROSS JOIN LATERAL` with
+  `AS MATERIALIZED` CTEs for indexed scans (~1-2 min query)
+
+### Tab 4: Follow-up Timing
+- Response curve (CDF): fraction of NEOs observed by 1st/2nd/3rd
+  follow-up survey within N days of discovery
+- Box plots of follow-up time by survey (excludes discoverer's own
+  survey project — only cross-survey follow-up counted)
+- Follow-up network heatmap: discoverer -> first follow-up survey
+- Median follow-up time trend by discovery year with IQR band
+
+### Survey Groupings
+Stations are mapped to project groups via `STATION_TO_PROJECT`:
+- **Catalina Survey** (703, E12, G96) — core CSS telescopes
+- **Catalina Follow-up** (I52, V06, G84) — CSS follow-up telescopes
+- **Pan-STARRS** (F51, F52)
+- **ATLAS** (T05, T07, T08, T03, M22, W68, R17)
+- **Bok NEO Survey** (V00)
+- **Rubin/LSST** (X05)
+- Also: LINEAR, NEAT, Spacewatch, LONEOS, NEOWISE, Other-US, Others
+
 ### Shared Banner Controls
 - CSS logo (linked to catalina.lpl.arizona.edu) at upper left
-- Group by, Plot height, and Theme toggle in the banner
-- CSS custom properties for dark/light theme switching
+- Group by, Plot height, Theme toggle (Light/Dark)
+- Reset buttons: "Tab" (resets current tab), "All" (resets all tabs)
 
 ### Architecture
-- Data: PostgreSQL query cached to CSV (1-day auto-invalidation)
+- **Two SQL queries** cached to CSV (1-day auto-invalidation):
+  - `LOAD_SQL` — discovery data (~43K NEOs, ~30s query)
+  - `APPARITION_SQL` — station-level observations within +/-200 days
+    of discovery (~362K station rows, ~1-2 min query)
+- Both caches load at startup; `--refresh` forces re-query
 - Theming via CSS custom properties set on `#page-container`
 - `SIZE_COLORS` (viridis) for size-class stacking
-- `PROJECT_COLORS` match CNEOS site_all.json exactly
+- `PROJECT_COLORS` match CNEOS site_all.json (with additions)
+- Max 3 surveys enforced for Venn via server-side callback
 
 ### Running
 ```bash
@@ -104,6 +135,13 @@ source venv/bin/activate
 python app/discovery_stats.py        # default: http://127.0.0.1:8050/
 python app/discovery_stats.py --refresh  # force re-query from DB
 ```
+
+### Production Deployment
+For hosted deployment with daily updates:
+1. Cron job runs `python app/discovery_stats.py --refresh` to
+   repopulate both CSV caches
+2. App process starts and loads both caches instantly (~1s)
+3. Users never wait for database queries
 
 ## Development Conventions
 

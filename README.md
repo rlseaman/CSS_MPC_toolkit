@@ -11,6 +11,40 @@ a PostgreSQL database. Catalina Sky Survey maintains a local replica of this
 database on host `sibyl`. This project provides SQL scripts, Python
 libraries, and derived data products useful to the NEO community.
 
+## Interactive Application
+
+### NEO Discovery Statistics Explorer
+
+**App:** [`app/discovery_stats.py`](app/discovery_stats.py)
+
+Interactive Dash web application for exploring NEO discovery statistics,
+survey performance, and follow-up timing. Four tabbed pages:
+
+| Tab | Content |
+|-----|---------|
+| **Discoveries by Year** | Stacked bar chart by year/survey/size class with annual or cumulative views; size distribution histogram; top-15 stations table |
+| **Size Distribution vs. NEOMOD3** | Half-magnitude bin chart comparing MPC discoveries to the NEOMOD3 population model (Nesvorny et al. 2024, Icarus 411); completeness curve with 1-sigma errors; reference table |
+| **Multi-survey Comparison** | Venn diagrams (1–3 surveys) showing co-detection during discovery apparitions (±200 days); pairwise co-detection heatmap; survey reach |
+| **Follow-up Timing** | Response curves showing how quickly other surveys observe newly-discovered NEOs; per-survey response time distributions; follow-up network heatmap; trend by year |
+
+Shared banner controls: survey grouping, plot height, light/dark theme, reset
+buttons. Data sourced from two SQL queries cached to CSV with 1-day
+auto-invalidation.
+
+**Survey groupings:** Catalina Survey (703, G96, E12), Catalina Follow-up
+(I52, V06, G84), Pan-STARRS (F51, F52), ATLAS (T05, T07, T08, T03, M22,
+W68, R17), Bok NEO Survey (V00), Rubin/LSST (X05), LINEAR, NEAT,
+Spacewatch, LONEOS, NEOWISE, and Others.
+
+```bash
+source venv/bin/activate
+python app/discovery_stats.py          # http://127.0.0.1:8050/
+python app/discovery_stats.py --refresh  # force DB re-query
+```
+
+Requires `dash`, `plotly`, `pandas`, `numpy`, `psycopg2` (all in
+`requirements.txt`).
+
 ## Available Data Products
 
 ### NEO Discovery Tracklets
@@ -129,33 +163,46 @@ fragmentation.
 ```
 CSS_SBN_derived/
 ├── README.md                           # This file
-├── PLANNING.md                         # Project roadmap and design decisions
-├── lib/
-│   ├── mpc_convert.py                  # MPC format conversion functions
-│   └── ades_export.py                  # ADES XML/PSV export
+├── CLAUDE.md                           # Claude Code project guide
+├── app/                                # Interactive Dash web application
+│   ├── discovery_stats.py              #   NEO discovery explorer (4 tabs)
+│   └── assets/                         #   CSS, logo, static files
+├── lib/                                # Python library layer
+│   ├── db.py                           #   DB connections, timed queries
+│   ├── orbits.py                       #   Query builders for mpc_orbits
+│   ├── orbit_classes.py                #   Orbit classification, Tisserand
+│   ├── mpc_convert.py                  #   MPC format conversion functions
+│   ├── ades_export.py                  #   ADES XML/PSV export
+│   └── ades_validate.py                #   XSD validation
 ├── sql/
-│   ├── discovery_tracklets.sql         # NEO discovery tracklet statistics
-│   ├── css_utilities_functions.sql       # PostgreSQL conversion functions
-│   ├── ades_export.sql                 # ADES-ready columns from NEOCP
+│   ├── discovery_tracklets.sql         #   NEO discovery tracklet statistics
+│   ├── css_utilities_functions.sql     #   PostgreSQL conversion functions
+│   ├── ades_export.sql                 #   ADES-ready columns from NEOCP
+│   ├── viz/                            #   Reference queries for visualization
 │   ├── common/
-│   │   └── indexes.sql                 # Shared index definitions
+│   │   └── indexes.sql                 #   Shared index definitions
 │   └── debug/
 │       └── discovery_tracklets_diag.sql
 ├── scripts/
-│   ├── run_pipeline.sh                 # Run SQL, validate, upload
-│   ├── validate_output.sh             # Output validation checks
-│   ├── upload_release.sh              # Upload CSV to GitHub Releases
-│   ├── db_health_check.sh            # Database diagnostic toolkit
-│   ├── db_tune_recommendations.sql   # PostgreSQL tuning guide
-│   └── enable_huge_pages.md          # Huge pages setup guide (RHEL 8)
-├── schema/
-│   └── discovery_tracklets.md         # Output schema documentation
-├── sandbox/
-│   ├── schema_review.md               # Comprehensive schema analysis
-│   └── neocp_ades_analysis.md         # NEOCP tables & ADES feasibility
+│   ├── run_pipeline.sh                 #   Run SQL, validate, upload
+│   ├── validate_output.sh              #   Output validation checks
+│   ├── upload_release.sh               #   Upload CSV to GitHub Releases
+│   ├── db_health_check.sh              #   Database diagnostic toolkit
+│   ├── daily_refresh.sh                #   Cron script for daily cache refresh
+│   ├── db_tune_recommendations.sql     #   PostgreSQL tuning guide
+│   └── enable_huge_pages.md            #   Huge pages setup guide (RHEL 8)
+├── notebooks/                          #   Jupyter Lab exploration
+│   ├── 01_query_profiling.ipynb
+│   ├── 02_orbital_elements.ipynb
+│   └── 03_data_quality.ipynb
+├── schema/                             #   ADES format XSD schemas
+│   ├── general.xsd
+│   └── submit.xsd
+├── sandbox/                            #   Analysis notes, exploratory outputs
 └── docs/
-    ├── source_tables.md               # Required MPC/SBN tables and columns
-    └── band_corrections.md            # Photometric band-to-V corrections
+    ├── deployment.md                   #   Server provisioning and operations guide
+    ├── source_tables.md                #   Required MPC/SBN tables and columns
+    └── band_corrections.md             #   Photometric band-to-V corrections
 ```
 
 ## Quick Start
@@ -164,8 +211,8 @@ CSS_SBN_derived/
 
 - PostgreSQL client (`psql`)
 - Access to an MPC/SBN database replica (host `sibyl` by default)
-- Python 3.8+ (for conversion library and ADES export)
-- `psycopg2` (for database-connected Python scripts)
+- Python 3.10+ with `venv/` (pinned in `requirements.txt`)
+- Key packages: `dash`, `plotly`, `pandas`, `numpy`, `psycopg2`
 - `gh` CLI for uploading release assets (optional)
 
 ### Run the Discovery Tracklets Pipeline

@@ -22,7 +22,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from dash import Dash, Input, Output, dcc, html
+from dash import Dash, Input, Output, State, ctx, dcc, html, no_update
+from dash.exceptions import PreventUpdate
 from plotly.subplots import make_subplots
 
 from lib.db import connect, timed_query
@@ -39,6 +40,11 @@ STATION_NAMES = {
     "703": "Catalina",
     "G96": "Mt. Lemmon",
     "E12": "Siding Spring",
+    "I52": "Mt. Lemmon-Steward",
+    "V06": "CSS-Kuiper",
+    "G84": "Mt. Lemmon SkyCenter",
+    "V00": "Kitt Peak-Bok",
+    "X05": "Rubin",
     "F51": "Pan-STARRS 1",
     "F52": "Pan-STARRS 2",
     "T05": "ATLAS-HKO",
@@ -46,6 +52,7 @@ STATION_NAMES = {
     "T03": "ATLAS-Sutherland",
     "M22": "ATLAS-El Sauce",
     "W68": "ATLAS-Río Hurtado",
+    "R17": "ATLAS-TDO",
     "704": "LINEAR",
     "699": "LONEOS",
     "691": "Spacewatch",
@@ -53,9 +60,11 @@ STATION_NAMES = {
     "644": "NEAT-Palomar",
     "608": "NEAT-Haleakala",
     "I41": "ZTF",
-    "I52": "ZTF",
     "C51": "WISE/NEOWISE",
     "C57": "WISE/NEOWISE",
+    "W84": "DECam",
+    "U68": "SynTrack",
+    "U74": "SynTrack 2",
 }
 
 # Station code -> project (for grouped view)
@@ -65,14 +74,24 @@ STATION_TO_PROJECT = {
     "566": "NEAT", "608": "NEAT", "644": "NEAT",
     "691": "Spacewatch", "291": "Spacewatch",
     "699": "LONEOS",
-    "703": "Catalina", "E12": "Catalina", "G96": "Catalina",
-    "I52": "Catalina", "V06": "Catalina",
+    "703": "Catalina Survey", "E12": "Catalina Survey",
+    "G96": "Catalina Survey",
+    "I52": "Catalina Follow-up", "V06": "Catalina Follow-up",
+    "G84": "Catalina Follow-up",
+    "V00": "Bok NEO Survey",
     "F51": "Pan-STARRS", "F52": "Pan-STARRS",
     "C51": "NEOWISE", "C57": "NEOWISE",
     "T05": "ATLAS", "T07": "ATLAS", "T08": "ATLAS",
-    "T03": "ATLAS", "M22": "ATLAS", "W68": "ATLAS",
-    "I41": "Other-US", "U68": "Other-US", "V00": "Other-US", "W84": "Other-US",
+    "T03": "ATLAS", "M22": "ATLAS", "W68": "ATLAS", "R17": "ATLAS",
+    "X05": "Rubin/LSST",
+    "I41": "Other-US", "U68": "Other-US", "U74": "Other-US",
+    "W84": "Other-US",
 }
+
+# Reverse mapping: project -> list of station codes
+PROJECT_STATIONS = {}
+for _stn, _proj in STATION_TO_PROJECT.items():
+    PROJECT_STATIONS.setdefault(_proj, []).append(_stn)
 
 # Stacking order matches CNEOS (bottom to top in the bar chart).
 # Plotly stacks traces in list order, so first entry = bottom of stack.
@@ -81,10 +100,13 @@ PROJECT_ORDER = [
     "NEAT",
     "Spacewatch",
     "LONEOS",
-    "Catalina",
+    "Catalina Survey",
+    "Catalina Follow-up",
     "Pan-STARRS",
     "NEOWISE",
     "ATLAS",
+    "Bok NEO Survey",
+    "Rubin/LSST",
     "Other-US",
     "Others",
 ]
@@ -95,10 +117,13 @@ PROJECT_COLORS = {
     "NEAT": "#f58231",
     "Spacewatch": "#e6194B",
     "LONEOS": "#ffe119",
-    "Catalina": "#3cb44b",
+    "Catalina Survey": "#3cb44b",
+    "Catalina Follow-up": "#aaffc3",
     "Pan-STARRS": "#f032e6",
     "NEOWISE": "#469990",
     "ATLAS": "#42d4f4",
+    "Bok NEO Survey": "#dcbeff",
+    "Rubin/LSST": "#800000",
     "Other-US": "#9A6324",
     "Others": "#a9a9a9",
 }
@@ -311,62 +336,128 @@ ORDER BY di.obstime
 """
 
 
+APPARITION_SQL = """
+WITH neo_list AS MATERIALIZED (
+    SELECT
+        mo.unpacked_primary_provisional_designation AS unpacked_desig,
+        ni.permid IS NOT NULL AS is_numbered,
+        ni.permid AS asteroid_number,
+        CASE WHEN ni.permid IS NULL
+             THEN mo.unpacked_primary_provisional_designation
+        END AS provisional_desig,
+        ni.unpacked_primary_provisional_designation AS num_provid
+    FROM mpc_orbits mo
+    LEFT JOIN numbered_identifications ni
+        ON ni.packed_primary_provisional_designation
+         = mo.packed_primary_provisional_designation
+    WHERE mo.q <= 1.30
+),
+discovery_obs_all AS (
+    SELECT neo.unpacked_desig, obs.stn, obs.obstime
+    FROM neo_list neo
+    INNER JOIN obs_sbn obs ON obs.permid = neo.asteroid_number
+    WHERE neo.is_numbered AND obs.disc = '*'
+    UNION ALL
+    SELECT neo.unpacked_desig, obs.stn, obs.obstime
+    FROM neo_list neo
+    INNER JOIN obs_sbn obs ON obs.provid = neo.provisional_desig
+    WHERE NOT neo.is_numbered AND obs.disc = '*'
+    UNION ALL
+    SELECT neo.unpacked_desig, obs.stn, obs.obstime
+    FROM neo_list neo
+    INNER JOIN obs_sbn obs ON obs.provid = neo.num_provid
+    WHERE neo.num_provid IS NOT NULL AND obs.disc = '*'
+),
+discovery_info AS (
+    SELECT DISTINCT ON (unpacked_desig)
+        unpacked_desig, stn, obstime
+    FROM discovery_obs_all
+    ORDER BY unpacked_desig, obstime
+),
+neo_discovery AS MATERIALIZED (
+    SELECT
+        di.unpacked_desig AS designation,
+        di.obstime AS disc_obstime,
+        neo.asteroid_number,
+        COALESCE(neo.provisional_desig, neo.num_provid) AS provid_key
+    FROM discovery_info di
+    JOIN neo_list neo ON neo.unpacked_desig = di.unpacked_desig
+)
+SELECT nd.designation, o.station_code, nd.disc_obstime,
+       o.first_obs, o.first_post_disc
+FROM neo_discovery nd
+CROSS JOIN LATERAL (
+    SELECT stn AS station_code,
+           MIN(obstime) AS first_obs,
+           MIN(CASE WHEN obstime >= nd.disc_obstime
+                    THEN obstime END) AS first_post_disc
+    FROM obs_sbn
+    WHERE (permid = nd.asteroid_number OR provid = nd.provid_key)
+      AND obstime BETWEEN nd.disc_obstime - INTERVAL '200 days'
+                    AND nd.disc_obstime + INTERVAL '200 days'
+    GROUP BY stn
+) o
+"""
+
 CACHE_MAX_AGE_SEC = 86400  # 1 day
 
-# Cache filename embeds a short hash of the SQL so it auto-invalidates
-# when the query changes.
-_SQL_HASH = hashlib.md5(LOAD_SQL.encode()).hexdigest()[:8]
-CACHE_FILE = os.path.join(_APP_DIR, f".neo_cache_{_SQL_HASH}.csv")
-CACHE_META = CACHE_FILE.replace(".csv", ".meta")  # stores query timestamp
+# Parse flags once at import time (prevent reloader from re-querying)
+_REFRESH_ONLY = "--refresh-only" in sys.argv
+if _REFRESH_ONLY:
+    sys.argv.remove("--refresh-only")
+_FORCE_REFRESH = _REFRESH_ONLY or "--refresh" in sys.argv
+if "--refresh" in sys.argv:
+    sys.argv.remove("--refresh")
 
 
-def _read_query_timestamp():
-    """Read the ISO timestamp from the cache metadata file."""
-    if os.path.exists(CACHE_META):
-        with open(CACHE_META) as f:
-            return f.read().strip()
-    return "unknown"
+def _load_cached_query(sql, prefix, label):
+    """Load query result from cache file or database.
+
+    Returns (DataFrame, meta_file_path).
+    """
+    sql_hash = hashlib.md5(sql.encode()).hexdigest()[:8]
+    cache_file = os.path.join(_APP_DIR, f".{prefix}_{sql_hash}.csv")
+    meta_file = cache_file.replace(".csv", ".meta")
+
+    use_cache = False
+    if not _FORCE_REFRESH and os.path.exists(cache_file):
+        age = time.time() - os.path.getmtime(cache_file)
+        if age < CACHE_MAX_AGE_SEC:
+            use_cache = True
+            print(f"Loading cached {label} from {cache_file} "
+                  f"(age: {age/3600:.1f} h)")
+        else:
+            print(f"{label} cache is {age/3600:.1f} h old "
+                  "\u2014 refreshing")
+    elif _FORCE_REFRESH:
+        print(f"--refresh: re-querying {label}")
+
+    if use_cache:
+        return pd.read_csv(cache_file), meta_file
+
+    print(f"Querying database for {label}...")
+    from datetime import datetime, timezone
+    query_time = datetime.now(timezone.utc)
+    with connect() as conn:
+        result = timed_query(conn, sql, label=label)
+    result.to_csv(cache_file, index=False)
+    with open(meta_file, "w") as f:
+        f.write(query_time.strftime("%Y-%m-%d %H:%M UTC"))
+    print(f"Cached {len(result):,} rows to {cache_file}")
+    return result, meta_file
 
 
 def load_data():
-    """Load NEO discovery data from DB or cache (refreshed daily).
-
-    Use ``--refresh`` on the command line to force a re-query.
-    """
-    force = "--refresh" in sys.argv
-    if force:
-        sys.argv.remove("--refresh")  # prevent reloader from re-querying
-
-    use_cache = False
-    if not force and os.path.exists(CACHE_FILE):
-        age = time.time() - os.path.getmtime(CACHE_FILE)
-        if age < CACHE_MAX_AGE_SEC:
-            use_cache = True
-            print(f"Loading cached data from {CACHE_FILE} "
-                  f"(age: {age/3600:.1f} h)")
-        else:
-            print(f"Cache is {age/3600:.1f} h old \u2014 refreshing from database")
-    elif force:
-        print("--refresh flag: forcing re-query")
-
-    if use_cache:
-        df = pd.read_csv(CACHE_FILE)
-    else:
-        print("Querying database (this takes ~30s)...")
-        from datetime import datetime, timezone
-        query_time = datetime.now(timezone.utc)
-        with connect() as conn:
-            df = timed_query(conn, LOAD_SQL, label="NEO discoveries for Dash")
-        df.to_csv(CACHE_FILE, index=False)
-        with open(CACHE_META, "w") as f:
-            f.write(query_time.strftime("%Y-%m-%d %H:%M UTC"))
-        print(f"Cached {len(df):,} rows to {CACHE_FILE}")
+    """Load NEO discovery data from DB or cache (refreshed daily)."""
+    raw, meta_file = _load_cached_query(
+        LOAD_SQL, "neo_cache", "NEO discoveries")
 
     # Derived columns
-    df["station_name"] = df["station_code"].map(STATION_NAMES).fillna(df["station_code"])
-    df["project"] = df["station_code"].map(STATION_TO_PROJECT).fillna("Others")
+    raw["station_name"] = (raw["station_code"].map(STATION_NAMES)
+                           .fillna(raw["station_code"]))
+    raw["project"] = (raw["station_code"].map(STATION_TO_PROJECT)
+                      .fillna("Others"))
 
-    # H magnitude size bin
     def h_bin(h):
         if pd.isna(h):
             return "Unknown H"
@@ -375,16 +466,719 @@ def load_data():
                 return label
         return "Unknown H"
 
-    df["size_class"] = df["h"].apply(h_bin)
+    raw["size_class"] = raw["h"].apply(h_bin)
 
     # Pre-compute half-magnitude bin index
-    df["h_bin_idx"] = np.where(
-        df["h"].notna(),
-        np.digitize(df["h"], H_BIN_EDGES) - 1,
+    raw["h_bin_idx"] = np.where(
+        raw["h"].notna(),
+        np.digitize(raw["h"], H_BIN_EDGES) - 1,
         -1,
     ).astype(int)
 
-    return df
+    # Read query timestamp
+    if os.path.exists(meta_file):
+        with open(meta_file) as f:
+            timestamp = f.read().strip()
+    else:
+        timestamp = "unknown"
+
+    return raw, timestamp
+
+
+# ---------------------------------------------------------------------------
+# Apparition data: lazy-loaded on first Tab 3 access
+# ---------------------------------------------------------------------------
+
+def _postprocess_apparition(df_raw):
+    """Add derived columns to station-level apparition data from SQL."""
+    df_raw = df_raw.copy()
+    df_raw["disc_obstime"] = pd.to_datetime(df_raw["disc_obstime"])
+    df_raw["first_obs"] = pd.to_datetime(df_raw["first_obs"])
+    df_raw["first_post_disc"] = pd.to_datetime(df_raw["first_post_disc"])
+    df_raw["project"] = (df_raw["station_code"].map(STATION_TO_PROJECT)
+                         .fillna("Others"))
+    df_raw["days_from_disc"] = (
+        (df_raw["first_obs"] - df_raw["disc_obstime"])
+        .dt.total_seconds() / 86400
+    )
+    return df_raw
+
+
+_df_apparition = None
+
+
+def load_apparition_data():
+    """Lazy-load apparition station data (cache or query)."""
+    global _df_apparition
+    if _df_apparition is not None:
+        return _df_apparition
+
+    sql_hash = hashlib.md5(APPARITION_SQL.encode()).hexdigest()[:8]
+    cache_file = os.path.join(
+        _APP_DIR, f".apparition_cache_{sql_hash}.csv")
+    meta_file = cache_file.replace(".csv", ".meta")
+
+    use_cache = False
+    if not _FORCE_REFRESH and os.path.exists(cache_file):
+        age = time.time() - os.path.getmtime(cache_file)
+        if age < CACHE_MAX_AGE_SEC:
+            use_cache = True
+            print(f"Loading cached apparition data from "
+                  f"{cache_file} (age: {age/3600:.1f} h)")
+        else:
+            print(f"Apparition cache is {age/3600:.1f} h old "
+                  "\u2014 refreshing")
+    elif _FORCE_REFRESH:
+        print("--refresh: re-querying apparition data")
+
+    if use_cache:
+        _df_apparition = pd.read_csv(
+            cache_file,
+            parse_dates=["first_obs", "disc_obstime",
+                         "first_post_disc"])
+        print(f"Loaded {len(_df_apparition):,} cached station rows")
+        return _df_apparition
+
+    print("Querying database for apparition observations "
+          "(this takes 3\u20138 min on first run)...")
+    from datetime import datetime, timezone
+    query_time = datetime.now(timezone.utc)
+    with connect() as conn:
+        raw = timed_query(conn, APPARITION_SQL,
+                          label="apparition observations")
+    print(f"Got {len(raw):,} station-level rows")
+
+    _df_apparition = _postprocess_apparition(raw)
+    _df_apparition.to_csv(cache_file, index=False)
+    with open(meta_file, "w") as f:
+        f.write(query_time.strftime("%Y-%m-%d %H:%M UTC"))
+    print(f"Cached {len(_df_apparition):,} rows to {cache_file}")
+
+    return _df_apparition
+
+
+# ---------------------------------------------------------------------------
+# Multi-survey comparison helpers
+# ---------------------------------------------------------------------------
+
+def build_survey_sets(df_main, df_app, year_range, size_filter,
+                      exclude_precovery):
+    """Build per-project sets of NEO designations from apparition data.
+
+    Returns (dict[project \u2192 set[designation]], set[designation] eligible).
+    """
+    y0, y1 = year_range
+    eligible = df_main[
+        (df_main["disc_year"] >= y0) & (df_main["disc_year"] <= y1)]
+    if size_filter != "all":
+        eligible = eligible[eligible["size_class"] == size_filter]
+    desig_set = set(eligible["designation"])
+
+    tkl = df_app[df_app["designation"].isin(desig_set)]
+    if exclude_precovery:
+        tkl = tkl[tkl["first_post_disc"].notna()]
+
+    survey_sets = {}
+    for proj, grp in tkl.groupby("project"):
+        survey_sets[proj] = set(grp["designation"])
+    return survey_sets, desig_set
+
+
+# ---------------------------------------------------------------------------
+# Follow-up timing helpers
+# ---------------------------------------------------------------------------
+
+def build_followup_data(df_main, df_app, year_range, size_filter):
+    """Compute per-survey follow-up timing from apparition data.
+
+    For each NEO, identifies when each *different* survey project first
+    observed it after discovery.  The discovery survey's own stations are
+    excluded so only cross-survey follow-up is counted.
+
+    Returns (DataFrame, int total_neos).
+    DataFrame columns: designation, project (follow-up), disc_project,
+        disc_year, days_to_followup, fu_rank.
+    fu_rank = 1 means this project was the first outside survey to observe.
+    """
+    y0, y1 = year_range
+    eligible = df_main[
+        (df_main["disc_year"] >= y0) & (df_main["disc_year"] <= y1)]
+    if size_filter != "all":
+        eligible = eligible[eligible["size_class"] == size_filter]
+
+    if len(eligible) == 0:
+        return pd.DataFrame(), 0
+
+    disc_info = eligible.set_index("designation")[
+        ["station_code", "project", "disc_year"]].rename(
+        columns={"station_code": "disc_station",
+                 "project": "disc_project"})
+
+    app = df_app[
+        df_app["designation"].isin(disc_info.index)
+        & df_app["first_post_disc"].notna()
+    ].copy()
+
+    if len(app) == 0:
+        return pd.DataFrame(), len(eligible)
+
+    app = app.join(disc_info, on="designation")
+
+    # Exclude same survey project as the discoverer
+    app = app[app["project"] != app["disc_project"]]
+
+    if len(app) == 0:
+        return pd.DataFrame(), len(eligible)
+
+    app["days_to_followup"] = (
+        (app["first_post_disc"] - app["disc_obstime"])
+        .dt.total_seconds() / 86400
+    )
+
+    # Aggregate to project level: fastest station per project per NEO
+    app = (app.groupby(["designation", "project", "disc_project",
+                        "disc_year"])
+           ["days_to_followup"].min().reset_index())
+
+    # Rank projects by follow-up speed within each NEO
+    app = app.sort_values(["designation", "days_to_followup"])
+    app["fu_rank"] = app.groupby("designation").cumcount() + 1
+
+    return app, len(eligible)
+
+
+def _make_response_curve(fu_data, total_neos, max_days, t, height):
+    """CDF: fraction of NEOs with N+ follow-up surveys within X days."""
+    fig = go.Figure()
+
+    colors = ["#4363d8", "#f58231", "#3cb44b"]
+    labels = ["1st follow-up survey", "2nd survey", "3rd survey"]
+
+    for rank in [1, 2, 3]:
+        days = (fu_data[fu_data["fu_rank"] == rank]["days_to_followup"]
+                .sort_values().values)
+        days = days[days <= max_days]
+        if len(days) == 0:
+            continue
+        y = np.arange(1, len(days) + 1) / total_neos * 100
+        fig.add_trace(go.Scatter(
+            x=days, y=y, mode="lines",
+            name=labels[rank - 1],
+            line=dict(color=colors[rank - 1], width=2.5),
+            hovertemplate=(
+                f"{labels[rank - 1]}<br>"
+                "Day %{x:.0f}: %{y:.1f}% of NEOs"
+                "<extra></extra>"
+            ),
+        ))
+
+    fig.update_layout(
+        template=t["template"],
+        paper_bgcolor=t["paper"], plot_bgcolor=t["plot"],
+        height=height,
+        title="Follow-up response curve",
+        xaxis=dict(title="Days from discovery", range=[0, max_days]),
+        yaxis=dict(title="% of NEOs observed", range=[0, 105]),
+        legend=dict(yanchor="bottom", y=0.02, xanchor="right", x=0.98),
+        margin=dict(l=60, r=20, t=60, b=60),
+    )
+    return fig
+
+
+def _make_survey_response_box(fu_data, max_days, t, height):
+    """Box plots of follow-up time by survey (horizontal)."""
+    if len(fu_data) == 0:
+        return _empty_figure("No follow-up data", t, height)
+
+    proj_data = fu_data[fu_data["days_to_followup"] <= max_days]
+
+    stats = (proj_data.groupby("project")["days_to_followup"]
+             .agg(["median", "count"]).reset_index())
+    stats = stats[stats["count"] >= 10].sort_values("median",
+                                                     ascending=False)
+
+    fig = go.Figure()
+    for _, row in stats.iterrows():
+        proj = row["project"]
+        subset = proj_data[proj_data["project"] == proj]
+        color = PROJECT_COLORS.get(proj, "#a9a9a9")
+        fig.add_trace(go.Box(
+            x=subset["days_to_followup"],
+            name=proj,
+            marker_color=color,
+            line_color=color,
+            boxmean=True,
+            orientation="h",
+        ))
+
+    fig.update_layout(
+        template=t["template"],
+        paper_bgcolor=t["paper"], plot_bgcolor=t["plot"],
+        height=height,
+        title="Follow-up response time by survey",
+        xaxis=dict(title="Days from discovery", range=[0, max_days]),
+        showlegend=False,
+        margin=dict(l=140, r=20, t=60, b=60),
+    )
+    return fig
+
+
+def _make_followup_network(fu_data, t, height):
+    """Heatmap: discovery survey -> first follow-up survey."""
+    if len(fu_data) == 0:
+        return _empty_figure("No follow-up data", t, height)
+
+    first_fu = fu_data[fu_data["fu_rank"] == 1]
+
+    pairs = (first_fu.groupby(["disc_project", "project"])
+             .agg(count=("days_to_followup", "size"),
+                  median_days=("days_to_followup", "median"))
+             .reset_index())
+
+    disc_surveys = (first_fu["disc_project"].value_counts()
+                    .head(8).index.tolist())
+    fu_surveys = (first_fu["project"].value_counts()
+                  .head(8).index.tolist())
+
+    if len(disc_surveys) < 2 or len(fu_surveys) < 2:
+        return _empty_figure(
+            "Not enough survey pairs for heatmap", t, height)
+
+    n_d, n_f = len(disc_surveys), len(fu_surveys)
+    matrix = np.zeros((n_d, n_f))
+    text_matrix = [[""] * n_f for _ in range(n_d)]
+    hover_matrix = [[""] * n_f for _ in range(n_d)]
+
+    for _, row in pairs.iterrows():
+        if (row["disc_project"] in disc_surveys
+                and row["project"] in fu_surveys):
+            i = disc_surveys.index(row["disc_project"])
+            j = fu_surveys.index(row["project"])
+            matrix[i][j] = row["count"]
+            text_matrix[i][j] = f"{int(row['count']):,}"
+            hover_matrix[i][j] = (
+                f"{row['disc_project']} \u2192 {row['project']}<br>"
+                f"{int(row['count']):,} NEOs<br>"
+                f"Median: {row['median_days']:.0f} days"
+            )
+
+    fig = go.Figure(go.Heatmap(
+        z=matrix, x=fu_surveys, y=disc_surveys,
+        text=text_matrix,
+        texttemplate="%{text}",
+        textfont=dict(size=10),
+        colorscale="Blues",
+        showscale=True,
+        colorbar=dict(title="NEOs"),
+        hovertext=hover_matrix,
+        hovertemplate="%{hovertext}<extra></extra>",
+    ))
+    fig.update_layout(
+        template=t["template"],
+        paper_bgcolor=t["paper"],
+        height=height,
+        title="First follow-up survey network",
+        xaxis=dict(title="First follow-up by", side="bottom"),
+        yaxis=dict(title="Discovered by", autorange="reversed"),
+        margin=dict(l=140, r=20, t=60, b=80),
+    )
+    return fig
+
+
+def _make_followup_trend(fu_data, t, height):
+    """Median days to first follow-up by discovery year."""
+    if len(fu_data) == 0:
+        return _empty_figure("No follow-up data", t, height)
+
+    first_fu = fu_data[fu_data["fu_rank"] == 1]
+
+    by_year = first_fu.groupby("disc_year")["days_to_followup"].agg(
+        ["median", "count"]).reset_index()
+    q25 = first_fu.groupby("disc_year")["days_to_followup"].quantile(
+        0.25).reset_index(name="q25")
+    q75 = first_fu.groupby("disc_year")["days_to_followup"].quantile(
+        0.75).reset_index(name="q75")
+    by_year = by_year.merge(q25, on="disc_year").merge(q75, on="disc_year")
+    by_year = by_year[by_year["count"] >= 5]
+
+    if len(by_year) == 0:
+        return _empty_figure("Not enough data for trend", t, height)
+
+    fig = go.Figure()
+
+    # IQR band
+    fig.add_trace(go.Scatter(
+        x=list(by_year["disc_year"]) + list(by_year["disc_year"])[::-1],
+        y=list(by_year["q75"]) + list(by_year["q25"])[::-1],
+        fill="toself",
+        fillcolor="rgba(67, 99, 216, 0.15)",
+        line=dict(width=0),
+        name="25th\u201375th percentile",
+        hoverinfo="skip",
+    ))
+
+    # Median line
+    fig.add_trace(go.Scatter(
+        x=by_year["disc_year"], y=by_year["median"],
+        mode="lines+markers",
+        name="Median days",
+        line=dict(color="#4363d8", width=2.5),
+        marker=dict(size=6),
+        customdata=np.stack([
+            by_year["q25"].values, by_year["q75"].values,
+            by_year["count"].values,
+        ], axis=-1),
+        hovertemplate=(
+            "Year %{x}<br>"
+            "Median: %{y:.1f} days<br>"
+            "IQR: %{customdata[0]:.0f}\u2013%{customdata[1]:.0f} days<br>"
+            "N=%{customdata[2]:,.0f} NEOs"
+            "<extra></extra>"
+        ),
+    ))
+
+    fig.update_layout(
+        template=t["template"],
+        paper_bgcolor=t["paper"], plot_bgcolor=t["plot"],
+        height=height,
+        title="Median days to first follow-up by year",
+        xaxis=dict(title="Discovery year", dtick=5),
+        yaxis=dict(title="Days to first follow-up"),
+        legend=dict(yanchor="top", y=0.98, xanchor="right", x=0.98),
+        margin=dict(l=60, r=20, t=60, b=60),
+    )
+    return fig
+
+
+def _hex_to_rgba(hex_color, alpha=0.25):
+    """Convert hex color to rgba string."""
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+
+def _empty_figure(message, t, height):
+    """Return a blank figure with a centered message."""
+    fig = go.Figure()
+    fig.update_layout(
+        template=t["template"],
+        paper_bgcolor=t["paper"], plot_bgcolor=t["paper"],
+        height=height,
+        xaxis=dict(visible=False),
+        yaxis=dict(visible=False),
+        annotations=[dict(
+            text=message, x=0.5, y=0.5,
+            xref="paper", yref="paper",
+            showarrow=False,
+            font=dict(size=16, color=t["subtext"]),
+        )],
+    )
+    return fig
+
+
+def _circle_trace(cx, cy, r, color, name):
+    """Return a go.Scatter trace drawing a filled circle."""
+    theta = np.linspace(0, 2 * np.pi, 80)
+    return go.Scatter(
+        x=cx + r * np.cos(theta),
+        y=cy + r * np.sin(theta),
+        mode="lines",
+        fill="toself",
+        fillcolor=_hex_to_rgba(color, 0.25),
+        line=dict(color=color, width=2.5),
+        name=name,
+        showlegend=False,
+        hoverinfo="skip",
+    )
+
+
+def _make_venn1(s, name, color, t, height):
+    """Create a single-set diagram showing one circle with its count."""
+    fig = go.Figure()
+    cx, cy, r = 5.0, 3.5, 2.5
+    fig.add_trace(_circle_trace(cx, cy, r, color, name))
+    fig.add_annotation(
+        x=cx, y=cy, text=f"<b>{len(s):,}</b>",
+        showarrow=False, font=dict(size=24, color=t["text"]))
+    fig.add_annotation(
+        x=cx, y=cy + r + 0.5,
+        text=f"<b>{name}</b>",
+        showarrow=False, font=dict(size=14, color=color))
+    fig.update_layout(
+        template=t["template"],
+        paper_bgcolor=t["paper"], plot_bgcolor=t["paper"],
+        height=height,
+        title="NEOs detected during discovery apparition",
+        xaxis=dict(range=[0, 10], showgrid=False, zeroline=False,
+                   showticklabels=False, visible=False),
+        yaxis=dict(range=[-0.5, 7.5], showgrid=False, zeroline=False,
+                   showticklabels=False, visible=False,
+                   scaleanchor="x"),
+        margin=dict(l=20, r=20, t=60, b=40),
+    )
+    return fig
+
+
+def _make_venn2(sets, names, colors, t, height):
+    """Create a 2-set Venn diagram using filled scatter circles."""
+    A, B = sets
+    a_only = len(A - B)
+    b_only = len(B - A)
+    both = len(A & B)
+
+    fig = go.Figure()
+
+    r = 2.3
+    cx = [3.3, 6.7]
+    cy = [3.5, 3.5]
+
+    for i in range(2):
+        fig.add_trace(_circle_trace(
+            cx[i], cy[i], r, colors[i], names[i]))
+
+    # Region counts
+    fig.add_annotation(x=2.3, y=3.5, text=f"<b>{a_only:,}</b>",
+                       showarrow=False,
+                       font=dict(size=20, color=t["text"]))
+    fig.add_annotation(x=5.0, y=3.5, text=f"<b>{both:,}</b>",
+                       showarrow=False,
+                       font=dict(size=20, color=t["text"]))
+    fig.add_annotation(x=7.7, y=3.5, text=f"<b>{b_only:,}</b>",
+                       showarrow=False,
+                       font=dict(size=20, color=t["text"]))
+
+    # Set labels above circles
+    for i in range(2):
+        fig.add_annotation(
+            x=cx[i], y=cy[i] + r + 0.5,
+            text=f"<b>{names[i]}</b><br>({len(sets[i]):,} total)",
+            showarrow=False,
+            font=dict(size=13, color=colors[i]))
+
+    fig.add_annotation(
+        x=5.0, y=0.3,
+        text="Circle sizes not proportional \u2014 see counts",
+        showarrow=False,
+        font=dict(size=10, color=t["subtext"]))
+
+    fig.update_layout(
+        template=t["template"],
+        paper_bgcolor=t["paper"], plot_bgcolor=t["paper"],
+        height=height,
+        title="NEOs co-detected during discovery apparition",
+        xaxis=dict(range=[-0.5, 10.5], showgrid=False,
+                   zeroline=False, showticklabels=False,
+                   visible=False),
+        yaxis=dict(range=[-0.5, 7.5], showgrid=False,
+                   zeroline=False, showticklabels=False,
+                   visible=False, scaleanchor="x"),
+        margin=dict(l=20, r=20, t=60, b=40),
+    )
+    return fig
+
+
+def _make_venn3(sets, names, colors, t, height):
+    """Create a 3-set Venn diagram using filled scatter circles."""
+    A, B, C = sets
+    abc = A & B & C
+    ab_only = (A & B) - C
+    ac_only = (A & C) - B
+    bc_only = (B & C) - A
+    a_only = A - B - C
+    b_only = B - A - C
+    c_only = C - A - B
+
+    fig = go.Figure()
+
+    r = 2.2
+    cx = [3.5, 6.5, 5.0]
+    cy = [4.8, 4.8, 2.2]
+
+    for i in range(3):
+        fig.add_trace(_circle_trace(
+            cx[i], cy[i], r, colors[i], names[i]))
+
+    # Region annotations (positions verified against circle geometry)
+    regions = [
+        (2.0, 5.8, a_only),
+        (8.0, 5.8, b_only),
+        (5.0, 0.5, c_only),
+        (5.0, 6.0, ab_only),
+        (3.4, 2.8, ac_only),
+        (6.6, 2.8, bc_only),
+        (5.0, 3.9, abc),
+    ]
+    for x, y, val in regions:
+        fig.add_annotation(
+            x=x, y=y, text=f"<b>{len(val):,}</b>",
+            showarrow=False, font=dict(size=16, color=t["text"]))
+
+    # Set labels
+    label_pos = [(3.5, 7.5), (6.5, 7.5), (5.0, -0.5)]
+    for i in range(3):
+        fig.add_annotation(
+            x=label_pos[i][0], y=label_pos[i][1],
+            text=f"<b>{names[i]}</b><br>({len(sets[i]):,} total)",
+            showarrow=False,
+            font=dict(size=12, color=colors[i]))
+
+    fig.add_annotation(
+        x=5.0, y=-1.0,
+        text="Circle sizes not proportional \u2014 see counts",
+        showarrow=False,
+        font=dict(size=10, color=t["subtext"]))
+
+    fig.update_layout(
+        template=t["template"],
+        paper_bgcolor=t["paper"], plot_bgcolor=t["paper"],
+        height=height,
+        title="NEOs co-detected during discovery apparition",
+        xaxis=dict(range=[-0.5, 10.5], showgrid=False,
+                   zeroline=False, showticklabels=False,
+                   visible=False),
+        yaxis=dict(range=[-1.5, 8.5], showgrid=False,
+                   zeroline=False, showticklabels=False,
+                   visible=False, scaleanchor="x"),
+        margin=dict(l=20, r=20, t=60, b=40),
+    )
+    return fig
+
+
+def _make_survey_reach(survey_sets, t, height):
+    """Horizontal bar chart of unique NEOs detected per survey."""
+    items = sorted(survey_sets.items(), key=lambda x: len(x[1]))
+    names = [k for k, v in items]
+    counts = [len(v) for k, v in items]
+    bar_colors = [PROJECT_COLORS.get(n, "#a9a9a9") for n in names]
+
+    fig = go.Figure(go.Bar(
+        y=names, x=counts, orientation="h",
+        marker_color=bar_colors,
+        hovertemplate="%{y}: %{x:,} NEOs<extra></extra>",
+        text=[f"{c:,}" for c in counts],
+        textposition="outside",
+    ))
+    fig.update_layout(
+        template=t["template"],
+        paper_bgcolor=t["paper"], plot_bgcolor=t["plot"],
+        title="NEOs detected per survey (apparition window)",
+        xaxis_title="Unique NEOs",
+        height=height,
+        margin=dict(l=120, r=60),
+    )
+    return fig
+
+
+def _make_pairwise_heatmap(survey_sets, t, height):
+    """Asymmetric co-detection percentage matrix."""
+    names = sorted(survey_sets.keys(),
+                   key=lambda n: -len(survey_sets[n]))
+    # Keep only surveys with meaningful detection counts
+    names = [n for n in names if len(survey_sets[n]) >= 10]
+    if len(names) < 2:
+        return _empty_figure(
+            "Not enough surveys for heatmap", t, height)
+
+    n = len(names)
+    matrix = np.zeros((n, n))
+    text_matrix = [[""] * n for _ in range(n)]
+
+    for i, ni in enumerate(names):
+        si = survey_sets[ni]
+        for j, nj in enumerate(names):
+            sj = survey_sets[nj]
+            overlap = len(si & sj)
+            pct = overlap / len(si) * 100 if len(si) > 0 else 0
+            matrix[i][j] = pct
+            if i == j:
+                text_matrix[i][j] = f"{len(si):,}"
+            else:
+                text_matrix[i][j] = f"{pct:.0f}%"
+
+    fig = go.Figure(go.Heatmap(
+        z=matrix, x=names, y=names,
+        text=text_matrix,
+        texttemplate="%{text}",
+        textfont=dict(size=11),
+        colorscale="Blues",
+        zmin=0, zmax=100,
+        showscale=False,
+        hovertemplate=(
+            "%{y} \u2192 %{x}: %{text}<extra></extra>"),
+    ))
+    fig.update_layout(
+        template=t["template"],
+        paper_bgcolor=t["paper"],
+        title="Pairwise co-detection (% of row survey's NEOs)",
+        height=height,
+        xaxis=dict(title="Also detected by", side="bottom"),
+        yaxis=dict(title="Survey", autorange="reversed"),
+        margin=dict(l=120, r=20, t=60, b=80),
+    )
+    return fig
+
+
+def _make_comparison_summary(survey_sets, all_desigs, t, height):
+    """Summary statistics table for multi-survey comparison."""
+    desig_survey_count = {}
+    for desig in all_desigs:
+        desig_survey_count[desig] = sum(
+            1 for s in survey_sets.values() if desig in s)
+
+    total = len(all_desigs)
+    detected_any = sum(
+        1 for n in desig_survey_count.values() if n > 0)
+    by_1 = sum(1 for n in desig_survey_count.values() if n == 1)
+    by_2 = sum(1 for n in desig_survey_count.values() if n == 2)
+    by_3plus = sum(1 for n in desig_survey_count.values() if n >= 3)
+    survey_counts = [n for n in desig_survey_count.values() if n > 0]
+    mean_s = np.mean(survey_counts) if survey_counts else 0
+    median_s = np.median(survey_counts) if survey_counts else 0
+
+    def pct(n):
+        return f" ({n / total * 100:.1f}%)" if total > 0 else ""
+
+    labels = [
+        "Total NEOs in selection",
+        "Detected by any survey (apparition)",
+        "Single survey only",
+        "Exactly 2 surveys",
+        "3 or more surveys",
+        "Mean surveys per NEO",
+        "Median surveys per NEO",
+    ]
+    values = [
+        f"{total:,}",
+        f"{detected_any:,}{pct(detected_any)}",
+        f"{by_1:,}{pct(by_1)}",
+        f"{by_2:,}{pct(by_2)}",
+        f"{by_3plus:,}{pct(by_3plus)}",
+        f"{mean_s:.2f}",
+        f"{median_s:.1f}",
+    ]
+
+    fig = go.Figure(go.Table(
+        header=dict(
+            values=["Statistic", "Value"],
+            fill_color=t["table_header"],
+            font=dict(color=t["text"], size=13),
+            align="left",
+        ),
+        cells=dict(
+            values=[labels, values],
+            fill_color=t["table_cell"],
+            font=dict(color=t["table_font"], size=12),
+            align="left",
+        ),
+    ))
+    fig.update_layout(
+        template=t["template"],
+        paper_bgcolor=t["paper"],
+        title="Multi-survey Detection Summary",
+        height=height,
+        margin=dict(l=10, r=10, t=60, b=10),
+    )
+    return fig
 
 
 # ---------------------------------------------------------------------------
@@ -392,9 +1186,10 @@ def load_data():
 # ---------------------------------------------------------------------------
 
 app = Dash(__name__)
+server = app.server  # Flask WSGI server for gunicorn deployment
 
-df = load_data()
-query_timestamp = _read_query_timestamp()
+df, query_timestamp = load_data()
+df_apparition = load_apparition_data()
 year_min, year_max = int(df["disc_year"].min()), int(df["disc_year"].max())
 
 # Label style helper
@@ -416,6 +1211,9 @@ app.layout = html.Div(
         "--tab-border": "#cccccc",
     },
     children=[
+        # ── Refresh banner (shown when cron job is updating caches) ──
+        html.Div(id="refresh-banner"),
+        dcc.Interval(id="refresh-check", interval=30_000, n_intervals=0),
         # ── Banner: logo + title + shared controls ───────────────────
         html.Div(
             style={"display": "flex", "gap": "15px", "alignItems": "center",
@@ -489,13 +1287,41 @@ app.layout = html.Div(
                     dcc.RadioItems(
                         id="theme-toggle",
                         options=[
-                            {"label": " Dark", "value": "dark"},
                             {"label": " Light", "value": "light"},
+                            {"label": " Dark", "value": "dark"},
                         ],
                         value="light",
                         inline=True,
                         style=RADIO_STYLE,
                         labelStyle=RADIO_LABEL_STYLE,
+                    ),
+                ]),
+                html.Div(children=[
+                    html.Label("Reset", style=LABEL_STYLE),
+                    html.Div(
+                        style={"display": "flex", "gap": "6px"},
+                        children=[
+                            html.Button(
+                                "Tab", id="reset-tab-btn",
+                                n_clicks=0,
+                                style={
+                                    "padding": "4px 12px",
+                                    "fontSize": "12px",
+                                    "fontFamily": "sans-serif",
+                                    "cursor": "pointer",
+                                },
+                            ),
+                            html.Button(
+                                "All", id="reset-all-btn",
+                                n_clicks=0,
+                                style={
+                                    "padding": "4px 12px",
+                                    "fontSize": "12px",
+                                    "fontFamily": "sans-serif",
+                                    "cursor": "pointer",
+                                },
+                            ),
+                        ],
                     ),
                 ]),
             ],
@@ -508,7 +1334,7 @@ app.layout = html.Div(
             children=[
                 # ━━━ Tab 1: Discovery by Year ━━━━━━━━━━━━━━━━━━━━━━━━
                 dcc.Tab(
-                    label="Discovery by Year",
+                    label="Discoveries by Year",
                     value="tab-discovery",
                     className="nav-tab",
                     selected_className="nav-tab--selected",
@@ -613,36 +1439,36 @@ app.layout = html.Div(
                     selected_className="nav-tab--selected",
                     children=[
                         html.Div(style={"paddingTop": "15px"}, children=[
+                            # Discovery years — full width
+                            html.Div(
+                                style={"marginBottom": "10px"},
+                                children=[
+                                    html.Label("Discovery years",
+                                               style=LABEL_STYLE),
+                                    dcc.RangeSlider(
+                                        id="h-year-range",
+                                        min=year_min,
+                                        max=year_max,
+                                        value=[year_min, year_max],
+                                        marks={
+                                            y: {"label": str(y)}
+                                            for y in range(
+                                                year_min,
+                                                year_max + 1, 10)
+                                        },
+                                        tooltip={
+                                            "placement": "bottom",
+                                            "always_visible": False},
+                                    ),
+                                ],
+                            ),
                             # Controls row
                             html.Div(
                                 style={"display": "flex", "gap": "20px",
                                         "flexWrap": "wrap",
+                                        "alignItems": "flex-end",
                                         "marginBottom": "10px"},
                                 children=[
-                                    html.Div(
-                                        style={"flex": "1",
-                                               "minWidth": "300px"},
-                                        children=[
-                                            html.Label("Discovery years",
-                                                       style=LABEL_STYLE),
-                                            dcc.RangeSlider(
-                                                id="h-year-range",
-                                                min=year_min,
-                                                max=year_max,
-                                                value=[year_min, year_max],
-                                                marks={
-                                                    y: {"label": str(y)}
-                                                    for y in range(
-                                                        year_min,
-                                                        year_max + 1, 10)
-                                                },
-                                                tooltip={
-                                                    "placement": "bottom",
-                                                    "always_visible":
-                                                        False},
-                                            ),
-                                        ],
-                                    ),
                                     html.Div(
                                         style={"flex": "1",
                                                "minWidth": "300px"},
@@ -773,6 +1599,265 @@ app.layout = html.Div(
                         ]),
                     ],
                 ),
+                # ━━━ Tab 3: Multi-survey Comparison ━━━━━━━━━━━━━━━━━
+                dcc.Tab(
+                    label="Multi-survey Comparison",
+                    value="tab-comparison",
+                    className="nav-tab",
+                    selected_className="nav-tab--selected",
+                    children=[
+                        html.Div(style={"paddingTop": "15px"}, children=[
+                            # Year slider — full width
+                            html.Div(
+                                style={"marginBottom": "10px"},
+                                children=[
+                                    html.Label("Discovery years",
+                                               style=LABEL_STYLE),
+                                    dcc.RangeSlider(
+                                        id="comp-year-range",
+                                        min=year_min,
+                                        max=year_max,
+                                        value=[2004, year_max],
+                                        marks={
+                                            y: {"label": str(y)}
+                                            for y in range(
+                                                year_min,
+                                                year_max + 1, 5)
+                                        },
+                                        tooltip={
+                                            "placement": "bottom",
+                                            "always_visible": False},
+                                    ),
+                                ],
+                            ),
+                            # Controls row
+                            html.Div(
+                                style={"display": "flex", "gap": "20px",
+                                        "flexWrap": "wrap",
+                                        "alignItems": "flex-end",
+                                        "marginBottom": "15px"},
+                                children=[
+                                    html.Div(children=[
+                                        html.Label("Size class",
+                                                   style=LABEL_STYLE),
+                                        dcc.Dropdown(
+                                            id="comp-size-filter",
+                                            options=(
+                                                [{"label": "All sizes",
+                                                  "value": "all"}]
+                                                + [{"label": l,
+                                                    "value": l}
+                                                   for l, _, _ in H_BINS]
+                                            ),
+                                            value="all",
+                                            clearable=False,
+                                            style={"width": "270px"},
+                                        ),
+                                    ]),
+                                    html.Div(children=[
+                                        html.Label("Surveys for Venn "
+                                                   "(max 3)",
+                                                   style=LABEL_STYLE),
+                                        dcc.Dropdown(
+                                            id="comp-survey-select",
+                                            options=[
+                                                {"label": p, "value": p}
+                                                for p in PROJECT_ORDER],
+                                            value=["Catalina Survey",
+                                                   "Pan-STARRS",
+                                                   "ATLAS"],
+                                            multi=True,
+                                            style={"width": "350px"},
+                                        ),
+                                    ]),
+                                    html.Div(children=[
+                                        html.Label("Precovery",
+                                                   style=LABEL_STYLE),
+                                        dcc.RadioItems(
+                                            id="comp-precovery",
+                                            options=[
+                                                {"label":
+                                                    " Post-discovery",
+                                                 "value": "post_only"},
+                                                {"label":
+                                                    " Include precoveries",
+                                                 "value": "include"},
+                                            ],
+                                            value="post_only",
+                                            inline=True,
+                                            style=RADIO_STYLE,
+                                            labelStyle=
+                                                RADIO_LABEL_STYLE,
+                                        ),
+                                    ]),
+                                ],
+                            ),
+                            # MPC codes reference
+                            html.Details(
+                                style={"marginBottom": "12px",
+                                       "fontFamily": "sans-serif",
+                                       "fontSize": "12px"},
+                                children=[
+                                    html.Summary(
+                                        "Survey group MPC codes",
+                                        style={"cursor": "pointer",
+                                               "fontWeight": "bold",
+                                               "fontSize": "13px"}),
+                                    html.Div(
+                                        style={"display": "flex",
+                                               "flexWrap": "wrap",
+                                               "gap": "8px 24px",
+                                               "padding": "8px 0"},
+                                        children=[
+                                            html.Span(
+                                                f"{proj}: "
+                                                f"{', '.join(sorted(stns))}",
+                                            )
+                                            for proj in PROJECT_ORDER
+                                            if proj in PROJECT_STATIONS
+                                            for stns in
+                                                [PROJECT_STATIONS[proj]]
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            # 2x2 visualization grid
+                            dcc.Loading(
+                                type="default",
+                                children=[
+                                    html.Div(
+                                        style={
+                                            "display": "grid",
+                                            "gridTemplateColumns":
+                                                "1fr 1fr",
+                                            "gap": "10px"},
+                                        children=[
+                                            dcc.Graph(
+                                                id="venn-diagram",
+                                                config=GRAPH_CONFIG),
+                                            dcc.Graph(
+                                                id="survey-reach",
+                                                config=GRAPH_CONFIG),
+                                            dcc.Graph(
+                                                id="pairwise-heatmap",
+                                                config=GRAPH_CONFIG),
+                                            dcc.Graph(
+                                                id="comparison-summary",
+                                                config=GRAPH_CONFIG),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                        ]),
+                    ],
+                ),
+                # ━━━ Tab 4: Follow-up Timing ━━━━━━━━━━━━━━━━━━━━━━━━━
+                dcc.Tab(
+                    label="Follow-up Timing",
+                    value="tab-followup",
+                    className="nav-tab",
+                    selected_className="nav-tab--selected",
+                    children=[
+                        html.Div(style={"paddingTop": "15px"}, children=[
+                            # Year slider — full width
+                            html.Div(
+                                style={"marginBottom": "10px"},
+                                children=[
+                                    html.Label("Discovery years",
+                                               style=LABEL_STYLE),
+                                    dcc.RangeSlider(
+                                        id="fu-year-range",
+                                        min=year_min,
+                                        max=year_max,
+                                        value=[2004, year_max],
+                                        marks={
+                                            y: {"label": str(y)}
+                                            for y in range(
+                                                year_min,
+                                                year_max + 1, 5)
+                                        },
+                                        tooltip={
+                                            "placement": "bottom",
+                                            "always_visible": False},
+                                    ),
+                                ],
+                            ),
+                            # Controls row
+                            html.Div(
+                                style={"display": "flex", "gap": "20px",
+                                        "flexWrap": "wrap",
+                                        "alignItems": "flex-end",
+                                        "marginBottom": "15px"},
+                                children=[
+                                    html.Div(children=[
+                                        html.Label("Size class",
+                                                   style=LABEL_STYLE),
+                                        dcc.Dropdown(
+                                            id="fu-size-filter",
+                                            options=(
+                                                [{"label": "All sizes",
+                                                  "value": "all"}]
+                                                + [{"label": l,
+                                                    "value": l}
+                                                   for l, _, _ in H_BINS]
+                                            ),
+                                            value="all",
+                                            clearable=False,
+                                            style={"width": "270px"},
+                                        ),
+                                    ]),
+                                    html.Div(
+                                        style={"width": "250px"},
+                                        children=[
+                                            html.Label("Max days shown",
+                                                       style=LABEL_STYLE),
+                                            dcc.Slider(
+                                                id="fu-max-days",
+                                                min=7, max=200,
+                                                value=90,
+                                                marks={
+                                                    7: "7", 30: "30",
+                                                    90: "90", 200: "200",
+                                                },
+                                                tooltip={
+                                                    "placement": "bottom",
+                                                    "always_visible":
+                                                        False},
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            # Note
+                            html.P(
+                                "Follow-up = first post-discovery "
+                                "observation by a different survey "
+                                "project. The discovery survey's own "
+                                "stations are excluded.",
+                                className="subtext",
+                                style={"fontFamily": "sans-serif",
+                                       "marginBottom": "10px"},
+                            ),
+                            # 2x2 viz grid
+                            html.Div(
+                                style={
+                                    "display": "grid",
+                                    "gridTemplateColumns": "1fr 1fr",
+                                    "gap": "10px"},
+                                children=[
+                                    dcc.Graph(id="response-curve",
+                                              config=GRAPH_CONFIG),
+                                    dcc.Graph(id="survey-response",
+                                              config=GRAPH_CONFIG),
+                                    dcc.Graph(id="followup-network",
+                                              config=GRAPH_CONFIG),
+                                    dcc.Graph(id="followup-trend",
+                                              config=GRAPH_CONFIG),
+                                ],
+                            ),
+                        ]),
+                    ],
+                ),
             ],
         ),
     ],
@@ -799,6 +1884,111 @@ def update_theme(theme_name):
         "--paper-bg": t["paper"],
         "--tab-border": t["hr_color"],
     }
+
+
+# ---------------------------------------------------------------------------
+# Refresh-banner callback — show notice when cron job is updating caches
+# ---------------------------------------------------------------------------
+
+_SENTINEL_FILE = os.path.join(_APP_DIR, ".refreshing")
+
+
+@app.callback(
+    Output("refresh-banner", "children"),
+    Input("refresh-check", "n_intervals"),
+)
+def check_refresh_status(_n):
+    if os.path.exists(_SENTINEL_FILE):
+        return html.Div(
+            f"Data refresh in progress \u2014 results shown are from "
+            f"the previous update ({query_timestamp}).",
+            style={
+                "backgroundColor": "#fff3cd",
+                "color": "#856404",
+                "padding": "10px 20px",
+                "borderRadius": "4px",
+                "marginBottom": "10px",
+                "fontFamily": "sans-serif",
+                "fontSize": "14px",
+                "textAlign": "center",
+                "border": "1px solid #ffc107",
+            },
+        )
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Reset callback — restore default control values
+# ---------------------------------------------------------------------------
+
+# Default values for all resettable controls
+_DEFAULTS = {
+    # Tab 1
+    "year-range": [1995, year_max],
+    "size-filter": "split",
+    "cumulative-toggle": "annual",
+    # Tab 2
+    "h-year-range": [year_min, year_max],
+    "h-range": [16.25, 22.75],
+    "h-yscale": "linear",
+    "h-mode": "cumul",
+    "size-mapping": "neomod3",
+    "comp-labels-toggle": ["show"],
+    # Tab 3
+    "comp-year-range": [2004, year_max],
+    "comp-size-filter": "all",
+    "comp-survey-select": ["Catalina Survey", "Pan-STARRS", "ATLAS"],
+    "comp-precovery": "post_only",
+    # Tab 4
+    "fu-year-range": [2004, year_max],
+    "fu-size-filter": "all",
+    "fu-max-days": 90,
+    # Shared
+    "group-by": "combined",
+    "plot-height": "700",
+}
+
+_TAB_KEYS = {
+    "tab-discovery": {"year-range", "size-filter", "cumulative-toggle"},
+    "tab-neomod": {"h-year-range", "h-range", "h-yscale", "h-mode",
+                    "size-mapping", "comp-labels-toggle"},
+    "tab-comparison": {"comp-year-range", "comp-size-filter",
+                       "comp-survey-select", "comp-precovery"},
+    "tab-followup": {"fu-year-range", "fu-size-filter", "fu-max-days"},
+}
+_SHARED_KEYS = {"group-by", "plot-height"}
+
+# Output order must match the tuple returned by reset_controls
+_RESET_ORDER = [
+    "year-range", "size-filter", "cumulative-toggle",
+    "h-year-range", "h-range", "h-yscale", "h-mode",
+    "size-mapping", "comp-labels-toggle",
+    "comp-year-range", "comp-size-filter", "comp-survey-select",
+    "comp-precovery",
+    "fu-year-range", "fu-size-filter", "fu-max-days",
+    "group-by", "plot-height",
+]
+
+
+@app.callback(
+    [Output(k, "value", allow_duplicate=True) for k in _RESET_ORDER],
+    Input("reset-tab-btn", "n_clicks"),
+    Input("reset-all-btn", "n_clicks"),
+    State("tabs", "value"),
+    prevent_initial_call=True,
+)
+def reset_controls(_tab_clicks, _all_clicks, active_tab):
+    triggered = ctx.triggered_id
+    if triggered == "reset-all-btn":
+        reset_keys = set(_DEFAULTS)
+    elif triggered == "reset-tab-btn":
+        reset_keys = _TAB_KEYS.get(active_tab, set()) | _SHARED_KEYS
+    else:
+        raise PreventUpdate
+    return tuple(
+        _DEFAULTS[k] if k in reset_keys else no_update
+        for k in _RESET_ORDER
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1410,9 +2600,126 @@ def update_neomod3_table(h_year_range, theme_name, _tab):
 
 
 # ---------------------------------------------------------------------------
+# Multi-survey comparison callback
+# ---------------------------------------------------------------------------
+
+@app.callback(
+    Output("venn-diagram", "figure"),
+    Output("survey-reach", "figure"),
+    Output("pairwise-heatmap", "figure"),
+    Output("comparison-summary", "figure"),
+    Input("comp-year-range", "value"),
+    Input("comp-size-filter", "value"),
+    Input("comp-survey-select", "value"),
+    Input("comp-precovery", "value"),
+    Input("theme-toggle", "value"),
+    Input("plot-height", "value"),
+    Input("tabs", "value"),
+)
+def update_comparison(year_range, size_filter, survey_select,
+                      precovery, theme_name, plot_height, active_tab):
+    if active_tab != "tab-comparison":
+        raise PreventUpdate
+
+    t = theme(theme_name)
+    height = int(plot_height)
+    exclude_precovery = precovery == "post_only"
+
+    survey_sets, eligible = build_survey_sets(
+        df, df_apparition, year_range, size_filter, exclude_precovery)
+
+    # Venn diagram
+    survey_select = survey_select or []
+    if len(survey_select) < 1:
+        venn_fig = _empty_figure(
+            "Select 1\u20133 surveys for Venn diagram", t, height)
+    elif len(survey_select) == 1:
+        s = survey_sets.get(survey_select[0], set())
+        c = PROJECT_COLORS.get(survey_select[0], "#a9a9a9")
+        venn_fig = _make_venn1(s, survey_select[0], c, t, height)
+    elif len(survey_select) == 2:
+        venn_sets = [survey_sets.get(s, set()) for s in survey_select]
+        venn_colors = [PROJECT_COLORS.get(s, "#a9a9a9")
+                       for s in survey_select]
+        venn_fig = _make_venn2(
+            venn_sets, survey_select, venn_colors, t, height)
+    else:
+        sel = survey_select[:3]
+        venn_sets = [survey_sets.get(s, set()) for s in sel]
+        venn_colors = [PROJECT_COLORS.get(s, "#a9a9a9") for s in sel]
+        venn_fig = _make_venn3(
+            venn_sets, sel, venn_colors, t, height)
+
+    reach_fig = _make_survey_reach(survey_sets, t, height)
+    heatmap_fig = _make_pairwise_heatmap(survey_sets, t, height)
+    summary_fig = _make_comparison_summary(
+        survey_sets, eligible, t, height)
+
+    return venn_fig, reach_fig, heatmap_fig, summary_fig
+
+
+# ---------------------------------------------------------------------------
+# Follow-up timing callback
+# ---------------------------------------------------------------------------
+
+@app.callback(
+    Output("response-curve", "figure"),
+    Output("survey-response", "figure"),
+    Output("followup-network", "figure"),
+    Output("followup-trend", "figure"),
+    Input("fu-year-range", "value"),
+    Input("fu-size-filter", "value"),
+    Input("fu-max-days", "value"),
+    Input("theme-toggle", "value"),
+    Input("plot-height", "value"),
+    Input("tabs", "value"),
+)
+def update_followup(year_range, size_filter, max_days, theme_name,
+                    plot_height, active_tab):
+    if active_tab != "tab-followup":
+        raise PreventUpdate
+
+    t = theme(theme_name)
+    height = int(plot_height)
+
+    fu_data, total = build_followup_data(
+        df, df_apparition, year_range, size_filter)
+
+    if total == 0 or len(fu_data) == 0:
+        empty = _empty_figure(
+            "No follow-up data for selection", t, height)
+        return empty, empty, empty, empty
+
+    curve = _make_response_curve(fu_data, total, max_days, t, height)
+    boxes = _make_survey_response_box(fu_data, max_days, t, height)
+    network = _make_followup_network(fu_data, t, height)
+    trend = _make_followup_trend(fu_data, t, height)
+
+    return curve, boxes, network, trend
+
+
+# ---------------------------------------------------------------------------
+# Enforce max 3 surveys for Venn
+# ---------------------------------------------------------------------------
+
+@app.callback(
+    Output("comp-survey-select", "value"),
+    Input("comp-survey-select", "value"),
+    prevent_initial_call=True,
+)
+def cap_survey_selection(value):
+    if value and len(value) > 3:
+        return value[:3]
+    raise PreventUpdate
+
+
+# ---------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    if _REFRESH_ONLY:
+        print("Cache refresh complete.")
+        sys.exit(0)
     print("\nStarting Dash server at http://127.0.0.1:8050/")
     app.run(debug=True, use_reloader=False)
