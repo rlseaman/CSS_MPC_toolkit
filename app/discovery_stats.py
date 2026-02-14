@@ -597,18 +597,44 @@ def load_data():
     # NEA.txt is the MPC's curated NEA catalog and is currently the most
     # reliable H source.  When MPC finishes mpc_orbits cleanup, this
     # override can be removed.
+    #
+    # Three cases for each object:
+    #   - In NEA.txt with valid H  -> use NEA.txt H
+    #   - In NEA.txt with H=99.99  -> set H to NaN (unreliable)
+    #   - Not in NEA.txt at all    -> NaN for asteroids; keep mpc_orbits H
+    #     only for comets and borderline objects (q > 1.30) that aren't
+    #     expected to appear in the curated NEA catalog
     try:
         h_lookup = load_nea_h_lookup(_APP_DIR, force_refresh=_FORCE_REFRESH)
         raw["h_mpc"] = raw["h"]  # preserve original for reference
-        raw["h_nea"] = raw["designation"].map(
-            lambda d: h_lookup.get(d))
-        # Use NEA.txt H where available; fall back to (sanitized) mpc_orbits
-        raw["h"] = raw["h_nea"].where(raw["h_nea"].notna(), raw["h_mpc"])
-        n_override = (raw["h_nea"].notna() & (raw["h_mpc"] != raw["h_nea"])
-                      ).sum()
-        n_nea = raw["h_nea"].notna().sum()
-        print(f"NEA.txt H applied: {n_nea:,} matched, "
-              f"{n_override:,} values changed")
+        raw["in_nea_catalog"] = raw["designation"].isin(h_lookup)
+
+        def _resolve_h(row):
+            desig = row["designation"]
+            if desig in h_lookup:
+                val = h_lookup[desig]
+                if val is not None:
+                    return val  # NEA.txt has a valid H
+                return np.nan  # NEA.txt says H=99.99 (unreliable)
+            # Not in NEA.txt — keep H only for comets and borderline
+            q = row.get("q", 0)
+            desig_str = str(desig)
+            is_comet = desig_str.startswith(("C/", "P/", "D/"))
+            is_borderline = q > 1.30
+            if is_comet or is_borderline:
+                return row["h_mpc"]
+            return np.nan  # asteroid not in NEA catalog
+
+        raw["h_nea"] = raw.apply(_resolve_h, axis=1)
+        raw["h"] = raw["h_nea"]
+
+        n_in_nea = raw["in_nea_catalog"].sum()
+        n_changed = ((raw["h"] != raw["h_mpc"])
+                     | (raw["h"].isna() != raw["h_mpc"].isna())).sum()
+        n_nulled = (raw["h"].isna() & raw["h_mpc"].notna()).sum()
+        print(f"NEA.txt H applied: {n_in_nea:,} in catalog, "
+              f"{n_changed:,} values changed, "
+              f"{n_nulled:,} set to unknown")
     except Exception as e:
         print(f"Warning: NEA.txt H override skipped: {e}")
 
