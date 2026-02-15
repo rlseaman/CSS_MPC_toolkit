@@ -546,6 +546,11 @@ if _REFRESH_ONLY:
 _FORCE_REFRESH = _REFRESH_ONLY or "--refresh" in sys.argv
 if "--refresh" in sys.argv:
     sys.argv.remove("--refresh")
+_HOST = "127.0.0.1"
+if "--host" in sys.argv:
+    idx = sys.argv.index("--host")
+    _HOST = sys.argv[idx + 1]
+    del sys.argv[idx:idx + 2]
 
 
 def _load_cached_query(sql, prefix, label):
@@ -3822,7 +3827,7 @@ def cap_survey_selection(value):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    print("\nStarting Dash server at http://127.0.0.1:8050/")
+    print(f"\nStarting Dash server at http://{_HOST}:8050/")
     print("Data loading in background..." if not _data_ready.is_set()
           else "Data ready.")
-    app.run(host="127.0.0.1", debug=True, use_reloader=False)
+    app.run(host=_HOST, debug=True, use_reloader=False)
