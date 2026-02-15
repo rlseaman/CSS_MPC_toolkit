@@ -200,24 +200,27 @@ def _parse_orbital_elements(text):
     """Parse orbital elements block into a dict of values."""
     elements = {}
 
+    # Patterns anchored to line start where needed to avoid false matches
+    # (e.g., "e" in "Node", "a" in "PHA")
     patterns = {
         "epoch": r"Epoch\s+(.+?)\s+TT",
-        "M": r"M\s+([\d.]+)",
-        "n": r"n\s+([\d.]+)",
-        "a": r"a\s+([\d.]+)",
-        "e": r"e\s+([\d.]+)",
+        "M": r"^M\s+([\d.]+)",
+        "n": r"^n\s+([\d.]+)",
+        "a": r"^a\s+([\d.]+)",
+        "e": r"^e\s+([\d.]+)",
         "peri": r"Peri\.\s+([\d.]+)",
         "node": r"Node\s+([\d.]+)",
         "incl": r"Incl\.\s+([\d.]+)",
-        "H": r"H\s+([\d.]+)",
-        "G": r"G\s+([\d.]+)",
+        "H": r"\bH\s+([\d.]+)",
+        "G": r"\bG\s+([\d.]+)",
         "earth_moid": r"Earth MOID\s*=\s*([\d.]+)",
-        "q": r"q\s+([\d.]+)",
-        "period": r"P\s+([\d.]+)\s*years?",
+        "q": r"^q\s+([\d.]+)",
+        "period": r"^P\s+([\d.]+)",
+        "U": r"\bU\s+(\d+)",
     }
 
     for key, pat in patterns.items():
-        m = re.search(pat, text)
+        m = re.search(pat, text, re.MULTILINE)
         if m:
             val = m.group(1)
             if key == "epoch":
@@ -285,13 +288,44 @@ def parse_mpec_content(pre_text, mpec_id="", title="", path=""):
 
     mpec_url = f"{_MPC_BASE}{path}" if path else ""
 
+    # Count observations and compute arc from observation lines
+    obs_text = sections.get("observations", "")
+    n_obs = 0
+    obs_dates = []
+    for line in obs_text.split("\n"):
+        if len(line) >= 80:
+            n_obs += 1
+            date_part = line[15:32].strip()
+            m_d = re.match(r"(\d{4})\s+(\d{2})\s+([\d.]+)", date_part)
+            if m_d:
+                try:
+                    obs_dates.append(
+                        float(m_d.group(1)) * 10000
+                        + float(m_d.group(2)) * 100
+                        + float(m_d.group(3)))
+                except ValueError:
+                    pass
+
+    arc_days = None
+    if obs_dates and len(obs_dates) >= 2:
+        # Approximate arc in days from first to last obs
+        first = obs_dates[0]
+        last = obs_dates[-1]
+        y1, r1 = divmod(first, 10000)
+        m1, d1 = divmod(r1, 100)
+        y2, r2 = divmod(last, 10000)
+        m2, d2 = divmod(r2, 100)
+        arc_days = (y2 - y1) * 365.25 + (m2 - m1) * 30.44 + (d2 - d1)
+
     return {
         "mpec_id": mpec_id,
         "date": date,
         "title": title,
         "designation": designation,
         "type": mpec_type,
-        "observations": sections.get("observations", ""),
+        "observations": obs_text,
+        "n_obs": n_obs,
+        "arc_days": round(arc_days, 1) if arc_days is not None else None,
         "orbital_elements": orbital_elements,
         "orbital_elements_raw": sections.get("orbital_elements", ""),
         "residuals": sections.get("residuals", ""),

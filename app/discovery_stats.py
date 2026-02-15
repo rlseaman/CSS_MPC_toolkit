@@ -3926,9 +3926,7 @@ def _build_mpec_list_item(entry, idx):
     if summary:
         disc_stn = summary.get("disc_stn", "")
         if disc_stn:
-            stn_name = STATION_NAMES.get(disc_stn, "")
-            label = f"{disc_stn} {stn_name}" if stn_name else disc_stn
-            annot_spans.append(html.Span(label))
+            annot_spans.append(html.Span(disc_stn))
         cls = summary.get("class", "")
         if cls:
             annot_spans.append(html.Span(cls))
@@ -3941,20 +3939,25 @@ def _build_mpec_list_item(entry, idx):
         if summary.get("is_pha"):
             annot_spans.append(html.Span("PHA", style=_PHA_BADGE))
 
-    # Build title line: "2026 CX2 (MPEC 2026-C119)"
+    # Build title line: "2026 CX2" + smaller "(MPEC 2026-C119)"
     title = entry.get("title", "")
     mpec_id = entry.get("mpec_id", "")
-    title_display = title
+
+    title_children = [
+        html.Span(title, style={"fontSize": "14px", "fontWeight": "600"}),
+    ]
     if mpec_id:
-        title_display = f"{title} ({mpec_id})"
+        title_children.append(html.Span(
+            f" ({mpec_id})",
+            style={"fontSize": "12px", "fontWeight": "400",
+                   "color": "var(--subtext-color, #888)"}))
 
     children = [
         html.Div(
             style={"display": "flex", "justifyContent": "space-between",
                    "alignItems": "center"},
             children=[
-                html.Span(title_display,
-                          style={"fontSize": "14px", "fontWeight": "600"}),
+                html.Span(children=title_children),
                 _mpec_badge(entry.get("type", "discovery")),
             ],
         ),
@@ -4011,8 +4014,8 @@ def _classify_orbit(a, e, q):
     return "Amor"
 
 
-def _build_orbit_info_line(oe):
-    """Build a compact orbit class / H / MOID / PHA summary line."""
+def _build_orbit_info_line(oe, detail=None):
+    """Build a compact orbit class / H / MOID / PHA summary, plus arc/obs."""
     if not oe:
         return html.Div()
 
@@ -4029,16 +4032,31 @@ def _build_orbit_info_line(oe):
     if h_val is not None:
         parts.append(html.Span(f"H={h_val:.1f}"))
     if moid is not None:
-        parts.append(html.Span(f"MOID={moid:.3f}"))
+        parts.append(html.Span(f"MOID={moid:.3f} AU"))
 
-    # PHA check
-    is_pha = (moid is not None and h_val is not None
-              and moid <= 0.05 and h_val <= 22.0)
+    # PHA check (explicit flag from MPC or computed)
+    oe_raw = detail.get("orbital_elements_raw", "") if detail else ""
+    is_pha = "PHA," in oe_raw or "PHA " in oe_raw
+    if not is_pha and moid is not None and h_val is not None:
+        is_pha = moid <= 0.05 and h_val <= 22.0
     if is_pha:
         parts.append(html.Span("PHA", style=_PHA_BADGE))
 
     if not parts:
         return html.Div()
+
+    # Second line: condition code, arc, obs count
+    info_parts = []
+    u_val = oe.get("U")
+    if u_val is not None:
+        info_parts.append(f"U={int(u_val)}")
+    if detail:
+        arc = detail.get("arc_days")
+        if arc is not None:
+            info_parts.append(f"Arc={arc:.0f} days")
+        n_obs = detail.get("n_obs")
+        if n_obs:
+            info_parts.append(f"Obs={n_obs}")
 
     interleaved = []
     for i, sp in enumerate(parts):
@@ -4046,11 +4064,21 @@ def _build_orbit_info_line(oe):
             interleaved.append(html.Span(" \u00b7 "))
         interleaved.append(sp)
 
-    return html.Div(
-        children=interleaved,
-        style={"fontFamily": "monospace", "fontSize": "13px",
-               "color": "var(--subtext-color, #888)", "marginTop": "6px"},
-    )
+    children = [
+        html.Div(
+            children=interleaved,
+            style={"fontFamily": "monospace", "fontSize": "13px",
+                   "color": "var(--subtext-color, #888)", "marginTop": "6px"},
+        ),
+    ]
+    if info_parts:
+        children.append(html.Div(
+            " \u00b7 ".join(info_parts),
+            style={"fontFamily": "monospace", "fontSize": "12px",
+                   "color": "var(--subtext-color, #888)", "marginTop": "2px"},
+        ))
+
+    return html.Div(children=children)
 
 
 def _build_mpec_detail(detail):
@@ -4093,20 +4121,11 @@ def _build_mpec_detail(detail):
             href=f"https://www.minorplanetcenter.net/db_search/show_object?utf8=✓&object_id={designation}",
             target="_blank", style=_link_btn_style()))
 
-    # Parse observations to find discovery station and first follow-up
+    # Parse observations to find discovery station
     disc_stn = None
-    first_followup_stn = None
     obs_text = detail.get("observations", "")
     if obs_text:
         _, disc_stn = _build_obs_section(obs_text)
-        # Find first follow-up station (different station from discovery)
-        if disc_stn:
-            for line in obs_text.split("\n"):
-                if len(line) >= 80:
-                    stn = line[77:80].strip()
-                    if stn and stn != disc_stn:
-                        first_followup_stn = stn
-                        break
 
     # Parse discoverer info from observer credits
     observers = detail.get("observers", "")
@@ -4114,7 +4133,7 @@ def _build_mpec_detail(detail):
 
     # Build orbit summary line from parsed elements
     oe = detail.get("orbital_elements", {})
-    orbit_info = _build_orbit_info_line(oe)
+    orbit_info = _build_orbit_info_line(oe, detail)
 
     # Assemble accordion sections in order:
     # 1. Orbital Elements (open)
@@ -4132,7 +4151,7 @@ def _build_mpec_detail(detail):
 
     if observers:
         obs_credit = _build_observer_sections(
-            observers, disc_stn, first_followup_stn)
+            observers, disc_stn)
         if obs_credit:
             sections.append(obs_credit)
 
@@ -4142,8 +4161,7 @@ def _build_mpec_detail(detail):
 
     residuals = detail.get("residuals", "")
     if residuals:
-        sections.append(_mpec_section(
-            "Residuals", residuals, open_default=False, mono=True))
+        sections.append(_build_residuals_section(residuals, disc_stn, obs_text))
 
     ephemeris = detail.get("ephemeris", "")
     if ephemeris:
@@ -4601,7 +4619,8 @@ def _build_obs_section(obs_text):
 def _build_discoverer_line(observers_text, disc_stn):
     """Parse discovery station block to extract site ID, name, observer.
 
-    Returns a compact Div showing "Disc: G96 Mt. Lemmon Survey — Observer D. Rankin"
+    Returns a compact Div: "G96 Mt. Lemmon Survey — D. Rankin"
+    MPC observer blocks use double-spacing between sentences.
     """
     if not observers_text or not disc_stn:
         return html.Div()
@@ -4609,32 +4628,33 @@ def _build_discoverer_line(observers_text, disc_stn):
     blocks = _re.split(r"(?=^[A-Z0-9]{3} )", observers_text, flags=_re.MULTILINE)
     for block in blocks:
         block = block.strip()
-        m = _re.match(r"^([A-Z0-9]{3})\s+(.+?)\.(?:\s+Observers?\s+(.+?)\.)?\s*",
-                       block, _re.DOTALL)
-        if m and m.group(1) == disc_stn:
-            stn_code = m.group(1)
-            site_name = m.group(2).strip()
-            observer = m.group(3)
-            parts = [
-                html.Span("Disc: ", style={"fontWeight": "600",
-                                            "color": "#3cb44b"}),
-                html.Span(f"{stn_code} {site_name}"),
-            ]
-            if observer:
-                # Clean up multi-line observer names
-                obs_clean = " ".join(observer.split())
-                parts.append(html.Span(f" \u2014 {obs_clean}",
-                             style={"color": "var(--subtext-color, #888)"}))
-            return html.Div(
-                children=parts,
-                style={"fontFamily": "sans-serif", "fontSize": "13px",
-                       "marginTop": "4px"},
-            )
+        stn_match = _re.match(r"^([A-Z0-9]{3})\s+", block)
+        if not stn_match or stn_match.group(1) != disc_stn:
+            continue
+        # Site name: from after station code to first double-spaced period
+        name_m = _re.match(r"^[A-Z0-9]{3}\s+(.+?)\.\s{2,}", block, _re.DOTALL)
+        site_name = " ".join(name_m.group(1).split()) if name_m else ""
+        # Observer(s): after "Observer(s) " up to next double-spaced period
+        obs_m = _re.search(r"Observers?\s+(.+?)\.\s{2,}", block, _re.DOTALL)
+        observer = " ".join(obs_m.group(1).split()) if obs_m else ""
+
+        parts = [
+            html.Span(f"{disc_stn} {site_name}",
+                       style={"fontWeight": "600"}),
+        ]
+        if observer:
+            parts.append(html.Span(f" \u2014 {observer}",
+                         style={"color": "var(--subtext-color, #888)"}))
+        return html.Div(
+            children=parts,
+            style={"fontFamily": "sans-serif", "fontSize": "13px",
+                   "marginTop": "4px"},
+        )
     return html.Div()
 
 
 def _build_observer_sections(observers_text, disc_stn, followup_stn=None):
-    """Build Observer Credits section with discovery and follow-up highlighting.
+    """Build Observer Credits section with discovery station highlighted.
 
     Returns a single collapsible Details section (closed by default).
     """
@@ -4665,10 +4685,6 @@ def _build_observer_sections(observers_text, disc_stn, followup_stn=None):
             style["backgroundColor"] = "rgba(60, 180, 75, 0.15)"
             style["boxShadow"] = "inset 3px 0 0 #3cb44b"
             style["borderRadius"] = "4px"
-        elif stn_code and stn_code == followup_stn:
-            style["backgroundColor"] = "rgba(100, 150, 255, 0.15)"
-            style["boxShadow"] = "inset 3px 0 0 #4363d8"
-            style["borderRadius"] = "4px"
         children.append(html.Div(block, style=style))
 
     if not children:
@@ -4687,6 +4703,94 @@ def _build_observer_sections(observers_text, disc_stn, followup_stn=None):
         children=[
             html.Summary(
                 "Observer Credits",
+                style={"padding": "10px 14px", "cursor": "pointer",
+                       "fontFamily": "sans-serif", "fontWeight": "600",
+                       "fontSize": "14px",
+                       "backgroundColor": "var(--paper-bg, white)",
+                       "borderRadius": "6px"},
+            ),
+            content_div,
+        ],
+    )
+
+
+def _build_residuals_section(residuals_text, disc_stn, obs_text):
+    """Build Residuals section with discovery tracklet entries highlighted.
+
+    Residual entries look like: "260210 G96  0.5+  0.1-"
+    Multiple entries per line, separated by whitespace.
+    """
+    import re as _re
+    # Derive YYMMDD for discovery date from observations
+    disc_yymmdd = None
+    if disc_stn and obs_text:
+        for line in obs_text.split("\n"):
+            if len(line) > 12 and line[12] == "*" and len(line) >= 80:
+                # Date is at cols 15-25: "2026 02 10.xxxxx"
+                date_part = line[15:25].strip()
+                # Extract YYYY MM DD
+                m = _re.match(r"(\d{4})\s+(\d{2})\s+(\d{2})", date_part)
+                if m:
+                    disc_yymmdd = m.group(1)[2:] + m.group(2) + m.group(3)
+                break
+
+    if not disc_yymmdd or not disc_stn:
+        return _mpec_section("Residuals", residuals_text,
+                             open_default=False, mono=True)
+
+    # The discovery tracklet residual marker: "YYMMDD STN"
+    disc_marker = f"{disc_yymmdd} {disc_stn}"
+
+    # Parse each line and highlight spans matching discovery tracklet
+    lines = residuals_text.split("\n")
+    children = []
+    _DISC_BG = "rgba(60, 180, 75, 0.22)"
+    for line in lines:
+        if disc_marker in line:
+            # Highlight individual entries containing the marker
+            # Each entry is ~20 chars: "YYMMDD STN  RA+  Dec-"
+            parts = []
+            pos = 0
+            while pos < len(line):
+                idx = line.find(disc_marker, pos)
+                if idx < 0:
+                    parts.append(html.Span(line[pos:]))
+                    break
+                if idx > pos:
+                    parts.append(html.Span(line[pos:idx]))
+                # Find the end of this entry (next entry starts with digit
+                # after whitespace, or end of line)
+                entry_end = idx + len(disc_marker)
+                # Grab the residual values that follow
+                rest = line[entry_end:]
+                m = _re.match(r"(\s+\S+\s+\S+)", rest)
+                if m:
+                    entry_end += len(m.group(1))
+                parts.append(html.Span(
+                    line[idx:entry_end],
+                    style={"backgroundColor": _DISC_BG,
+                           "borderRadius": "2px"}))
+                pos = entry_end
+            children.append(html.Div(children=parts))
+        else:
+            children.append(html.Div(line))
+
+    content_div = html.Div(
+        children=children,
+        style={
+            "padding": "10px", "fontSize": "13px", "lineHeight": "1.5",
+            "overflowX": "auto", "maxHeight": "400px", "overflowY": "auto",
+            "fontFamily": "monospace", "whiteSpace": "pre",
+        },
+    )
+    return html.Details(
+        open=False,
+        style={"marginBottom": "12px",
+               "border": "1px solid var(--hr-color, #ccc)",
+               "borderRadius": "6px"},
+        children=[
+            html.Summary(
+                "Residuals",
                 style={"padding": "10px 14px", "cursor": "pointer",
                        "fontFamily": "sans-serif", "fontWeight": "600",
                        "fontSize": "14px",
@@ -4752,16 +4856,15 @@ def _prefetch_mpec_details(entries):
 
 @app.callback(
     Output("mpec-list-panel", "children"),
-    Output("mpec-selected-path", "data", allow_duplicate=True),
+    Output("mpec-selected-path", "data"),
     Input("mpec-refresh", "n_intervals"),
     Input("tabs", "value"),
     State("mpec-auto-mode", "data"),
     State("mpec-selected-path", "data"),
-    prevent_initial_call="initial_duplicate",
 )
 def refresh_mpec_list(_n, active_tab, auto_mode, current_path):
     if active_tab != "tab-mpec":
-        raise PreventUpdate
+        return no_update, no_update
     entries = fetch_recent_mpecs()
     if not entries:
         return ([html.Div("No MPECs available.",
@@ -4786,7 +4889,7 @@ def refresh_mpec_list(_n, active_tab, auto_mode, current_path):
 
 
 @app.callback(
-    Output("mpec-selected-path", "data"),
+    Output("mpec-selected-path", "data", allow_duplicate=True),
     Output("mpec-auto-mode", "data"),
     Input({"type": "mpec-item", "index": dash.ALL}, "n_clicks"),
     Input("mpec-follow-btn", "n_clicks"),
