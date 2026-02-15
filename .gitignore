@@ -35,6 +35,7 @@ notebooks/.ipynb_checkpoints/
 app/.neo_cache*
 app/.nea_*
 app/.apparition_cache*
+app/.mpec_cache/
 
 # Downloaded / generated data files
 downloads/

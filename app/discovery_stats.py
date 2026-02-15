@@ -23,13 +23,20 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import dash
 from dash import Dash, Input, Output, State, ctx, dcc, html, no_update
 from dash.dcc import send_data_frame
 from dash.exceptions import PreventUpdate
 from plotly.subplots import make_subplots
 
 from lib.db import connect, timed_query
+from lib.mpec_parser import fetch_recent_mpecs, fetch_mpec_detail
+from lib.mpc_convert import pack_designation
 from lib.nea_catalog import load_nea_h_lookup
+from lib.api_clients import (
+    fetch_sbdb, fetch_sentry, fetch_neofixer_orbit, fetch_neocc_risk,
+    fetch_neofixer_ephem,
+)
 
 # ---------------------------------------------------------------------------
 # Data constants
@@ -554,6 +561,15 @@ if "--host" in sys.argv:
 _DEBUG = "--debug" in sys.argv
 if _DEBUG:
     sys.argv.remove("--debug")
+_MAINTENANCE_MSG = None
+if "--maintenance" in sys.argv:
+    idx = sys.argv.index("--maintenance")
+    if idx + 1 < len(sys.argv) and not sys.argv[idx + 1].startswith("--"):
+        _MAINTENANCE_MSG = sys.argv[idx + 1]
+        del sys.argv[idx:idx + 2]
+    else:
+        _MAINTENANCE_MSG = "System maintenance in progress. Some features may be temporarily unavailable."
+        del sys.argv[idx:idx + 1]
 
 
 def _load_cached_query(sql, prefix, label):
@@ -1833,7 +1849,8 @@ def _make_elongation_hist(dff, color_by, group_by, t, height):
 # Dash app
 # ---------------------------------------------------------------------------
 
-app = Dash(__name__)
+app = Dash(__name__, suppress_callback_exceptions=True,
+           title="Planetary Defense Dashboard")
 server = app.server  # Flask WSGI server for gunicorn deployment
 
 # ---------------------------------------------------------------------------
@@ -1893,15 +1910,30 @@ app.layout = html.Div(
     id="page-container",
     style={
         "minHeight": "100vh", "padding": "20px",
-        # Initial CSS variable values (light theme defaults, overwritten
+        # Initial CSS variable values (dark theme defaults, overwritten
         # immediately by the theme callback on page load)
-        "backgroundColor": "#f5f5f5", "color": "#222222",
-        "--subtext-color": "#555555",
-        "--hr-color": "#cccccc",
-        "--paper-bg": "white",
-        "--tab-border": "#cccccc",
+        "backgroundColor": "#1e1e1e", "color": "#e0e0e0",
+        "--subtext-color": "#888888",
+        "--hr-color": "#444444",
+        "--paper-bg": "#1e1e1e",
+        "--tab-border": "#444444",
     },
     children=[
+        # ── Maintenance banner ────────────────────────────────────────
+        html.Div(
+            _MAINTENANCE_MSG,
+            style={
+                "padding": "10px 20px",
+                "marginBottom": "12px",
+                "borderRadius": "6px",
+                "fontFamily": "sans-serif",
+                "fontSize": "14px",
+                "fontWeight": "600",
+                "backgroundColor": "#f57f17",
+                "color": "#000",
+                "textAlign": "center",
+            },
+        ) if _MAINTENANCE_MSG else html.Div(),
         # ── Refresh banner (shown when cron job is updating caches) ──
         html.Div(id="refresh-banner"),
         dcc.Interval(id="refresh-check", interval=30_000, n_intervals=0),
@@ -1937,7 +1969,7 @@ app.layout = html.Div(
                     style={"marginRight": "auto"},
                     children=[
                         html.H1(
-                            "NEO Discovery Statistics",
+                            "Planetary Defense Dashboard",
                             style={"fontFamily": "sans-serif",
                                    "marginBottom": "0", "marginTop": "0"},
                         ),
@@ -1989,7 +2021,7 @@ app.layout = html.Div(
                             {"label": " Light", "value": "light"},
                             {"label": " Dark", "value": "dark"},
                         ],
-                        value="light",
+                        value="dark",
                         inline=True,
                         style=RADIO_STYLE,
                         labelStyle=RADIO_LABEL_STYLE,
@@ -2026,11 +2058,118 @@ app.layout = html.Div(
             ],
         ),
         # ── Tab navigation ───────────────────────────────────────────
+        # ── MPEC stores and intervals ─────────────────────────────
+        dcc.Store(id="mpec-selected-path", data=None),
+        dcc.Store(id="mpec-detail-data", storage_type="memory"),
+        dcc.Store(id="mpec-auto-mode", data=True),
+        dcc.Store(id="mpec-enrich-data", data=None),
+        dcc.Interval(id="mpec-refresh", interval=900_000,
+                     n_intervals=0),  # 15 min
+        dcc.Interval(id="mpec-enrich-poll", interval=60_000,
+                     n_intervals=0, max_intervals=10, disabled=True),
         dcc.Tabs(
             id="tabs",
-            value="tab-discovery",
+            value="tab-mpec",
             className="nav-tabs",
             children=[
+                # ━━━ Tab 0: MPEC Browser ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                dcc.Tab(
+                    label="MPEC Browser",
+                    value="tab-mpec",
+                    className="nav-tab",
+                    selected_className="nav-tab--selected",
+                    children=[
+                        html.Div(
+                            style={"paddingTop": "15px", "display": "flex",
+                                   "gap": "20px", "minHeight": "600px"},
+                            children=[
+                                # ── Left panel: MPEC list ──
+                                html.Div(
+                                    style={
+                                        "width": "30%", "minWidth": "280px",
+                                        "maxHeight": "85vh",
+                                        "overflowY": "auto",
+                                        "borderRight":
+                                            "1px solid var(--hr-color, #ccc)",
+                                        "paddingRight": "15px",
+                                        "display": "flex",
+                                        "flexDirection": "column",
+                                    },
+                                    children=[
+                                        # Auto-mode indicator row
+                                        html.Div(
+                                            id="mpec-auto-indicator",
+                                            style={
+                                                "display": "flex",
+                                                "justifyContent": "space-between",
+                                                "alignItems": "center",
+                                                "marginBottom": "8px",
+                                                "fontFamily": "sans-serif",
+                                                "fontSize": "12px",
+                                            },
+                                            children=[
+                                                html.Span(
+                                                    id="mpec-auto-label",
+                                                    children="",
+                                                ),
+                                                html.Button(
+                                                    "Follow latest",
+                                                    id="mpec-follow-btn",
+                                                    n_clicks=0,
+                                                    style={
+                                                        "fontSize": "11px",
+                                                        "padding": "2px 10px",
+                                                        "display": "none",
+                                                    },
+                                                ),
+                                            ],
+                                        ),
+                                        html.Div(
+                                            id="mpec-list-panel",
+                                            style={
+                                                "flex": "1",
+                                                "overflowY": "auto",
+                                            },
+                                            children=[
+                                                html.Div(
+                                                    "Loading recent MPECs...",
+                                                    style={"fontFamily": "sans-serif",
+                                                           "fontSize": "14px",
+                                                           "color": "var(--subtext-color, #888)"},
+                                                ),
+                                            ],
+                                        ),
+                                    ],
+                                ),
+                                # ── Right panel: MPEC detail ──
+                                html.Div(
+                                    style={
+                                        "width": "70%",
+                                        "maxHeight": "85vh",
+                                        "overflowY": "auto",
+                                        "paddingLeft": "5px",
+                                    },
+                                    children=[
+                                        html.Div(id="mpec-enrich-panel"),
+                                        html.Div(id="mpec-obs-chart"),
+                                        html.Div(
+                                            id="mpec-detail-panel",
+                                            children=[
+                                                html.Div(
+                                                    "Select an MPEC from the list.",
+                                                    style={"fontFamily": "sans-serif",
+                                                           "fontSize": "14px",
+                                                           "color": "var(--subtext-color, #888)",
+                                                           "paddingTop": "20px"},
+                                                ),
+                                            ],
+                                        ),
+                                    ],
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
                 # ━━━ Tab 1: Discovery by Year ━━━━━━━━━━━━━━━━━━━━━━━━
                 dcc.Tab(
                     label="Discoveries by Year",
@@ -2856,6 +2995,7 @@ def _get_defaults():
     }
 
 _TAB_KEYS = {
+    "tab-mpec": set(),  # no resettable controls
     "tab-discovery": {"year-range", "size-filter", "cumulative-toggle"},
     "tab-neomod": {"h-year-range", "h-range", "h-yscale", "h-mode",
                     "size-mapping", "comp-labels-toggle"},
@@ -3395,9 +3535,9 @@ def update_h_distribution(h_year_range, group_by, h_range, yscale, h_mode,
             fig.add_annotation(
                 x=h_140m, y=comp_140m, yref="y2",
                 text=f" {comp_140m:.0f}% at H={h_140m}",
-                showarrow=True, arrowhead=2, arrowcolor="#000000",
+                showarrow=True, arrowhead=2, arrowcolor=t["text"],
                 ax=45, ay=-28,
-                font=dict(size=12, color="#000000"),
+                font=dict(size=12, color=t["text"]),
             )
 
     mode_label = "Differential" if h_mode == "diff" else "Cumulative"
@@ -3655,6 +3795,1325 @@ def update_circumstances(year_range, size_filter, color_by, group_by,
     pa = _make_pa_rose(filtered, t, height)
 
     return sky, mag, elong, rate, pa
+
+
+# ---------------------------------------------------------------------------
+# MPEC Browser callbacks
+# ---------------------------------------------------------------------------
+
+_MPEC_CACHE_DIR = os.path.join(_APP_DIR, ".mpec_cache")
+
+# Badge styles
+_BADGE_STYLE = {
+    "display": "inline-block",
+    "padding": "2px 8px",
+    "borderRadius": "4px",
+    "fontSize": "11px",
+    "fontWeight": "600",
+    "fontFamily": "sans-serif",
+    "marginLeft": "8px",
+    "verticalAlign": "middle",
+}
+_DISCOVERY_BADGE = {**_BADGE_STYLE,
+                    "backgroundColor": "#2e7d32", "color": "white"}
+_RECOVERY_BADGE = {**_BADGE_STYLE,
+                   "backgroundColor": "#1565c0", "color": "white"}
+_PHA_BADGE = {**_BADGE_STYLE,
+              "backgroundColor": "#c62828", "color": "white"}
+
+
+def _mpec_badge(mpec_type):
+    if mpec_type == "discovery":
+        return html.Span("Discovery", style=_DISCOVERY_BADGE)
+    return html.Span("Recovery", style=_RECOVERY_BADGE)
+
+
+def _get_cached_summary(mpec_path):
+    """Extract orbit summary from a cached MPEC (fast, disk-only)."""
+    if not mpec_path:
+        return None
+    safe_name = mpec_path.replace("/", "_").strip("_") + ".txt"
+    cache_path = os.path.join(_MPEC_CACHE_DIR, safe_name)
+    if not os.path.exists(cache_path):
+        return None
+    try:
+        with open(cache_path, "r") as f:
+            text = f.read()
+    except OSError:
+        return None
+    # Extract orbital elements section to avoid false matches elsewhere
+    import re as _re
+    oe_start = text.find("Orbital elements")
+    if oe_start < 0:
+        return None
+    # Section ends at next known header or end of text
+    oe_end = len(text)
+    for hdr in ["Residual", "Ephemeris:", "Observer detail"]:
+        idx = text.find(hdr, oe_start + 20)
+        if idx > 0 and idx < oe_end:
+            oe_end = idx
+    oe_text = text[oe_start:oe_end]
+
+    summary = {}
+    # Earth MOID (appears on first line of section)
+    m = _re.search(r"Earth MOID\s*=\s*([\d.]+)", oe_text)
+    if m:
+        summary["moid"] = float(m.group(1))
+    # Check explicit PHA flag from MPC
+    if "PHA," in oe_text or "PHA " in oe_text:
+        summary["is_pha_explicit"] = True
+    # H and G from the P/H/G/U line
+    m = _re.search(r"H\s+([\d.]+)\s+G\s+([\d.]+)", oe_text)
+    if m:
+        summary["H"] = float(m.group(1))
+    # a, e from dedicated element lines (start-of-line)
+    m = _re.search(r"^a\s+([\d.]+)", oe_text, _re.MULTILINE)
+    if m:
+        summary["a"] = float(m.group(1))
+    m = _re.search(r"^e\s+([\d.]+)", oe_text, _re.MULTILINE)
+    if m:
+        summary["e"] = float(m.group(1))
+    m = _re.search(r"Incl\.\s+([\d.]+)", oe_text)
+    if m:
+        summary["i"] = float(m.group(1))
+    # Derive q
+    if "a" in summary and "e" in summary:
+        summary["q"] = summary["a"] * (1 - summary["e"])
+    # Classify orbit
+    q = summary.get("q")
+    if q is not None:
+        summary["is_neo"] = q <= 1.3
+        a = summary.get("a", 0)
+        e = summary.get("e", 0)
+        cls = _classify_orbit(a, e, q)
+        if cls:
+            summary["class"] = cls
+        # PHA: explicit flag from MPC, or MOID <= 0.05 AU and H <= 22
+        moid = summary.get("moid")
+        h_val = summary.get("H")
+        if summary.get("is_pha_explicit"):
+            summary["is_pha"] = True
+        elif moid is not None and h_val is not None:
+            summary["is_pha"] = moid <= 0.05 and h_val <= 22.0
+    return summary
+
+
+def _build_mpec_list_item(entry, idx):
+    """Build a clickable MPEC list card."""
+    summary = _get_cached_summary(entry.get("path"))
+    # Build summary annotation line
+    annot_parts = []
+    _sub = {"fontSize": "11px", "color": "var(--subtext-color, #888)",
+            "fontFamily": "monospace"}
+    annot_spans = []
+    if summary:
+        cls = summary.get("class", "")
+        if cls:
+            annot_spans.append(html.Span(cls))
+        h_val = summary.get("H")
+        if h_val is not None:
+            annot_spans.append(html.Span(f"H={h_val:.1f}"))
+        moid = summary.get("moid")
+        if moid is not None:
+            annot_spans.append(html.Span(f"MOID={moid:.3f}"))
+        if summary.get("is_pha"):
+            annot_spans.append(html.Span("PHA", style=_PHA_BADGE))
+
+    children = [
+        html.Div(
+            style={"display": "flex", "justifyContent": "space-between",
+                   "alignItems": "center"},
+            children=[
+                html.Span(entry.get("mpec_id", ""),
+                          style={"fontSize": "12px",
+                                 "color": "var(--subtext-color, #888)"}),
+                _mpec_badge(entry.get("type", "discovery")),
+            ],
+        ),
+        html.Div(
+            entry.get("title", ""),
+            style={"fontSize": "15px", "fontWeight": "600",
+                   "marginTop": "4px"},
+        ),
+        html.Div(
+            entry.get("date", ""),
+            style={"fontSize": "12px",
+                   "color": "var(--subtext-color, #888)",
+                   "marginTop": "2px"},
+        ),
+    ]
+    if annot_spans:
+        # Interleave spans with dot separators
+        interleaved = []
+        for i, sp in enumerate(annot_spans):
+            if i > 0:
+                interleaved.append(html.Span(" \u00b7 "))
+            interleaved.append(sp)
+        children.append(html.Div(
+            children=interleaved,
+            style={**_sub, "marginTop": "3px"},
+        ))
+
+    return html.Div(
+        id={"type": "mpec-item", "index": idx},
+        n_clicks=0,
+        style={
+            "padding": "10px 12px",
+            "marginBottom": "6px",
+            "borderRadius": "6px",
+            "cursor": "pointer",
+            "fontFamily": "sans-serif",
+            "border": "1px solid var(--hr-color, #ccc)",
+            "transition": "background-color 0.15s",
+        },
+        children=children,
+    )
+
+
+def _classify_orbit(a, e, q):
+    """Classify NEO orbit from elements."""
+    if q is None:
+        return ""
+    if q > 1.3:
+        return "non-NEO"
+    if a is not None and e is not None:
+        Q = a * (1 + e)
+        if a < 1.0 and Q < 0.983:
+            return "Atira"
+        if a < 1.0:
+            return "Aten"
+    if q <= 1.017:
+        return "Apollo"
+    return "Amor"
+
+
+def _build_orbit_info_line(oe):
+    """Build a compact orbit class / H / MOID / PHA summary line."""
+    if not oe:
+        return html.Div()
+
+    a = oe.get("a")
+    e = oe.get("e")
+    q = oe.get("q")
+    h_val = oe.get("H")
+    moid = oe.get("earth_moid")
+
+    parts = []
+    cls = _classify_orbit(a, e, q)
+    if cls:
+        parts.append(html.Span(cls, style={"fontWeight": "600"}))
+    if h_val is not None:
+        parts.append(html.Span(f"H={h_val:.1f}"))
+    if a is not None:
+        parts.append(html.Span(f"a={a:.2f}"))
+    if e is not None:
+        parts.append(html.Span(f"e={e:.2f}"))
+    if moid is not None:
+        parts.append(html.Span(f"MOID={moid:.3f}"))
+
+    # PHA check
+    is_pha = (moid is not None and h_val is not None
+              and moid <= 0.05 and h_val <= 22.0)
+    if is_pha:
+        parts.append(html.Span("PHA", style=_PHA_BADGE))
+
+    if not parts:
+        return html.Div()
+
+    interleaved = []
+    for i, sp in enumerate(parts):
+        if i > 0:
+            interleaved.append(html.Span(" \u00b7 "))
+        interleaved.append(sp)
+
+    return html.Div(
+        children=interleaved,
+        style={"fontFamily": "monospace", "fontSize": "13px",
+               "color": "var(--subtext-color, #888)", "marginTop": "6px"},
+    )
+
+
+def _build_mpec_detail(detail):
+    """Build the right-panel detail view for a selected MPEC."""
+    if not detail:
+        return html.Div("Could not load MPEC.",
+                        style={"fontFamily": "sans-serif",
+                               "color": "var(--subtext-color, #888)"})
+
+    designation = detail.get("designation", detail.get("title", ""))
+    mpec_id = detail.get("mpec_id", "")
+    date = detail.get("date", "")
+    mpec_type = detail.get("type", "discovery")
+    mpec_url = detail.get("mpec_url", "")
+
+    # Build packed designation for external links
+    packed = ""
+    if designation:
+        try:
+            packed = pack_designation(designation).strip()
+        except Exception:
+            packed = ""
+
+    # External links
+    links = []
+    if mpec_url:
+        links.append(html.A("MPEC", href=mpec_url, target="_blank",
+                            style=_link_btn_style()))
+    if packed:
+        links.append(html.A(
+            "NEOfixer",
+            href=f"https://neofixer.arizona.edu/site/500/{packed}",
+            target="_blank", style=_link_btn_style()))
+        links.append(html.A(
+            "JPL SBDB",
+            href=f"https://ssd.jpl.nasa.gov/tools/sbdb_lookup.html#/?sstr={packed}",
+            target="_blank", style=_link_btn_style()))
+        links.append(html.A(
+            "MPC DB",
+            href=f"https://www.minorplanetcenter.net/db_search/show_object?utf8=✓&object_id={designation}",
+            target="_blank", style=_link_btn_style()))
+
+    # Accordion sections
+    sections = []
+
+    disc_stn = None
+    obs_text = detail.get("observations", "")
+    if obs_text:
+        obs_section, disc_stn = _build_obs_section(obs_text)
+        sections.append(obs_section)
+
+    oe_raw = detail.get("orbital_elements_raw", "")
+    if oe_raw:
+        sections.append(_mpec_section(
+            "Orbital Elements \u2014 MPC", oe_raw, open_default=True,
+            mono=True))
+
+    observers = detail.get("observers", "")
+    if observers:
+        obs_credit = _build_observer_section(observers, disc_stn)
+        if obs_credit:
+            sections.append(obs_credit)
+
+    residuals = detail.get("residuals", "")
+    if residuals:
+        sections.append(_mpec_section(
+            "Residuals", residuals, open_default=False, mono=True))
+
+    ephemeris = detail.get("ephemeris", "")
+    if ephemeris:
+        sections.append(_mpec_section(
+            "Ephemeris", ephemeris, open_default=False, mono=True))
+
+    # Build orbit summary line from parsed elements
+    oe = detail.get("orbital_elements", {})
+    orbit_info = _build_orbit_info_line(oe)
+
+    return html.Div(children=[
+        # Header
+        html.Div(
+            style={"marginBottom": "15px"},
+            children=[
+                html.H2(designation,
+                         style={"fontFamily": "sans-serif", "margin": "0 0 4px 0",
+                                "fontSize": "24px"}),
+                html.Span(mpec_id,
+                           style={"fontFamily": "sans-serif", "fontSize": "14px",
+                                  "color": "var(--subtext-color, #888)"}),
+                html.Span(f"  {date}",
+                           style={"fontFamily": "sans-serif", "fontSize": "14px",
+                                  "color": "var(--subtext-color, #888)",
+                                  "marginLeft": "12px"}),
+                _mpec_badge(mpec_type),
+                orbit_info,
+            ],
+        ),
+        # External links row
+        html.Div(
+            style={"display": "flex", "gap": "8px", "marginBottom": "20px",
+                   "flexWrap": "wrap"},
+            children=links,
+        ) if links else html.Div(),
+        # Sections
+        *sections,
+    ])
+
+
+def _link_btn_style():
+    return {
+        "display": "inline-block",
+        "padding": "5px 14px",
+        "borderRadius": "4px",
+        "fontSize": "13px",
+        "fontFamily": "sans-serif",
+        "fontWeight": "500",
+        "textDecoration": "none",
+        "border": "1px solid var(--hr-color, #ccc)",
+        "color": "inherit",
+        "backgroundColor": "var(--paper-bg, white)",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Observability chart (NEOfixer ephemeris)
+# ---------------------------------------------------------------------------
+
+# CSS observatory sites for observability chart
+_OBS_SITES = [
+    ("I52", "Mt. Lemmon (I52)", "#3cb44b"),
+    ("G96", "Mt. Lemmon 60\" (G96)", "#4363d8"),
+    ("703", "Catalina 0.7m (703)", "#f58231"),
+]
+
+# Twilight altitude thresholds (degrees below horizon for Sun)
+# We approximate twilight using sky brightness from the API instead
+_MIN_ALTITUDE = 20  # typical CSS minimum working altitude
+
+
+_OBS_SITES = [
+    ("I52", "Mt. Lemmon-Steward"),
+    ("G96", "Mt. Lemmon Survey"),
+    ("703", "Catalina"),
+    ("V06", "CSS-Kuiper"),
+]
+
+
+def _build_observability_section(packed_desig, designation, site="I52"):
+    """Build observability chart using NEOfixer ephemeris data."""
+    from datetime import datetime, timezone
+
+    # Fetch ephemeris for requested site
+    ephem_data = fetch_neofixer_ephem(site, packed_desig)
+    if not ephem_data or not ephem_data.get("entries"):
+        return None
+
+    entries = ephem_data["entries"]
+    if len(entries) < 10:
+        return None
+
+    # Parse into arrays
+    times = []
+    alts = []
+    mags = []
+    expts = []
+    rates = []
+    sky_brs = []
+    for e in entries:
+        iso = e.get("ISO_time", "")
+        if not iso:
+            continue
+        try:
+            t = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            continue
+        times.append(t)
+        alts.append(e.get("alt", -90))
+        mags.append(e.get("mag"))
+        expts.append(e.get("ExpT"))
+        rates.append(e.get("motion_rate"))
+        sky_brs.append(e.get("SkyBr", 0))
+
+    if not times:
+        return None
+
+    now = datetime.now(timezone.utc)
+
+    # Find nights: periods where altitude > 0 and SkyBr > 19 (dark sky)
+    # Show up to 5 nights from now
+    from datetime import timedelta
+    t_start = now - timedelta(hours=6)
+    t_end = now + timedelta(days=5)
+
+    # Filter to time window
+    filtered_t = []
+    filtered_alt = []
+    filtered_mag = []
+    filtered_expt = []
+    filtered_rate = []
+    hover_texts = []
+    for i, t in enumerate(times):
+        if t_start <= t <= t_end:
+            filtered_t.append(t)
+            filtered_alt.append(alts[i])
+            m = mags[i]
+            filtered_mag.append(m)
+            filtered_expt.append(expts[i])
+            filtered_rate.append(rates[i])
+            # Hover text
+            parts = [t.strftime("%Y-%m-%d %H:%M UT")]
+            parts.append(f"Alt: {alts[i]:.1f}\u00b0")
+            if m is not None:
+                parts.append(f"V: {m:.1f}")
+            if expts[i] is not None:
+                parts.append(f"Exp: {expts[i]:.0f}s")
+            if rates[i] is not None:
+                parts.append(f"Rate: {rates[i]:.1f}\u00b0/d")
+            hover_texts.append("<br>".join(parts))
+
+    if not filtered_t:
+        return None
+
+    # Build figure
+    fig = go.Figure()
+
+    # Horizon band (alt < 0)
+    fig.add_hrect(y0=-90, y1=0, fillcolor="rgba(50,50,50,0.3)",
+                  line_width=0, layer="below")
+
+    # Minimum working altitude line
+    fig.add_hline(y=_MIN_ALTITUDE, line_dash="dash",
+                  line_color="rgba(255,165,0,0.5)", line_width=1,
+                  annotation_text=f"Min alt {_MIN_ALTITUDE}\u00b0",
+                  annotation_position="top left",
+                  annotation_font_size=10,
+                  annotation_font_color="rgba(255,165,0,0.7)")
+
+    # Altitude trace — color by whether object is observable
+    # (above min alt and sky is dark)
+    obs_colors = []
+    for i, alt in enumerate(filtered_alt):
+        if alt >= _MIN_ALTITUDE:
+            obs_colors.append("#3cb44b")  # green = observable
+        elif alt >= 0:
+            obs_colors.append("#f0ad4e")  # amber = low
+        else:
+            obs_colors.append("#999")     # grey = below horizon
+
+    fig.add_trace(go.Scattergl(
+        x=filtered_t,
+        y=filtered_alt,
+        mode="lines",
+        line={"color": "#3cb44b", "width": 2},
+        name=f"Altitude ({site})",
+        hovertext=hover_texts,
+        hoverinfo="text",
+        fill="tozeroy",
+        fillcolor="rgba(60, 180, 75, 0.08)",
+    ))
+
+    # Magnitude on secondary y-axis
+    valid_mag_t = []
+    valid_mag_v = []
+    mag_hover = []
+    for i, m in enumerate(filtered_mag):
+        if m is not None and filtered_alt[i] >= 0:
+            valid_mag_t.append(filtered_t[i])
+            valid_mag_v.append(m)
+            mag_hover.append(f"V={m:.1f}")
+
+    if valid_mag_v:
+        fig.add_trace(go.Scattergl(
+            x=valid_mag_t,
+            y=valid_mag_v,
+            mode="lines",
+            line={"color": "#f032e6", "width": 1.5, "dash": "dot"},
+            name="V mag",
+            yaxis="y2",
+            hovertext=mag_hover,
+            hoverinfo="text",
+        ))
+
+    # Current time marker (use add_shape to avoid Plotly datetime bug)
+    now_str = now.isoformat()
+    fig.add_shape(type="line", x0=now_str, x1=now_str, y0=0, y1=1,
+                  yref="paper", line={"color": "rgba(255,80,80,0.7)",
+                                       "width": 1.5})
+    fig.add_annotation(x=now_str, y=1, yref="paper",
+                       text="Now", showarrow=False,
+                       font={"size": 10, "color": "rgba(255,80,80,0.8)"},
+                       yshift=8)
+
+    # Night shading — approximate using sky brightness data or
+    # simple time-based heuristic.  Mark sunset/sunrise bands.
+    # For Mt. Lemmon (lat ~32.4°N), rough sunset ~01:30 UT, sunrise ~13:30 UT
+    # in February.  We'll shade these bands.
+    for day_offset in range(-1, 6):
+        night_start = now.replace(hour=1, minute=30, second=0,
+                                  microsecond=0) + timedelta(days=day_offset)
+        night_end = night_start.replace(hour=13, minute=30)
+        if night_end < t_start or night_start > t_end:
+            continue
+        ns = night_start.isoformat()
+        ne = night_end.isoformat()
+        tw_s = (night_start - timedelta(hours=1)).isoformat()
+        tw_e = (night_end + timedelta(hours=1)).isoformat()
+        # Twilight bands (approximate)
+        fig.add_vrect(x0=tw_s, x1=ns,
+                      fillcolor="rgba(30,30,80,0.1)", line_width=0,
+                      layer="below")
+        fig.add_vrect(x0=ne, x1=tw_e,
+                      fillcolor="rgba(30,30,80,0.1)", line_width=0,
+                      layer="below")
+        # Dark time
+        fig.add_vrect(x0=ns, x1=ne,
+                      fillcolor="rgba(15,15,50,0.08)", line_width=0,
+                      layer="below")
+
+    # Find peak observable altitude and annotate
+    peak_alt = -90
+    peak_idx = 0
+    for i, alt in enumerate(filtered_alt):
+        if alt > peak_alt:
+            peak_alt = alt
+            peak_idx = i
+
+    # Key statistics text
+    stats_parts = []
+    if peak_alt > 0:
+        stats_parts.append(f"Peak alt: {peak_alt:.0f}\u00b0")
+        peak_mag = filtered_mag[peak_idx]
+        if peak_mag is not None:
+            stats_parts.append(f"V at peak: {peak_mag:.1f}")
+        peak_expt = filtered_expt[peak_idx]
+        if peak_expt is not None:
+            stats_parts.append(f"Exp: {peak_expt:.0f}s")
+        peak_rate = filtered_rate[peak_idx]
+        if peak_rate is not None:
+            stats_parts.append(f"Rate: {peak_rate:.1f}\u00b0/d")
+
+    fig.update_layout(
+        height=300,
+        margin={"l": 50, "r": 50, "t": 45, "b": 40},
+        xaxis={"title": "", "gridcolor": "rgba(128,128,128,0.15)"},
+        yaxis={"title": "Altitude (\u00b0)", "range": [-10, 90],
+               "gridcolor": "rgba(128,128,128,0.15)"},
+        yaxis2={"title": "V mag", "overlaying": "y", "side": "right",
+                "autorange": "reversed",
+                "gridcolor": "rgba(128,128,128,0.05)"},
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        font={"family": "sans-serif", "size": 12, "color": "#aaa"},
+        legend={"orientation": "h", "y": 1.18, "x": 0,
+                "font": {"size": 11}},
+        hovermode="x unified",
+    )
+
+    # Build the section
+    chart_div = dcc.Graph(
+        figure=fig,
+        config={"displayModeBar": False},
+        style={"height": "300px"},
+    )
+
+    stats_line = html.Div(
+        " \u2502 ".join(stats_parts) if stats_parts else "Below horizon",
+        style={"fontFamily": "monospace", "fontSize": "12px",
+               "padding": "6px 10px",
+               "color": "var(--subtext-color, #888)"},
+    )
+
+    # Site selector buttons
+    site_name = dict(_OBS_SITES).get(site, site)
+    site_buttons = []
+    for code, name in _OBS_SITES:
+        is_active = (code == site)
+        site_buttons.append(
+            html.Button(
+                code,
+                id={"type": "obs-site-btn", "site": code},
+                title=name,
+                n_clicks=0,
+                style={
+                    "padding": "2px 8px", "margin": "0 3px",
+                    "border": "1px solid #666" if is_active else "1px solid #444",
+                    "borderRadius": "4px", "cursor": "pointer",
+                    "fontSize": "11px", "fontFamily": "monospace",
+                    "backgroundColor": "#3cb44b" if is_active else "transparent",
+                    "color": "white" if is_active else "#aaa",
+                    "fontWeight": "600" if is_active else "400",
+                },
+            )
+        )
+
+    site_bar = html.Div(
+        children=[html.Span("Site: ", style={"fontSize": "11px",
+                                              "color": "#aaa",
+                                              "marginRight": "4px"})]
+                 + site_buttons,
+        style={"display": "flex", "alignItems": "center",
+               "padding": "4px 10px"},
+    )
+
+    return html.Details(
+        open=True,
+        style={"marginBottom": "12px",
+               "border": "1px solid var(--hr-color, #ccc)",
+               "borderRadius": "6px"},
+        children=[
+            html.Summary(
+                f"Short term observability \u2014 {site} ({designation})",
+                style={"padding": "10px 14px", "cursor": "pointer",
+                       "fontFamily": "sans-serif", "fontWeight": "600",
+                       "fontSize": "14px",
+                       "backgroundColor": "var(--paper-bg, white)",
+                       "borderRadius": "6px"},
+            ),
+            html.Div(children=[site_bar, chart_div, stats_line],
+                     style={"padding": "4px"}),
+        ],
+    )
+
+
+# Alternating tracklet background colors (light, theme-aware)
+_TRACKLET_COLORS = [
+    "rgba(100, 150, 255, 0.18)",  # blue tint
+    "rgba(100, 200, 130, 0.18)",  # green tint
+    "rgba(200, 150, 80, 0.18)",   # amber tint
+    "rgba(180, 100, 200, 0.18)",  # purple tint
+    "rgba(200, 100, 100, 0.18)",  # red tint
+    "rgba(100, 200, 200, 0.18)",  # teal tint
+]
+
+
+def _build_obs_section(obs_text):
+    """Build the Observations accordion with tracklet color-coding.
+
+    Returns (section_element, discovery_station_code).
+    """
+    lines = obs_text.split("\n")
+    # Find the discovery station (line with '*' at column 12)
+    disc_stn = None
+    disc_key = None
+    for line in lines:
+        if len(line) > 12 and line[12] == "*" and len(line) >= 80:
+            disc_stn = line[77:80].strip()
+            date_part = line[15:25].strip()
+            day_key = date_part.split(".")[0] if "." in date_part else date_part
+            disc_key = f"{disc_stn}:{day_key}"
+            break
+
+    # Group lines by station code (columns 78-80 in 80-col format)
+    # and date (columns 16-25).  A tracklet = same station + same night.
+    tracklet_groups = []
+    current_key = None
+    current_lines = []
+    for line in lines:
+        if len(line) >= 80:
+            stn = line[77:80].strip()
+            date_part = line[15:25].strip()  # "YYYY MM DD"
+            # Use station + integer date as tracklet key
+            day_key = date_part.split(".")[0] if "." in date_part else date_part
+            key = f"{stn}:{day_key}"
+        elif line.strip():
+            key = current_key  # continuation line
+        else:
+            key = None  # blank line
+
+        if key != current_key and current_lines:
+            tracklet_groups.append((current_key, current_lines))
+            current_lines = []
+        current_key = key
+        current_lines.append(line)
+
+    if current_lines:
+        tracklet_groups.append((current_key, current_lines))
+
+    # Assign colors to unique station-date tracklets
+    seen_keys = {}
+    color_idx = 0
+    children = []
+    # Discovery tracklet color — stronger green highlight
+    _DISC_BG = "rgba(60, 180, 75, 0.22)"
+    for key, grp_lines in tracklet_groups:
+        is_disc_tracklet = (key == disc_key)
+        if key and key not in seen_keys:
+            if is_disc_tracklet:
+                seen_keys[key] = _DISC_BG
+            else:
+                seen_keys[key] = _TRACKLET_COLORS[
+                    color_idx % len(_TRACKLET_COLORS)]
+                color_idx += 1
+        bg = seen_keys.get(key, "transparent")
+        for line in grp_lines:
+            # Mark discovery observation (has '*' at column 13)
+            is_disc_obs = len(line) > 12 and line[12] == "*"
+            style = {
+                "backgroundColor": bg,
+                "fontWeight": "700" if is_disc_obs else "normal",
+            }
+            if is_disc_tracklet:
+                style["boxShadow"] = "inset 3px 0 0 #3cb44b"
+            children.append(html.Div(line, style=style))
+
+    content_style = {
+        "padding": "10px",
+        "fontSize": "13px",
+        "lineHeight": "1.5",
+        "overflowX": "auto",
+        "maxHeight": "400px",
+        "overflowY": "auto",
+        "fontFamily": "monospace",
+        "whiteSpace": "pre",
+    }
+
+    section = html.Details(
+        open=True,
+        style={"marginBottom": "12px",
+               "border": "1px solid var(--hr-color, #ccc)",
+               "borderRadius": "6px"},
+        children=[
+            html.Summary(
+                "Observations",
+                style={"padding": "10px 14px", "cursor": "pointer",
+                       "fontFamily": "sans-serif", "fontWeight": "600",
+                       "fontSize": "14px",
+                       "backgroundColor": "var(--paper-bg, white)",
+                       "borderRadius": "6px"},
+            ),
+            html.Div(children=children, style=content_style),
+        ],
+    )
+    return section, disc_stn
+
+
+def _build_observer_section(observers_text, disc_stn):
+    """Build Observer Credits section with discovery station highlighted."""
+    if not observers_text:
+        return None
+    if not disc_stn:
+        return _mpec_section(
+            "Observer Credits", observers_text, open_default=False, mono=False)
+    # Split by station code blocks — each starts with a 3-char code at col 0
+    import re as _re
+    # Observer blocks start with station code like "F51 " or "I52 " at line start
+    blocks = _re.split(r"(?=^[A-Z0-9]{3} )", observers_text, flags=_re.MULTILINE)
+    children = []
+    for block in blocks:
+        block = block.rstrip()
+        if not block:
+            continue
+        stn_match = _re.match(r"^([A-Z0-9]{3}) ", block)
+        is_disc = stn_match and stn_match.group(1) == disc_stn
+        style = {
+            "padding": "4px 8px",
+            "fontSize": "13px",
+            "lineHeight": "1.5",
+            "fontFamily": "sans-serif",
+            "whiteSpace": "pre-wrap",
+        }
+        if is_disc:
+            style["backgroundColor"] = "rgba(60, 180, 75, 0.15)"
+            style["borderLeft"] = "3px solid #3cb44b"
+            style["borderRadius"] = "4px"
+        children.append(html.Div(block, style=style))
+    content_div = html.Div(
+        children=children,
+        style={"padding": "10px", "maxHeight": "400px",
+               "overflowY": "auto"},
+    )
+    return html.Details(
+        open=False,
+        style={"marginBottom": "12px",
+               "border": "1px solid var(--hr-color, #ccc)",
+               "borderRadius": "6px"},
+        children=[
+            html.Summary(
+                "Observer Credits",
+                style={"padding": "10px 14px", "cursor": "pointer",
+                       "fontFamily": "sans-serif", "fontWeight": "600",
+                       "fontSize": "14px",
+                       "backgroundColor": "var(--paper-bg, white)",
+                       "borderRadius": "6px"},
+            ),
+            content_div,
+        ],
+    )
+
+
+def _mpec_section(title, content, open_default=False, mono=True):
+    """Build a collapsible section using html.Details/Summary."""
+    content_style = {
+        "padding": "10px",
+        "fontSize": "13px",
+        "lineHeight": "1.5",
+        "overflowX": "auto",
+        "maxHeight": "400px",
+        "overflowY": "auto",
+    }
+    if mono:
+        content_style["fontFamily"] = "monospace"
+        content_style["whiteSpace"] = "pre"
+    else:
+        content_style["fontFamily"] = "sans-serif"
+        content_style["whiteSpace"] = "pre-wrap"
+
+    return html.Details(
+        open=open_default,
+        style={"marginBottom": "12px",
+               "border": "1px solid var(--hr-color, #ccc)",
+               "borderRadius": "6px"},
+        children=[
+            html.Summary(
+                title,
+                style={"padding": "10px 14px", "cursor": "pointer",
+                       "fontFamily": "sans-serif", "fontWeight": "600",
+                       "fontSize": "14px",
+                       "backgroundColor": "var(--paper-bg, white)",
+                       "borderRadius": "6px"},
+            ),
+            html.Div(content, style=content_style),
+        ],
+    )
+
+
+def _prefetch_mpec_details(entries):
+    """Background-fetch all MPEC details so disk cache populates."""
+    for entry in entries:
+        path = entry.get("path", "")
+        if not path:
+            continue
+        safe_name = path.replace("/", "_").strip("_") + ".txt"
+        cache_path = os.path.join(_MPEC_CACHE_DIR, safe_name)
+        if os.path.exists(cache_path):
+            continue
+        try:
+            fetch_mpec_detail(path, cache_dir=_MPEC_CACHE_DIR)
+        except Exception as e:
+            print(f"Prefetch error for {path}: {e}")
+
+
+@app.callback(
+    Output("mpec-list-panel", "children"),
+    Output("mpec-selected-path", "data", allow_duplicate=True),
+    Input("mpec-refresh", "n_intervals"),
+    Input("tabs", "value"),
+    State("mpec-auto-mode", "data"),
+    State("mpec-selected-path", "data"),
+    prevent_initial_call="initial_duplicate",
+)
+def refresh_mpec_list(_n, active_tab, auto_mode, current_path):
+    if active_tab != "tab-mpec":
+        raise PreventUpdate
+    entries = fetch_recent_mpecs()
+    if not entries:
+        return ([html.Div("No MPECs available.",
+                          style={"fontFamily": "sans-serif", "fontSize": "14px",
+                                 "color": "var(--subtext-color, #888)"})],
+                no_update)
+    # Pre-fetch all MPECs in background so annotations appear on next render
+    threading.Thread(target=_prefetch_mpec_details, args=(entries,),
+                     daemon=True).start()
+    items = [_build_mpec_list_item(e, i) for i, e in enumerate(entries)]
+
+    # Auto-select: pick first discovery MPEC (or first entry)
+    if auto_mode:
+        auto_path = entries[0]["path"]
+        for e in entries:
+            if e.get("type") == "discovery":
+                auto_path = e["path"]
+                break
+        return items, auto_path
+
+    return items, no_update
+
+
+@app.callback(
+    Output("mpec-selected-path", "data"),
+    Output("mpec-auto-mode", "data"),
+    Input({"type": "mpec-item", "index": dash.ALL}, "n_clicks"),
+    Input("mpec-follow-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def select_mpec(item_clicks, follow_clicks):
+    triggered = ctx.triggered_id
+
+    # "Follow latest" button re-enables auto mode
+    if triggered == "mpec-follow-btn":
+        entries = fetch_recent_mpecs()
+        if entries:
+            auto_path = entries[0]["path"]
+            for e in entries:
+                if e.get("type") == "discovery":
+                    auto_path = e["path"]
+                    break
+            return auto_path, True
+        raise PreventUpdate
+
+    # User clicked an MPEC item — disable auto mode
+    if isinstance(triggered, dict) and triggered.get("type") == "mpec-item":
+        if not any(item_clicks):
+            raise PreventUpdate
+        idx = triggered["index"]
+        entries = fetch_recent_mpecs()
+        if idx < len(entries):
+            return entries[idx]["path"], False
+
+    raise PreventUpdate
+
+
+@app.callback(
+    Output("mpec-auto-label", "children"),
+    Output("mpec-auto-label", "style"),
+    Output("mpec-follow-btn", "style"),
+    Input("mpec-auto-mode", "data"),
+)
+def update_auto_indicator(auto_mode):
+    if auto_mode:
+        return (
+            "\u25CF Following latest",
+            {"color": "#2e7d32", "fontWeight": "600"},
+            {"fontSize": "11px", "padding": "2px 10px", "display": "none"},
+        )
+    return (
+        "\u25CB Pinned",
+        {"color": "var(--subtext-color, #888)"},
+        {"fontSize": "11px", "padding": "2px 10px", "display": "inline-block"},
+    )
+
+
+@app.callback(
+    Output("mpec-detail-panel", "children"),
+    Output("mpec-enrich-poll", "disabled"),
+    Output("mpec-enrich-poll", "n_intervals"),
+    Output("mpec-enrich-data", "data"),
+    Input("mpec-selected-path", "data"),
+)
+def show_mpec_detail(path):
+    if not path:
+        return (html.Div("Select an MPEC from the list.",
+                         style={"fontFamily": "sans-serif", "fontSize": "14px",
+                                "color": "var(--subtext-color, #888)",
+                                "paddingTop": "20px"}),
+                True, 0, None)
+    detail = fetch_mpec_detail(path, cache_dir=_MPEC_CACHE_DIR)
+    # Start enrichment polling (reset counter, enable interval)
+    return _build_mpec_detail(detail), False, 0, None
+
+
+# ---------------------------------------------------------------------------
+# Observability chart callback
+# ---------------------------------------------------------------------------
+
+@app.callback(
+    Output("mpec-obs-chart", "children"),
+    Input("mpec-selected-path", "data"),
+    Input({"type": "obs-site-btn", "site": dash.ALL}, "n_clicks"),
+)
+def update_obs_chart(path, site_clicks):
+    if not path:
+        return html.Div()
+
+    # Determine which site was selected
+    site = "I52"  # default
+    if ctx.triggered_id and isinstance(ctx.triggered_id, dict):
+        site = ctx.triggered_id.get("site", "I52")
+
+    detail = fetch_mpec_detail(path, cache_dir=_MPEC_CACHE_DIR)
+    if not detail:
+        return html.Div()
+
+    designation = detail.get("designation", "")
+    packed = ""
+    if designation:
+        try:
+            packed = pack_designation(designation).strip()
+        except Exception:
+            packed = ""
+    if not packed:
+        return html.Div()
+
+    try:
+        chart = _build_observability_section(packed, designation, site=site)
+        return chart if chart else html.Div()
+    except Exception as e:
+        print(f"Observability chart error: {e}")
+        return html.Div()
+
+
+# ---------------------------------------------------------------------------
+# Enrichment callback — fetches SBDB, Sentry, NEOfixer, NEOCC
+# ---------------------------------------------------------------------------
+
+def _build_enrich_card(sbdb, sentry, neofixer, neocc_risk, designation,
+                       packed):
+    """Build the Data Center Status summary card."""
+    rows = []
+    _ss = {"fontFamily": "sans-serif", "fontSize": "13px", "lineHeight": "1.6"}
+    _mono = {"fontFamily": "monospace", "fontSize": "12px"}
+    _lbl = {"fontWeight": "600", "marginRight": "6px"}
+    _dim = {"color": "var(--subtext-color, #888)", "fontSize": "12px"}
+    _ok = "\u2705"   # checkmark
+    _wait = "\u23F3"  # hourglass
+    _na = "\u2014"    # em dash
+
+    # ── Orbit summary line ─────────────────────────────────────────
+    orbit_parts = []
+    source_parts = []
+
+    # Prefer NEOfixer orbit, fall back to SBDB
+    elem_src = None
+    if neofixer and neofixer.get("elements"):
+        elem_src = neofixer
+        source_parts.append(f"{_ok} NEOfixer (Find_Orb)")
+    elif neofixer is None:
+        source_parts.append(f"{_wait} NEOfixer")
+    else:
+        source_parts.append(f"{_na} NEOfixer")
+
+    if sbdb and sbdb.get("orbit_class"):
+        if not elem_src:
+            elem_src = sbdb
+        source_parts.append(f"{_ok} JPL")
+    elif sbdb is None:
+        source_parts.append(f"{_wait} JPL")
+    else:
+        source_parts.append(f"{_na} JPL")
+
+    if neocc_risk:
+        source_parts.append(f"{_ok} ESA")
+    else:
+        source_parts.append(f"{_na} ESA")
+
+    # Build orbit info from best source
+    if elem_src:
+        elements = (elem_src.get("elements", {})
+                    if "elements" in elem_src else elem_src)
+        orbit_class = (elem_src.get("orbit_class", "")
+                       or (sbdb.get("orbit_class", "") if sbdb else ""))
+        if orbit_class:
+            orbit_parts.append(orbit_class)
+
+        a = elements.get("a")
+        e = elements.get("e")
+        i = elements.get("i")
+        if a is not None:
+            orbit_parts.append(f"a={a:.2f}")
+        if e is not None:
+            orbit_parts.append(f"e={e:.2f}")
+        if i is not None:
+            orbit_parts.append(f"i={i:.1f}\u00b0")
+
+        H = elem_src.get("H")
+        if H is not None:
+            orbit_parts.append(f"H={H:.1f}")
+
+    if orbit_parts:
+        rows.append(html.Div(
+            style={**_ss, "marginBottom": "4px"},
+            children=[
+                html.Span("Orbit: ", style=_lbl),
+                html.Span(" \u2502 ".join(orbit_parts)),
+            ],
+        ))
+
+    # ── MOID / Condition / Arc / Obs ──────────────────────────────
+    info_parts = []
+    if neofixer and neofixer.get("earth_moid") is not None:
+        info_parts.append(f"MOID: {neofixer['earth_moid']:.3f} AU")
+    elif sbdb and sbdb.get("moid") is not None:
+        info_parts.append(f"MOID: {sbdb['moid']:.3f} AU")
+
+    if sbdb:
+        cc = sbdb.get("condition_code", "")
+        if cc:
+            info_parts.append(f"Cond: {cc}")
+        arc = sbdb.get("data_arc", "")
+        if arc:
+            info_parts.append(f"Arc: {arc}")
+        nobs = sbdb.get("n_obs", "")
+        if nobs:
+            info_parts.append(f"Obs: {nobs}")
+
+    if info_parts:
+        rows.append(html.Div(
+            style={**_ss, "marginBottom": "4px"},
+            children=[
+                html.Span(" \u2502 ".join(info_parts)),
+            ],
+        ))
+
+    # ── Source status ─────────────────────────────────────────────
+    rows.append(html.Div(
+        style={**_ss, **_dim, "marginBottom": "8px"},
+        children=[
+            html.Span("Source: ", style=_lbl),
+            html.Span(" \u00b7 ".join(source_parts)),
+        ],
+    ))
+
+    # ── Close approaches ──────────────────────────────────────────
+    if sbdb and sbdb.get("close_approaches"):
+        ca_items = []
+        for ca in sbdb["close_approaches"][:5]:
+            jd = ca.get("jd", "")
+            cd = ca.get("cd", jd)  # calendar date
+            dist = ca.get("dist", "")
+            v_rel = ca.get("v_rel", "")
+            body = ca.get("body", "Earth")
+            parts = []
+            if cd:
+                parts.append(str(cd))
+            if dist:
+                try:
+                    parts.append(f"{float(dist):.3f} AU")
+                except (ValueError, TypeError):
+                    parts.append(f"{dist} AU")
+            if v_rel:
+                try:
+                    parts.append(f"{float(v_rel):.1f} km/s")
+                except (ValueError, TypeError):
+                    pass
+            parts.append(f"({body})")
+            ca_items.append(html.Div(
+                "  " + "  ".join(parts),
+                style=_mono,
+            ))
+        rows.append(html.Div(style={"marginBottom": "8px"}, children=[
+            html.Div([html.Span("Close approaches:", style={**_ss, **_lbl})]),
+            *ca_items,
+        ]))
+
+    # ── Impact risk ───────────────────────────────────────────────
+    if sentry is not None:
+        if sentry.get("on_list"):
+            ip = sentry.get("ip", "?")
+            ts_max = sentry.get("ts_max", "0")
+            ps_cum = sentry.get("ps_cum", "")
+            risk_text = (f"Torino {ts_max}, IP={ip}, "
+                         f"Palermo={ps_cum}")
+            risk_color = "#c62828" if str(ts_max) != "0" else "#f57f17"
+            rows.append(html.Div(style={**_ss, "marginBottom": "4px"},
+                                 children=[
+                html.Span("Impact risk: ", style=_lbl),
+                html.Span(risk_text,
+                          style={"color": risk_color, "fontWeight": "600"}),
+            ]))
+        else:
+            rows.append(html.Div(style={**_ss, "marginBottom": "4px"},
+                                 children=[
+                html.Span("Impact risk: ", style=_lbl),
+                html.Span("Not on Sentry watchlist", style=_dim),
+            ]))
+    else:
+        rows.append(html.Div(style={**_ss, "marginBottom": "4px"}, children=[
+            html.Span("Impact risk: ", style=_lbl),
+            html.Span(f"{_wait} checking Sentry...", style=_dim),
+        ]))
+
+    # ── NEOCC risk ────────────────────────────────────────────────
+    if neocc_risk:
+        lines = neocc_risk.strip().split("\n")
+        neocc_summary = "Listed" if lines else "Data available"
+        rows.append(html.Div(style={**_ss, "marginBottom": "4px"}, children=[
+            html.Span("NEOCC: ", style=_lbl),
+            html.Span(neocc_summary),
+        ]))
+    else:
+        rows.append(html.Div(style={**_ss, "marginBottom": "4px"}, children=[
+            html.Span("NEOCC: ", style=_lbl),
+            html.Span("Not listed", style=_dim),
+        ]))
+
+    # ── External links ────────────────────────────────────────────
+    desig_nospace = designation.replace(" ", "") if designation else ""
+    link_style = {
+        **_link_btn_style(),
+        "fontSize": "12px",
+        "padding": "3px 10px",
+    }
+    ext_links = []
+    if designation:
+        ext_links.append(html.A(
+            "MPECWatch",
+            href="https://sbnmpc.astro.umd.edu/mpecwatch/",
+            target="_blank", style=link_style))
+        ext_links.append(html.A(
+            "CNEOS",
+            href=f"https://cneos.jpl.nasa.gov/",
+            target="_blank", style=link_style))
+        if desig_nospace:
+            ext_links.append(html.A(
+                "NEOCC",
+                href=f"https://neo.ssa.esa.int/search-for-asteroids?search-term={desig_nospace}",
+                target="_blank", style=link_style))
+        if packed:
+            ext_links.append(html.A(
+                "Horizons",
+                href=f"https://ssd.jpl.nasa.gov/horizons/app.html#/body={packed}",
+                target="_blank", style=link_style))
+
+    if ext_links:
+        rows.append(html.Div(
+            style={"display": "flex", "gap": "6px", "marginTop": "8px",
+                   "flexWrap": "wrap"},
+            children=ext_links,
+        ))
+
+    return html.Div(
+        className="mpec-enrich-card",
+        style={
+            "padding": "14px 16px",
+            "marginBottom": "16px",
+            "borderRadius": "8px",
+            "border": "1px solid var(--hr-color, #ccc)",
+            "backgroundColor": "var(--paper-bg, white)",
+        },
+        children=[
+            html.Div("Data Center Status",
+                     style={"fontFamily": "sans-serif", "fontWeight": "700",
+                            "fontSize": "14px", "marginBottom": "10px"}),
+            *rows,
+        ],
+    )
+
+
+@app.callback(
+    Output("mpec-enrich-panel", "children"),
+    Output("mpec-enrich-poll", "disabled", allow_duplicate=True),
+    Output("mpec-enrich-data", "data", allow_duplicate=True),
+    Input("mpec-enrich-poll", "n_intervals"),
+    Input("mpec-selected-path", "data"),
+    State("mpec-enrich-data", "data"),
+    prevent_initial_call="initial_duplicate",
+)
+def enrich_mpec_detail(n_intervals, path, prev_data):
+    """Poll external APIs and build the enrichment card."""
+    if not path:
+        return html.Div(), True, None
+
+    # Get the detail so we have the designation
+    detail = fetch_mpec_detail(path, cache_dir=_MPEC_CACHE_DIR)
+    if not detail:
+        return html.Div(), True, None
+
+    designation = detail.get("designation", "")
+    packed = ""
+    if designation:
+        try:
+            packed = pack_designation(designation).strip()
+        except Exception:
+            packed = ""
+
+    # Fetch from APIs (cached with 5-min TTL)
+    sbdb = fetch_sbdb(designation) if designation else None
+    sentry = fetch_sentry(designation) if designation else None
+    neofixer = fetch_neofixer_orbit(packed) if packed else None
+    neocc_risk = fetch_neocc_risk(designation) if designation else None
+
+    # Track which sources responded (to decide whether to keep polling)
+    sources_pending = 0
+    if designation and sbdb is None:
+        sources_pending += 1
+    if packed and neofixer is None:
+        sources_pending += 1
+    # Sentry returning {"on_list": False} counts as responded
+    if designation and sentry is None:
+        sources_pending += 1
+
+    # Build the card
+    card = _build_enrich_card(sbdb, sentry, neofixer, neocc_risk,
+                              designation, packed)
+
+    # Stop polling if all sources responded or max intervals reached
+    stop_poll = (sources_pending == 0) or (n_intervals >= 10)
+
+    enrichment_state = {
+        "sbdb_ok": sbdb is not None,
+        "sentry_ok": sentry is not None,
+        "neofixer_ok": neofixer is not None,
+        "neocc_ok": neocc_risk is not None,
+    }
+
+    return card, stop_poll, enrichment_state
 
 
 # ---------------------------------------------------------------------------

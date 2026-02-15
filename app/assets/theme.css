@@ -164,3 +164,50 @@
     border-bottom-color: currentColor !important;
     font-weight: 600 !important;
 }
+
+/* ── MPEC Browser ── */
+/* List item hover */
+#mpec-list-panel > div:hover {
+    background-color: var(--hr-color, #eee) !important;
+    opacity: 0.9;
+}
+
+/* Scrollbar styling for MPEC panels */
+#mpec-list-panel::-webkit-scrollbar,
+#mpec-detail-panel::-webkit-scrollbar {
+    width: 6px;
+}
+#mpec-list-panel::-webkit-scrollbar-thumb,
+#mpec-detail-panel::-webkit-scrollbar-thumb {
+    background-color: var(--hr-color, #ccc);
+    border-radius: 3px;
+}
+
+/* Details/Summary accordion sections */
+#mpec-detail-panel details summary:hover {
+    opacity: 0.8;
+}
+#mpec-detail-panel details summary {
+    list-style: none;
+}
+#mpec-detail-panel details summary::-webkit-details-marker {
+    display: none;
+}
+#mpec-detail-panel details summary::before {
+    content: "\25B6  ";
+    font-size: 10px;
+    transition: transform 0.15s;
+    display: inline-block;
+}
+#mpec-detail-panel details[open] summary::before {
+    transform: rotate(90deg);
+}
+
+/* ── MPEC Enrichment card ── */
+.mpec-enrich-card {
+    transition: opacity 0.3s ease;
+}
+/* Auto-mode indicator */
+#mpec-auto-indicator {
+    min-height: 24px;
+}
