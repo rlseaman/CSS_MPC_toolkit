@@ -59,13 +59,28 @@
     background-color: var(--hr-color, #ccc) !important;
 }
 
-/* ── Dropdowns ── */
-/* Control container (the visible box) */
+/* ── Dropdowns (Dash 2.x rewritten component) ── */
+/* Trigger button (the visible closed dropdown box) */
+#page-container .dash-dropdown-trigger {
+    background-color: var(--paper-bg, white) !important;
+    border-color: var(--hr-color, #ccc) !important;
+    color: inherit !important;
+}
+/* Grid container wrapping the trigger */
+#page-container .dash-dropdown-grid-container {
+    background-color: var(--paper-bg, white) !important;
+    color: inherit !important;
+}
+/* All spans/divs inside the trigger (selected value text, arrow) */
+#page-container .dash-dropdown-trigger span,
+#page-container .dash-dropdown-trigger div {
+    color: inherit !important;
+}
+/* Legacy react-select classes (older Dash / RHEL fallback) */
 #page-container .Select-control {
     background-color: var(--paper-bg, white) !important;
     border-color: var(--hr-color, #ccc) !important;
 }
-/* Selected value background and text */
 #page-container .Select-value {
     background-color: var(--paper-bg, white) !important;
     color: inherit !important;
@@ -74,19 +89,20 @@
 #page-container .Select-placeholder {
     color: inherit !important;
 }
-/* Text input inside dropdown (search/filter) */
 #page-container .Select-input > input {
     color: inherit !important;
 }
-/* Arrow indicator */
 #page-container .Select-arrow {
     border-color: currentColor transparent transparent !important;
 }
-/* Clear button */
-#page-container .Select-clear {
-    color: inherit !important;
-}
 /* Open menu stays light for readability */
+#page-container .dash-dropdown-menu {
+    background-color: white !important;
+    color: #222 !important;
+}
+#page-container .dash-dropdown-menu span {
+    color: #222 !important;
+}
 .Select-menu-outer {
     background-color: white !important;
 }
