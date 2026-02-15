@@ -551,6 +551,9 @@ if "--host" in sys.argv:
     idx = sys.argv.index("--host")
     _HOST = sys.argv[idx + 1]
     del sys.argv[idx:idx + 2]
+_DEBUG = "--debug" in sys.argv
+if _DEBUG:
+    sys.argv.remove("--debug")
 
 
 def _load_cached_query(sql, prefix, label):
@@ -3833,4 +3836,4 @@ if __name__ == "__main__":
     print(f"\nStarting Dash server at http://{_HOST}:8050/")
     print("Data loading in background..." if not _data_ready.is_set()
           else "Data ready.")
-    app.run(host=_HOST, debug=True, use_reloader=False)
+    app.run(host=_HOST, debug=_DEBUG, use_reloader=False)
