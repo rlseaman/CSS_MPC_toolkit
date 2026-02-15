@@ -20,12 +20,59 @@
     color: var(--subtext-color, #888) !important;
 }
 
-/* Dash range-slider mark labels (RC slider sets inline styles) */
+/* ── Range sliders ── */
+/* Mark labels */
 #page-container .rc-slider-mark-text {
     color: inherit !important;
 }
+/* Editable input boxes at slider ends and tooltips */
+#page-container .rc-slider-tooltip-inner,
+#page-container .dash-slider input,
+#page-container input[type="number"] {
+    background-color: var(--paper-bg, white) !important;
+    color: inherit !important;
+    border-color: var(--hr-color, #ccc) !important;
+}
+/* Slider tooltip popup */
+#page-container .rc-slider-tooltip-inner {
+    background-color: var(--paper-bg, white) !important;
+    color: inherit !important;
+    box-shadow: none !important;
+}
+/* Tooltip arrow */
+#page-container .rc-slider-tooltip-arrow {
+    border-top-color: var(--paper-bg, white) !important;
+    border-bottom-color: var(--paper-bg, white) !important;
+}
+/* Slider handle and track */
+#page-container .rc-slider-track {
+    background-color: #5b8def !important;
+}
+#page-container .rc-slider-handle {
+    border-color: #5b8def !important;
+    background-color: var(--paper-bg, white) !important;
+}
+#page-container .rc-slider-rail {
+    background-color: var(--hr-color, #ccc) !important;
+}
 
-/* Dropdown menu: must stay dark text on white background */
+/* ── Dropdowns ── */
+/* The dropdown *control* (closed state) follows page theme */
+#page-container .Select-control,
+#page-container .dash-dropdown .Select-control {
+    background-color: var(--paper-bg, white) !important;
+    border-color: var(--hr-color, #ccc) !important;
+    color: inherit !important;
+}
+#page-container .Select-value-label,
+#page-container .Select-placeholder,
+#page-container .Select-input > input {
+    color: inherit !important;
+}
+#page-container .Select-arrow {
+    border-color: currentColor transparent transparent !important;
+}
+/* The dropdown *menu* (open state) stays light for readability */
 .Select-menu-outer,
 .Select-menu-outer * {
     color: #222 !important;
