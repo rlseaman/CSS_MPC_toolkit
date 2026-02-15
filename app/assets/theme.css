@@ -119,6 +119,16 @@
     color: #222 !important;
 }
 
+/* ── Buttons (Reset, Download CSV) ── */
+#page-container button {
+    background-color: var(--paper-bg, white) !important;
+    color: inherit !important;
+    border: 1px solid var(--hr-color, #ccc) !important;
+}
+#page-container button:hover {
+    opacity: 0.8;
+}
+
 /* Horizontal rule */
 #page-container hr {
     border-color: var(--hr-color, #ccc);
