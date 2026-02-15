@@ -2694,7 +2694,8 @@ app.layout = html.Div(
                                 style={
                                     "display": "grid",
                                     "gridTemplateColumns": "1fr 1fr",
-                                    "gap": "10px"},
+                                    "gap": "20px 10px",
+                                    "marginTop": "20px"},
                                 children=[
                                     dcc.Graph(id="mag-distribution",
                                               config=GRAPH_CONFIG),
@@ -3330,8 +3331,10 @@ def update_h_distribution(h_year_range, group_by, h_range, yscale, h_mode,
         secondary_y=True,
     )
 
-    # Completeness labels as annotations with white background
+    # Completeness labels as annotations
     if show_labels:
+        label_bg = "rgba(30,30,30,0.85)" if theme_name == "dark" \
+            else "rgba(255,255,255,0.85)"
         for i in range(len(comp_x)):
             fig.add_annotation(
                 x=comp_x[i], y=comp_y[i], yref="y2",
@@ -3339,7 +3342,7 @@ def update_h_distribution(h_year_range, group_by, h_range, yscale, h_mode,
                 showarrow=False,
                 xshift=18,
                 font=dict(size=9, color="#ff6961"),
-                bgcolor="rgba(255,255,255,0.85)",
+                bgcolor=label_bg,
                 borderpad=1,
             )
 

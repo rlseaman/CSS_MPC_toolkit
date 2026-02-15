@@ -28,7 +28,10 @@
 /* Editable input boxes at slider ends and tooltips */
 #page-container .rc-slider-tooltip-inner,
 #page-container .dash-slider input,
-#page-container input[type="number"] {
+#page-container input[type="number"],
+#page-container input[type="text"],
+#page-container .dash-slider ~ input,
+#page-container input.rc-slider-input {
     background-color: var(--paper-bg, white) !important;
     color: inherit !important;
     border-color: var(--hr-color, #ccc) !important;
@@ -57,24 +60,46 @@
 }
 
 /* ── Dropdowns ── */
-/* The dropdown *control* (closed state) follows page theme */
-#page-container .Select-control,
-#page-container .dash-dropdown .Select-control {
+/* Control container (the visible box) */
+#page-container .Select-control {
     background-color: var(--paper-bg, white) !important;
     border-color: var(--hr-color, #ccc) !important;
+}
+/* Selected value background and text */
+#page-container .Select-value {
+    background-color: var(--paper-bg, white) !important;
     color: inherit !important;
 }
 #page-container .Select-value-label,
-#page-container .Select-placeholder,
+#page-container .Select-placeholder {
+    color: inherit !important;
+}
+/* Text input inside dropdown (search/filter) */
 #page-container .Select-input > input {
     color: inherit !important;
 }
+/* Arrow indicator */
 #page-container .Select-arrow {
     border-color: currentColor transparent transparent !important;
 }
-/* The dropdown *menu* (open state) stays light for readability */
+/* Clear button */
+#page-container .Select-clear {
+    color: inherit !important;
+}
+/* Open menu stays light for readability */
+.Select-menu-outer {
+    background-color: white !important;
+}
 .Select-menu-outer,
 .Select-menu-outer * {
+    color: #222 !important;
+}
+.VirtualizedSelectOption {
+    background-color: white !important;
+    color: #222 !important;
+}
+.VirtualizedSelectFocusedOption {
+    background-color: #deebff !important;
     color: #222 !important;
 }
 
