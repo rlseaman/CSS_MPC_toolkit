@@ -169,6 +169,37 @@ Cross-reference orbits from NEOfixer, SBDB, MPC, and NEOCC.  Show a
 comparison table of elements, highlight discrepancies.  Becomes more
 interesting as arc length grows and orbits converge.
 
+## Phase 5: Database Fusion (future)
+
+**Goal:** Cross-reference MPEC 80-column observations with `obs_sbn`
+for richer metadata.
+
+**Key insight:** The MPEC gives publication context (designation,
+orbital elements, ephemeris, observer credits); `obs_sbn` gives
+canonical observation data with proper tracklet IDs, precise timestamps,
+band, notes, and submission metadata.
+
+**Query:** `SELECT obsid, provid, stn, obstime, ra, dec, mag, band,
+disc, trkid, trksub, trkmpc, notes FROM obs_sbn WHERE provid = %s`
+(fast — indexed on provid).
+
+**What trkid provides:**
+- Proper tracklet boundaries (more reliable than 80-col heuristic)
+- Discovery tracklet identified via `disc = '*'`
+- Follow-up tracklets across multiple stations/nights
+- Same-night re-observations distinguished from discovery tracklet
+
+**Architecture consideration:** This requires database access, which the
+MPEC browser currently doesn't need (it's pure network + file cache).
+Options:
+1. Server-side async enrichment (like current API polling) — query DB
+   on MPEC selection, store result in a dcc.Store
+2. Pre-compute at startup (for recent MPECs) alongside CSV cache
+3. Separate microservice endpoint
+
+Option 1 aligns with the existing enrichment pattern.  The query is
+fast (~10ms for a single provid) so no async complexity needed.
+
 ## Files modified
 
 | File | Status | Description |

@@ -276,9 +276,12 @@ def parse_mpec_content(pre_text, mpec_id="", title="", path=""):
     # Extract MPEC date from header
     date = ""
     header = sections.get("header", "")
-    m = re.search(r"Issued\s+(\d{4}\s+\w+\s+\d{1,2})", header)
+    m = re.search(r"Issued\s+(\d{4}\s+\w+\s+\d{1,2}),?\s*(\d{2}:\d{2})?\s*UT",
+                  header)
     if m:
         date = m.group(1)
+        if m.group(2):
+            date += f", {m.group(2)} UT"
 
     mpec_url = f"{_MPC_BASE}{path}" if path else ""
 
