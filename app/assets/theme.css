@@ -95,28 +95,59 @@
 #page-container .Select-arrow {
     border-color: currentColor transparent transparent !important;
 }
-/* Open menu stays light for readability */
-#page-container .dash-dropdown-menu {
+/* Open menu and search input — stay light for readability.
+   Must beat the generic #page-container span/div inherit rule */
+#page-container .dash-dropdown-menu,
+#page-container .dash-dropdown-menu span,
+#page-container .dash-dropdown-menu div,
+#page-container .dash-dropdown-menu label,
+#page-container .dash-dropdown-menu input {
     background-color: white !important;
     color: #222 !important;
 }
-#page-container .dash-dropdown-menu span {
-    color: #222 !important;
+/* Dash 2.x search input inside the dropdown trigger area */
+#page-container .dash-dropdown input[type="text"],
+#page-container .dash-dropdown input {
+    background-color: var(--paper-bg, white) !important;
+    color: inherit !important;
 }
-.Select-menu-outer {
-    background-color: white !important;
+/* Themed dropdown: trigger inherits the dark/light theme colors.
+   Use .themed-dropdown class + #page-container for high specificity. */
+#page-container .themed-dropdown,
+#page-container .themed-dropdown div,
+#page-container .themed-dropdown span,
+#page-container .themed-dropdown input,
+#page-container .themed-dropdown button {
+    background-color: var(--paper-bg, white) !important;
+    color: inherit !important;
+    border-color: var(--hr-color, #ccc) !important;
 }
+#page-container .Select-menu-outer,
+#page-container .Select-menu-outer *,
 .Select-menu-outer,
 .Select-menu-outer * {
+    background-color: white !important;
     color: #222 !important;
 }
+#page-container .VirtualizedSelectOption,
 .VirtualizedSelectOption {
     background-color: white !important;
     color: #222 !important;
 }
+#page-container .VirtualizedSelectFocusedOption,
 .VirtualizedSelectFocusedOption {
     background-color: #deebff !important;
     color: #222 !important;
+}
+
+/* ── Badges (Discovery, PHA — always white text on colored bg) ── */
+#page-container .mpec-badge {
+    color: white !important;
+}
+
+/* ── Elements with explicit colors (override the inherit rule) ── */
+#page-container .color-explicit {
+    color: var(--explicit-color) !important;
 }
 
 /* ── Buttons (Reset, Download CSV) ── */
@@ -203,10 +234,6 @@
     transform: rotate(90deg);
 }
 
-/* ── MPEC Enrichment card ── */
-.mpec-enrich-card {
-    transition: opacity 0.3s ease;
-}
 /* Auto-mode indicator */
 #mpec-auto-indicator {
     min-height: 24px;

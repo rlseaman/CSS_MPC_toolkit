@@ -18,10 +18,11 @@ libraries, and derived data products useful to the NEO community.
 **App:** [`app/discovery_stats.py`](app/discovery_stats.py)
 
 Interactive Dash web application for exploring NEO discovery statistics,
-survey performance, and follow-up timing. Five tabbed pages:
+survey performance, and follow-up timing. Six tabbed pages:
 
 | Tab | Content |
 |-----|---------|
+| **MPEC Browser** | Live feed of recent Minor Planet Electronic Circulars with parsed observations, orbital elements, residuals, and observer credits. Auto-selects latest discovery MPEC. Enrichment from JPL SBDB/Sentry, NEOfixer (Find\_Orb), and ESA NEOCC with per-object risk assessment. Site-specific short-term observability chart via NEOfixer ephemeris API. |
 | **Discoveries by Year** | Stacked bar chart by year/survey/size class with annual or cumulative views; size distribution histogram; top-15 stations table |
 | **Size Distribution vs. NEOMOD3** | Half-magnitude bin chart comparing MPC discoveries to the NEOMOD3 population model (Nesvorny et al. 2024, Icarus 411); completeness curve with 1-sigma errors; reference table |
 | **Multi-survey Comparison** | Venn diagrams (1–3 surveys) showing co-detection during discovery apparitions (±200 days); pairwise co-detection heatmap; survey reach |
@@ -30,8 +31,8 @@ survey performance, and follow-up timing. Five tabbed pages:
 
 Each tab has a **Download CSV** button that exports the currently filtered
 data. Shared banner controls: survey grouping, plot height, light/dark theme,
-reset buttons. Data sourced from two SQL queries cached to CSV with 1-day
-auto-invalidation.
+service health indicators, reset buttons. Data sourced from two SQL queries
+cached to CSV with 1-day auto-invalidation.
 
 **Survey groupings:** Catalina Survey (703, G96, E12), Catalina Follow-up
 (I52, V06, G84), Pan-STARRS (F51, F52), ATLAS (T05, T07, T08, T03, M22,
@@ -167,13 +168,15 @@ CSS_MPC_toolkit/
 ├── README.md                           # This file
 ├── CLAUDE.md                           # Claude Code project guide
 ├── app/                                # Interactive Dash web application
-│   ├── discovery_stats.py              #   NEO discovery explorer (5 tabs)
+│   ├── discovery_stats.py              #   NEO discovery explorer (6 tabs)
 │   └── assets/                         #   CSS, logo, static files
 ├── lib/                                # Python library layer
 │   ├── db.py                           #   DB connections, timed queries
 │   ├── orbits.py                       #   Query builders for mpc_orbits
 │   ├── orbit_classes.py                #   Orbit classification, Tisserand
 │   ├── mpc_convert.py                  #   MPC format conversion functions
+│   ├── mpec_parser.py                  #   MPEC fetch, parse, classify
+│   ├── api_clients.py                  #   JPL/NEOfixer/NEOCC API wrappers
 │   ├── ades_export.py                  #   ADES XML/PSV export
 │   └── ades_validate.py                #   XSD validation
 ├── sql/

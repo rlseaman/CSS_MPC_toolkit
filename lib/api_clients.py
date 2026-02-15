@@ -416,3 +416,67 @@ def _float(val):
 def clear_cache():
     """Clear all cached API responses."""
     _cache.clear()
+
+
+def check_service_health():
+    """Lightweight connectivity check for each external service.
+
+    Uses minimal API calls that return quickly and don't require a real
+    object designation.  Returns dict of {service_name: bool}.
+    """
+    results = {}
+
+    # NEOfixer — /orbit/ with empty object returns an error response
+    # but any HTTP response proves the service is reachable
+    try:
+        req = urllib.request.Request(
+            f"{_NEOFIXER_BASE}/orbit/?object=test",
+            headers={"User-Agent": "CSS-MPC-Toolkit/1.0"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            resp.read()
+        results["NEOfixer"] = True
+    except urllib.error.HTTPError as e:
+        results["NEOfixer"] = (e.code < 500)
+    except Exception:
+        results["NEOfixer"] = False
+
+    # MPC — always true since we parsed MPECs successfully
+    results["MPC"] = True
+
+    # JPL SBDB — query a well-known object (Ceres)
+    try:
+        req = urllib.request.Request(
+            "https://ssd-api.jpl.nasa.gov/sbdb.api?sstr=1",
+            headers={"User-Agent": "CSS-MPC-Toolkit/1.0"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            resp.read()
+        results["JPL"] = True
+    except Exception:
+        results["JPL"] = False
+
+    # Sentry — list endpoint (returns current watchlist summary)
+    try:
+        req = urllib.request.Request(
+            "https://ssd-api.jpl.nasa.gov/sentry.api",
+            headers={"User-Agent": "CSS-MPC-Toolkit/1.0"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            resp.read()
+        results["Sentry"] = True
+    except Exception:
+        results["Sentry"] = False
+
+    # NEOCC — check if the risk download endpoint is reachable
+    try:
+        req = urllib.request.Request(
+            f"{_NEOCC_BASE}?file=test.risk",
+            headers={"User-Agent": "CSS-MPC-Toolkit/1.0"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            resp.read()
+        results["NEOCC"] = True
+    except urllib.error.HTTPError as e:
+        # 404 means the service is up, just no data for "test"
+        results["NEOCC"] = (e.code == 404)
+    except Exception:
+        results["NEOCC"] = False
+
+    return results

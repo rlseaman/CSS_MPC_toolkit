@@ -116,9 +116,7 @@ def classify_mpec(title, pre_text=""):
     Returns:
         "discovery", "recovery", or "editorial"
     """
-    if not title:
-        return "editorial"
-    upper = title.upper()
+    upper = (title or "").upper()
     if "DAILY ORBIT UPDATE" in upper:
         return "editorial"
     if "EDITORIAL" in upper:
@@ -133,11 +131,14 @@ def classify_mpec(title, pre_text=""):
     if pre_text:
         return "discovery"
 
-    # Without pre_text, use heuristic on title: current year = likely discovery
-    # Older year or numbered object = likely recovery
+    # No pre_text available — use heuristic on title
+    if not title:
+        return "editorial"
+
+    # Extract year from designation: "2026 CE3", "C/2026 A1", "COMET C/2026 A1"
     import datetime
     current_year = datetime.date.today().year
-    m = re.match(r"(\d{4})\s+\w", title)
+    m = re.search(r"(\d{4})\s+\w", title)
     if m and int(m.group(1)) == current_year:
         return "discovery"
     if m and int(m.group(1)) < current_year:
@@ -151,7 +152,8 @@ def classify_mpec(title, pre_text=""):
 # ---------------------------------------------------------------------------
 
 _SECTION_PATTERNS = {
-    "observations": re.compile(r"^Observations?:", re.MULTILINE),
+    "observations": re.compile(
+        r"^(?:Additional\s+)?Observations?:", re.MULTILINE),
     "observer_details": re.compile(r"^Observer details?:", re.MULTILINE),
     "orbital_elements": re.compile(r"^Orbital elements?:", re.MULTILINE),
     "residuals": re.compile(r"^Residuals?\b", re.MULTILINE),
@@ -167,13 +169,18 @@ _SECTION_ORDER = [
 
 def _extract_sections(pre_text):
     """Split MPEC pre-formatted text into named sections."""
-    # Find all section start positions
+    # Find all section start positions.
+    # Use the LAST match for each pattern — recovery MPECs have
+    # "Residuals in seconds of arc" both as a brief comparison block
+    # (before orbital elements) and as the full block (after).
     positions = []
     for name in _SECTION_ORDER:
         pat = _SECTION_PATTERNS[name]
-        m = pat.search(pre_text)
-        if m:
-            positions.append((m.start(), m.end(), name))
+        last_match = None
+        for m in pat.finditer(pre_text):
+            last_match = m
+        if last_match:
+            positions.append((last_match.start(), last_match.end(), name))
 
     # Sort by position
     positions.sort(key=lambda x: x[0])
@@ -242,7 +249,8 @@ def _extract_designation(pre_text):
     """Extract the object designation from MPEC pre-formatted text.
 
     The designation appears as a centered bold line like **2026 CE3**
-    or just as a line with the designation.
+    or just as a line with the designation.  Also handles comets like
+    "COMET  C/2026 A1 (MAPS)".
     """
     # Look for **DESIGNATION** pattern (bold markers)
     m = re.search(r"\*\*(\d{4}\s+\w+\d*)\*\*", pre_text)
@@ -252,9 +260,16 @@ def _extract_designation(pre_text):
     # Look for a line that's just a designation (centered)
     for line in pre_text.split("\n")[:30]:
         stripped = line.strip().strip("*")
+        # Asteroid: "2026 CE3"
         m2 = re.match(r"^(\d{4}\s+[A-Z]{1,2}\d*)$", stripped.strip())
         if m2:
             return m2.group(1)
+        # Comet: "COMET  C/2026 A1 (MAPS)"
+        m2 = re.match(
+            r"^(?:COMET\s+)?([CPD]/\d{4}\s+\w+(?:\s+\(.*?\))?)$",
+            stripped.strip())
+        if m2:
+            return m2.group(1).strip()
 
     return None
 
@@ -404,9 +419,17 @@ def fetch_mpec_detail(mpec_path, cache_dir=None):
             title_line = ""
             for line in pre_text.split("\n")[:30]:
                 s = line.strip().strip("*")
+                # Asteroid: "2026 CE3"
                 m = re.match(r"^(\d{4}\s+[A-Z]{1,2}\d*)$", s.strip())
                 if m:
                     title_line = m.group(1)
+                    break
+                # Comet: "COMET  C/2026 A1 (MAPS)" or "C/2026 A1 (Name)"
+                m = re.match(
+                    r"^(?:COMET\s+)?([CPD]/\d{4}\s+\w+(?:\s+\(.*?\))?)$",
+                    s.strip())
+                if m:
+                    title_line = m.group(1).strip()
                     break
             mpec_m = re.search(r"M\.P\.E\.C\.\s+(\S+)", pre_text)
             mpec_id = mpec_m.group(1) if mpec_m else ""
