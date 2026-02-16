@@ -4091,6 +4091,7 @@ def _build_mpec_list_item(entry, idx):
     _sub = {"fontSize": "11px", "color": "var(--subtext-color, #888)",
             "fontFamily": "monospace"}
     annot_spans = []
+    badge_spans = []
     if summary:
         disc_stn = summary.get("disc_stn", "")
         if disc_stn:
@@ -4105,12 +4106,12 @@ def _build_mpec_list_item(entry, idx):
         if moid is not None:
             annot_spans.append(html.Span(f"MOID={moid:.3f}"))
         if summary.get("is_pha"):
-            annot_spans.append(html.Span("PHA", className="mpec-badge", style=_PHA_BADGE))
+            badge_spans.append(html.Span("PHA", className="mpec-badge", style=_PHA_BADGE))
         # Size badges based on H magnitude
         if h_val is not None and h_val <= 17.75:
-            annot_spans.append(html.Span("1km", className="mpec-badge", style=_1KM_BADGE))
+            badge_spans.append(html.Span("1km", className="mpec-badge", style=_1KM_BADGE))
         elif h_val is not None and h_val <= 22.0 and not summary.get("is_pha"):
-            annot_spans.append(html.Span("140m", className="mpec-badge", style=_140M_BADGE))
+            badge_spans.append(html.Span("140m", className="mpec-badge", style=_140M_BADGE))
 
     # Build title line: "2026 CX2" + smaller "(MPEC 2026-C119)"
     title = entry.get("title", "")
@@ -4142,16 +4143,21 @@ def _build_mpec_list_item(entry, idx):
                    "marginTop": "2px"},
         ),
     ]
-    if annot_spans:
-        # Interleave spans with dot separators
+    if annot_spans or badge_spans:
+        # Interleave text spans with dot separators
         interleaved = []
         for i, sp in enumerate(annot_spans):
             if i > 0:
                 interleaved.append(html.Span(" \u00b7 "))
             interleaved.append(sp)
+        annot_row = [html.Span(children=interleaved, style=_sub)] if interleaved else []
+        badge_row = html.Span(children=badge_spans,
+                              style={"marginLeft": "auto"}) if badge_spans else None
+        row_children = annot_row + ([badge_row] if badge_row else [])
         children.append(html.Div(
-            children=interleaved,
-            style={**_sub, "marginTop": "3px"},
+            children=row_children,
+            style={"display": "flex", "justifyContent": "space-between",
+                   "alignItems": "center", "marginTop": "3px"},
         ))
 
     return html.Div(
