@@ -34,7 +34,7 @@
 #page-container input.rc-slider-input {
     background-color: var(--paper-bg, white) !important;
     color: inherit !important;
-    border-color: var(--hr-color, #ccc) !important;
+    border: 1px solid var(--hr-color, #ccc) !important;
 }
 /* Slider tooltip popup */
 #page-container .rc-slider-tooltip-inner {
@@ -148,6 +148,16 @@
 /* ── Elements with explicit colors (override the inherit rule) ── */
 #page-container .color-explicit {
     color: var(--explicit-color) !important;
+}
+
+/* ── Observatory site code input ── */
+#page-container .obs-site-input,
+#page-container .obs-site-input input {
+    background-color: var(--paper-bg, white) !important;
+    color: inherit !important;
+    border: 1px solid var(--hr-color, #ccc) !important;
+    outline: none !important;
+    box-shadow: none !important;
 }
 
 /* ── Buttons (Reset, Download CSV) ── */
