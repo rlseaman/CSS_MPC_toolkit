@@ -248,3 +248,14 @@
 #mpec-auto-indicator {
     min-height: 24px;
 }
+
+/* ── Keyboard shortcut overlay ── */
+#kb-shortcut-overlay {
+    color: inherit;
+}
+#kb-shortcut-overlay table td {
+    color: inherit !important;
+}
+#kb-shortcut-overlay div {
+    color: inherit !important;
+}

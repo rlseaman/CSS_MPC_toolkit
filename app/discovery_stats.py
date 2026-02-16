@@ -2141,15 +2141,32 @@ app.layout = html.Div(
                                                     id="mpec-auto-label",
                                                     children="",
                                                 ),
-                                                html.Button(
-                                                    "Follow latest",
-                                                    id="mpec-follow-btn",
-                                                    n_clicks=0,
-                                                    style={
-                                                        "fontSize": "11px",
-                                                        "padding": "2px 10px",
-                                                        "display": "none",
-                                                    },
+                                                html.Div(
+                                                    style={"display": "flex",
+                                                           "alignItems": "center",
+                                                           "gap": "8px"},
+                                                    children=[
+                                                        html.Button(
+                                                            "Follow latest",
+                                                            id="mpec-follow-btn",
+                                                            n_clicks=0,
+                                                            style={
+                                                                "fontSize": "11px",
+                                                                "padding": "2px 10px",
+                                                                "display": "none",
+                                                            },
+                                                        ),
+                                                        html.Span(
+                                                            "? shortcuts",
+                                                            title="Press ? for keyboard shortcuts",
+                                                            style={
+                                                                "fontSize": "11px",
+                                                                "color": "var(--subtext-color, #888)",
+                                                                "cursor": "default",
+                                                                "fontFamily": "monospace",
+                                                            },
+                                                        ),
+                                                    ],
                                                 ),
                                             ],
                                         ),
