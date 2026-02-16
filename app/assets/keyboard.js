@@ -40,11 +40,22 @@
         return Array.from(panel.querySelectorAll("[data-path]"));
     }
 
+    // Track the last keyboard-navigated index so rapid keypresses
+    // don't have to wait for the async Dash style update round-trip.
+    var _kbIndex = -1;
+
+    /** Find the currently selected item.  Checks the DOM style first
+     *  (works after mouse clicks), falls back to _kbIndex (works during
+     *  rapid keyboard nav before the server round-trip completes). */
     function selectedIndex(items) {
+        // DOM check: selected item has "inset" in its boxShadow.
+        // (Browsers normalize #5b8def → rgb(...) so we can't match hex.)
         for (var i = 0; i < items.length; i++) {
             var bs = items[i].style.boxShadow || "";
-            if (bs.indexOf("5b8def") !== -1) return i;
+            if (bs.indexOf("inset") !== -1) return i;
         }
+        // Fallback: use last keyboard-navigated index
+        if (_kbIndex >= 0 && _kbIndex < items.length) return _kbIndex;
         return -1;
     }
 
@@ -90,6 +101,7 @@
         var el = items[idx];
         var path = el.getAttribute("data-path");
         if (!path) return;
+        _kbIndex = idx;
         // Append timestamp so repeated nav to the same item still
         // triggers a change (React deduplicates identical values).
         setDashInputValue("mpec-kb-nav", path + "|" + Date.now());
