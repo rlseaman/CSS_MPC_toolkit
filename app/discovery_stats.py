@@ -4336,9 +4336,6 @@ def _build_mpec_detail(detail, section_state=None):
 
     # External links
     links = []
-    if mpec_url:
-        links.append(html.A("Original MPEC", href=mpec_url, target="_blank",
-                            style=_link_btn_style()))
     if packed:
         links.append(html.A(
             "NEOfixer",
@@ -4358,6 +4355,9 @@ def _build_mpec_detail(detail, section_state=None):
             "NEOCC",
             href=f"https://neo.ssa.esa.int/search-for-asteroids?sum=1&des={desig_nospace}",
             target="_blank", style=_link_btn_style()))
+    if mpec_url:
+        links.append(html.A("Original MPEC", href=mpec_url, target="_blank",
+                            style=_link_btn_style()))
 
     # Parse observations to find discovery station
     disc_stn = None
