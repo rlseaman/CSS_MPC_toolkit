@@ -2092,6 +2092,9 @@ app.layout = html.Div(
         dcc.Store(id="mpec-detail-data", storage_type="memory"),
         dcc.Store(id="mpec-auto-mode", data=True),
         dcc.Store(id="mpec-enrich-data", data=None),
+        # Hidden input written by keyboard.js — triggers nav callback
+        dcc.Input(id="mpec-kb-nav", type="text", value="",
+                  style={"display": "none"}),
         dcc.Interval(id="mpec-refresh", interval=900_000,
                      n_intervals=0),  # 15 min
         dcc.Interval(id="mpec-enrich-poll", interval=60_000,
@@ -5073,6 +5076,23 @@ def select_mpec(item_clicks, follow_clicks):
             return entries[idx]["path"], False
 
     raise PreventUpdate
+
+
+@app.callback(
+    Output("mpec-selected-path", "data", allow_duplicate=True),
+    Output("mpec-auto-mode", "data", allow_duplicate=True),
+    Input("mpec-kb-nav", "value"),
+    prevent_initial_call=True,
+)
+def keyboard_navigate(value):
+    """Handle arrow-key navigation from keyboard.js."""
+    if not value:
+        raise PreventUpdate
+    # JS appends "|<timestamp>" to force uniqueness — strip it
+    path = value.rsplit("|", 1)[0] if "|" in value else value
+    if not path:
+        raise PreventUpdate
+    return path, False
 
 
 @app.callback(

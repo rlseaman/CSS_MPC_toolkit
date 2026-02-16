@@ -59,21 +59,40 @@
         }
     }
 
-    /** Navigate to a specific list item by index.  Uses Dash's
-     *  set_props to update the selected-path store (and disable auto
-     *  mode), which triggers the existing server-side callbacks. */
+    /** Navigate to a specific list item by index.
+     *  Primary: dash_clientside.set_props on the mpec-selected-path store.
+     *  Fallback: write to hidden dcc.Input #mpec-kb-nav via React's
+     *  native value setter + dispatched input event. */
     function navigateTo(items, idx) {
         if (idx < 0 || idx >= items.length) return;
         var el = items[idx];
         var path = el.getAttribute("data-path");
         if (!path) return;
-        // Update Dash stores directly through the renderer API
-        if (window.dash_clientside && window.dash_clientside.set_props) {
-            window.dash_clientside.set_props("mpec-selected-path",
-                                              { data: path });
-            window.dash_clientside.set_props("mpec-auto-mode",
-                                              { data: false });
+
+        // Primary: use Dash renderer's set_props (Dash ≥ 2.17)
+        var dc = window.dash_clientside;
+        if (dc && typeof dc.set_props === "function") {
+            dc.set_props("mpec-selected-path", { data: path });
+            dc.set_props("mpec-auto-mode", { data: false });
+            scrollIntoView(el);
+            return;
         }
+
+        // Fallback: write to hidden input, triggering server callback
+        var input = document.getElementById("mpec-kb-nav");
+        if (!input) {
+            // The dcc.Input wrapper may contain a child <input>
+            var wrapper = document.querySelector('[id="mpec-kb-nav"]');
+            input = wrapper && wrapper.querySelector
+                ? wrapper.querySelector("input") || wrapper
+                : null;
+        }
+        if (!input) return;
+        var setter = Object.getOwnPropertyDescriptor(
+            window.HTMLInputElement.prototype, "value"
+        ).set;
+        setter.call(input, path + "|" + Date.now());
+        input.dispatchEvent(new Event("input", { bubbles: true }));
         scrollIntoView(el);
     }
 
