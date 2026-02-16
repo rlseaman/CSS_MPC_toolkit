@@ -4209,20 +4209,20 @@ def _build_orbit_info_line(oe, detail=None):
 
     parts = []
     if h_val is not None:
-        parts.append(html.Span(f"H={h_val:.1f}"))
+        parts.append(html.Span(f"H {h_val:.1f}"))
     if moid is not None:
-        parts.append(html.Span(f"MOID={moid:.3f} au"))
+        parts.append(html.Span(f"MOID {moid:.3f} au"))
 
     u_val = oe.get("U")
     if u_val is not None:
-        parts.append(html.Span(f"U={int(u_val)}"))
+        parts.append(html.Span(f"U {int(u_val)}"))
     if detail:
         arc = detail.get("arc_days")
         if arc is not None:
-            parts.append(html.Span(f"arc={arc:.0f} days"))
+            parts.append(html.Span(f"arc {arc:.0f} days"))
         n_obs = detail.get("n_obs")
         if n_obs:
-            parts.append(html.Span(f"obs={n_obs}"))
+            parts.append(html.Span(f"obs {n_obs}"))
 
     if not parts:
         return html.Div()
@@ -4237,7 +4237,7 @@ def _build_orbit_info_line(oe, detail=None):
         children=interleaved,
         style={"fontFamily": "monospace", "fontSize": "15px",
                "color": "var(--subtext-color, #888)",
-               "marginTop": "1px"},
+               "marginTop": "1px", "marginBottom": "10px"},
     )
 
 
@@ -4504,7 +4504,7 @@ def _build_mpec_detail(detail, section_state=None):
             style={"fontFamily": "sans-serif", "fontSize": "16px",
                    "color": "var(--subtext-color, #888)"})
 
-    _SUMMARY_HEIGHT = "160px"  # fixed height so all MPECs align
+    _SUMMARY_HEIGHT = "150px"  # fixed height so all MPECs align
 
     return html.Div(children=[
         # Summary section (fixed height)
@@ -4518,7 +4518,7 @@ def _build_mpec_detail(detail, section_state=None):
                              style={"display": "flex",
                                     "alignItems": "center",
                                     "flexWrap": "wrap",
-                                    "marginBottom": "5px"}),
+                                    "marginBottom": "10px"}),
                     # Line 2: MPEC ID (linked) + date
                     html.Div(children=[
                         mpec_id_el,
@@ -4527,14 +4527,14 @@ def _build_mpec_detail(detail, section_state=None):
                                           "fontSize": "16px",
                                           "color": "var(--subtext-color, #888)",
                                           "marginLeft": "10px"}),
-                    ], style={"marginBottom": "5px"}),
+                    ], style={"marginBottom": "10px"}),
                     # Line 3: discoverer
-                    disc_info_line,
-                    # Line 4: orbit params (combined)
                     orbit_info,
+                    # Line 4: orbit params (combined)
+                    disc_info_line,
                 ]),
                 # Spacer pushes annotations to bottom
-                html.Div(style={"flex": "1"}),
+                html.Div(style={"flex": "0"}),
                 # Bottom: Sentry/NEOCC annotations
                 html.Div(id="mpec-risk-line"),
             ],
@@ -5008,7 +5008,7 @@ def _build_discoverer_line(observers_text, disc_stn):
         return html.Div(
             children=parts,
             style={"fontFamily": "sans-serif", "fontSize": "15px",
-                   "marginTop": "2px"},
+                   "marginTop": "2px", "marginBottom": "10px"},
         )
     return html.Div()
 
