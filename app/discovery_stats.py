@@ -4140,6 +4140,7 @@ def _build_mpec_list_item(entry, idx):
         n_clicks=0,
         style=_MPEC_ITEM_STYLE,
         children=children,
+        **{"data-path": entry.get("path", "")},
     )
 
 

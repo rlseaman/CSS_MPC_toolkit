@@ -2,8 +2,8 @@
  * Keyboard shortcuts for the Planetary Defense Dashboard — MPEC Browser tab.
  *
  * Shortcuts are active only when the MPEC Browser tab is selected and no
- * text input is focused.  All navigation writes to a hidden Dash store
- * (mpec-kb-action) which server-side callbacks read.
+ * text input is focused.  Navigation uses dash_clientside.set_props() to
+ * update Dash stores directly (DOM .click() does not trigger React state).
  *
  * Keys:
  *   ↑ / ↓          Step through MPEC list
@@ -35,13 +35,12 @@
         return false;
     }
 
-    /** Get all MPEC list item divs (direct children of #mpec-list-panel). */
+    /** Get all MPEC list item divs (children of #mpec-list-panel with
+     *  a data-path attribute). */
     function getListItems() {
         var panel = document.getElementById("mpec-list-panel");
         if (!panel) return [];
-        return Array.from(panel.children).filter(function (el) {
-            return el.id && el.id.indexOf("mpec-item") !== -1;
-        });
+        return Array.from(panel.querySelectorAll("[data-path]"));
     }
 
     /** Find the index of the currently selected (blue-bordered) item. */
@@ -60,11 +59,47 @@
         }
     }
 
+    /** Navigate to a specific list item by index.  Uses Dash's
+     *  set_props to update the selected-path store (and disable auto
+     *  mode), which triggers the existing server-side callbacks. */
+    function navigateTo(items, idx) {
+        if (idx < 0 || idx >= items.length) return;
+        var el = items[idx];
+        var path = el.getAttribute("data-path");
+        if (!path) return;
+        // Update Dash stores directly through the renderer API
+        if (window.dash_clientside && window.dash_clientside.set_props) {
+            window.dash_clientside.set_props("mpec-selected-path",
+                                              { data: path });
+            window.dash_clientside.set_props("mpec-auto-mode",
+                                              { data: false });
+        }
+        scrollIntoView(el);
+    }
+
     // ── Overlay ──────────────────────────────────────────────────────
 
     var OVERLAY_ID = "kb-shortcut-overlay";
 
     function buildOverlay() {
+        // Read theme colors from #page-container so the overlay matches
+        var container = document.getElementById("page-container");
+        var cs = container
+            ? getComputedStyle(container)
+            : null;
+        var bgColor = cs
+            ? cs.getPropertyValue("--paper-bg").trim() || "#1e1e1e"
+            : "#1e1e1e";
+        var fgColor = cs
+            ? cs.getPropertyValue("color").trim() || "#e0e0e0"
+            : "#e0e0e0";
+        var borderColor = cs
+            ? cs.getPropertyValue("--hr-color").trim() || "#444"
+            : "#444";
+        var subColor = cs
+            ? cs.getPropertyValue("--subtext-color").trim() || "#888"
+            : "#888";
+
         var overlay = document.createElement("div");
         overlay.id = OVERLAY_ID;
         overlay.style.cssText = [
@@ -72,9 +107,9 @@
             "top: 50%",
             "left: 50%",
             "transform: translate(-50%, -50%)",
-            "background: var(--paper-bg, #1e1e1e)",
-            "color: inherit",
-            "border: 1px solid var(--hr-color, #444)",
+            "background: " + bgColor,
+            "color: " + fgColor,
+            "border: 1px solid " + borderColor,
             "border-radius: 10px",
             "padding: 28px 36px",
             "z-index: 10000",
@@ -86,7 +121,7 @@
         ].join("; ");
 
         var title = document.createElement("div");
-        title.style.cssText = "font-size: 16px; font-weight: 700; margin-bottom: 16px;";
+        title.style.cssText = "font-size: 16px; font-weight: 700; margin-bottom: 16px; color: " + fgColor + ";";
         title.textContent = "Keyboard Shortcuts";
         overlay.appendChild(title);
 
@@ -106,10 +141,10 @@
             var tdKey = document.createElement("td");
             tdKey.style.cssText =
                 "padding: 5px 16px 5px 0; font-family: monospace; " +
-                "font-weight: 600; white-space: nowrap; width: 110px;";
+                "font-weight: 600; white-space: nowrap; width: 110px; color: " + fgColor + ";";
             tdKey.textContent = pair[0];
             var tdDesc = document.createElement("td");
-            tdDesc.style.cssText = "padding: 5px 0;";
+            tdDesc.style.cssText = "padding: 5px 0; color: " + fgColor + ";";
             tdDesc.textContent = pair[1];
             tr.appendChild(tdKey);
             tr.appendChild(tdDesc);
@@ -119,7 +154,7 @@
 
         var hint = document.createElement("div");
         hint.style.cssText =
-            "margin-top: 16px; font-size: 12px; color: var(--subtext-color, #888); text-align: center;";
+            "margin-top: 16px; font-size: 12px; color: " + subColor + "; text-align: center;";
         hint.textContent = "Press ? or Escape to close";
         overlay.appendChild(hint);
 
@@ -132,17 +167,17 @@
             existing.remove();
             return;
         }
-        document.body.appendChild(buildOverlay());
+        // Append inside #page-container so theme CSS variables apply
+        var container = document.getElementById("page-container") || document.body;
+        container.appendChild(buildOverlay());
     }
 
     // ── Detail section toggle ────────────────────────────────────────
 
     function toggleSection(n) {
-        // Sections are <details> elements inside #mpec-detail-panel
         var panel = document.getElementById("mpec-detail-panel");
         if (!panel) return;
         var details = panel.querySelectorAll("details");
-        // n is 1-based; section 1 = first <details>
         var idx = n - 1;
         if (idx >= 0 && idx < details.length) {
             details[idx].open = !details[idx].open;
@@ -152,18 +187,15 @@
     // ── Observatory site cycling ─────────────────────────────────────
 
     function cycleObsSite() {
-        // Find all obs-site-btn buttons inside the obs chart area
         var buttons = document.querySelectorAll('[id*="obs-site-btn"]');
         if (!buttons.length) return;
-        var codes = [];
+        var arr = Array.from(buttons);
         var currentIdx = -1;
-        buttons.forEach(function (btn, i) {
-            codes.push(btn);
-            // Active button has bold font weight
+        arr.forEach(function (btn, i) {
             if (btn.style.fontWeight === "700") currentIdx = i;
         });
-        var nextIdx = (currentIdx + 1) % codes.length;
-        codes[nextIdx].click();
+        var nextIdx = (currentIdx + 1) % arr.length;
+        arr[nextIdx].click();
     }
 
     // ── Click "Follow latest" button ─────────────────────────────────
@@ -176,7 +208,7 @@
     // ── Main keydown handler ─────────────────────────────────────────
 
     document.addEventListener("keydown", function (e) {
-        // ? works everywhere (toggle overlay) — but not in text inputs
+        // ? works on MPEC tab — but not in text inputs
         if (e.key === "?" && !isTyping()) {
             e.preventDefault();
             toggleOverlay();
@@ -207,10 +239,7 @@
                 items = getListItems();
                 cur = selectedIndex(items);
                 next = cur > 0 ? cur - 1 : 0;
-                if (items[next]) {
-                    items[next].click();
-                    scrollIntoView(items[next]);
-                }
+                navigateTo(items, next);
                 break;
 
             case "ArrowDown":
@@ -218,29 +247,19 @@
                 items = getListItems();
                 cur = selectedIndex(items);
                 next = cur < items.length - 1 ? cur + 1 : items.length - 1;
-                if (items[next]) {
-                    items[next].click();
-                    scrollIntoView(items[next]);
-                }
+                navigateTo(items, next);
                 break;
 
             case "Home":
                 e.preventDefault();
                 items = getListItems();
-                if (items[0]) {
-                    items[0].click();
-                    scrollIntoView(items[0]);
-                }
+                navigateTo(items, 0);
                 break;
 
             case "End":
                 e.preventDefault();
                 items = getListItems();
-                if (items.length) {
-                    var last = items[items.length - 1];
-                    last.click();
-                    scrollIntoView(last);
-                }
+                navigateTo(items, items.length - 1);
                 break;
 
             case "f":
