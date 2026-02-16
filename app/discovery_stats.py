@@ -3960,6 +3960,10 @@ _RECOVERY_BADGE = {**_BADGE_STYLE,
                    "backgroundColor": "#1565c0", "color": "white"}
 _PHA_BADGE = {**_BADGE_STYLE,
               "backgroundColor": "#c62828", "color": "white"}
+_140M_BADGE = {**_BADGE_STYLE,
+               "backgroundColor": "#e65100", "color": "white"}
+_1KM_BADGE = {**_BADGE_STYLE,
+              "backgroundColor": "#b71c1c", "color": "white"}
 
 # List item styles
 _MPEC_ITEM_STYLE = {
@@ -4102,6 +4106,11 @@ def _build_mpec_list_item(entry, idx):
             annot_spans.append(html.Span(f"MOID={moid:.3f}"))
         if summary.get("is_pha"):
             annot_spans.append(html.Span("PHA", className="mpec-badge", style=_PHA_BADGE))
+        # Size badges based on H magnitude
+        if h_val is not None and h_val <= 17.75:
+            annot_spans.append(html.Span("1km", className="mpec-badge", style=_1KM_BADGE))
+        elif h_val is not None and h_val <= 22.0 and not summary.get("is_pha"):
+            annot_spans.append(html.Span("140m", className="mpec-badge", style=_140M_BADGE))
 
     # Build title line: "2026 CX2" + smaller "(MPEC 2026-C119)"
     title = entry.get("title", "")
@@ -4489,6 +4498,18 @@ def _build_mpec_detail(detail, section_state=None):
         line1_children.append(html.Span(
             "PHA", style={**_SUMMARY_BADGE,
                           "backgroundColor": "#c62828",
+                          "color": "white"}))
+    # Size badges based on H magnitude
+    h_for_badge = oe.get("H")
+    if h_for_badge is not None and h_for_badge <= 17.75:
+        line1_children.append(html.Span(
+            "1km", style={**_SUMMARY_BADGE,
+                          "backgroundColor": "#b71c1c",
+                          "color": "white"}))
+    elif h_for_badge is not None and h_for_badge <= 22.0 and not is_pha:
+        line1_children.append(html.Span(
+            "140m", style={**_SUMMARY_BADGE,
+                          "backgroundColor": "#e65100",
                           "color": "white"}))
 
     # Line 2: linked MPEC ID + date
