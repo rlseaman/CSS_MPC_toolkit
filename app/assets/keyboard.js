@@ -10,7 +10,7 @@
  *   [ / ]           Jump to first / last MPEC (Mac Home/End alternative)
  *   Home / End      Jump to first / last MPEC
  *   F               Toggle Follow / Pin mode
- *   1-5             Toggle detail accordion sections
+ *   1-8             Toggle detail accordion sections
  *   O               Cycle observatory site forward
  *   ?               Show / hide keyboard shortcut overlay
  */
@@ -180,7 +180,7 @@
             ["\u2191 / \u2193",    "Step through MPEC list"],
             ["[ / ]",              "Jump to first / last MPEC"],
             ["F",                  "Toggle Follow / Pin mode"],
-            ["1 \u2013 5",        "Toggle detail sections"],
+            ["1 \u2013 8",        "Toggle detail sections"],
             ["O",                  "Cycle observatory site"],
             ["?",                  "Show / hide this overlay"],
         ];
@@ -222,15 +222,99 @@
         container.appendChild(buildOverlay());
     }
 
+    // ── Section state persistence ─────────────────────────────────────
+
+    /** Read the current open/closed state of all 8 detail sections. */
+    function readSectionState() {
+        var state = {};
+        for (var i = 0; i < 8; i++) {
+            var el = document.getElementById("mpec-section-" + i);
+            state[String(i)] = el ? el.open : (i === 0);
+        }
+        return state;
+    }
+
+    /** Write current section state to the hidden Dash input. */
+    function persistSectionState() {
+        var state = readSectionState();
+        setDashInputValue(
+            "mpec-section-state-input",
+            JSON.stringify(state) + "|" + Date.now()
+        );
+    }
+
+    /** Apply saved state from store to <details> elements. */
+    function applySectionState() {
+        // Read state from the hidden input (which mirrors the store).
+        // The store value is set by the server callback; the hidden
+        // input holds the latest JSON we wrote.  On first load, read
+        // from sessionStorage directly (Dash stores use it).
+        var stored = null;
+        try {
+            var raw = sessionStorage.getItem("mpec-section-state");
+            if (raw) stored = JSON.parse(raw);
+        } catch (e) { /* ignore */ }
+        if (!stored) return;
+
+        for (var i = 0; i < 8; i++) {
+            var el = document.getElementById("mpec-section-" + i);
+            if (el && stored.hasOwnProperty(String(i))) {
+                el.open = stored[String(i)];
+            }
+        }
+    }
+
+    // Listen for toggle events on detail sections to persist state.
+    // We use event delegation on the detail panel.
+    document.addEventListener("toggle", function (e) {
+        var target = e.target;
+        if (target && target.tagName === "DETAILS" &&
+            target.id && target.id.indexOf("mpec-section-") === 0) {
+            persistSectionState();
+        }
+    }, true);  // useCapture — toggle doesn't bubble
+
+    // MutationObserver: when Dash re-renders the detail panel (new MPEC
+    // selected), the server-side callback already sets open= from the
+    // store.  But as a safety net, also apply from sessionStorage after
+    // the DOM updates.
+    var _detailObserver = new MutationObserver(function (mutations) {
+        // Check if any mutation added mpec-section-* elements
+        for (var i = 0; i < mutations.length; i++) {
+            var added = mutations[i].addedNodes;
+            for (var j = 0; j < added.length; j++) {
+                if (added[j].nodeType === 1) {
+                    // A new element was added — likely a re-render
+                    applySectionState();
+                    return;
+                }
+            }
+        }
+    });
+
+    // Start observing once the detail panel exists
+    function startObserver() {
+        var panel = document.getElementById("mpec-detail-panel");
+        if (panel) {
+            _detailObserver.observe(panel, { childList: true, subtree: true });
+        } else {
+            // Retry after a short delay (page may still be loading)
+            setTimeout(startObserver, 500);
+        }
+    }
+    startObserver();
+
     // ── Detail section toggle ────────────────────────────────────────
 
     function toggleSection(n) {
         var panel = document.getElementById("mpec-detail-panel");
         if (!panel) return;
-        var details = panel.querySelectorAll("details");
         var idx = n - 1;
-        if (idx >= 0 && idx < details.length) {
-            details[idx].open = !details[idx].open;
+        var el = document.getElementById("mpec-section-" + idx);
+        if (el) {
+            el.open = !el.open;
+            // toggle event fires automatically; persistence handled
+            // by the toggle event listener above
         }
     }
 
@@ -319,6 +403,9 @@
             case "3":
             case "4":
             case "5":
+            case "6":
+            case "7":
+            case "8":
                 e.preventDefault();
                 toggleSection(parseInt(e.key, 10));
                 break;

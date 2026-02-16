@@ -30,6 +30,35 @@ _MPC_BASE = "https://www.minorplanetcenter.net"
 _RECENT_URL = f"{_MPC_BASE}/mpec/RecentMPECs.html"
 _LIST_TTL_SEC = 900  # 15 minutes
 
+def mpec_id_to_url(mpec_id):
+    """Convert an MPEC ID like '2026-C105' to a full MPC URL.
+
+    The packed path for MPEC 2026-C105 is /mpec/K26/K26CA5.html where:
+    - 2026 → K26 (K = century 20)
+    - C105 → CA5 (numbers ≥100 pack as letter+digit: 100=A0 … 369=Z9)
+    """
+    m = re.match(r"(\d{4})-([A-Z])(\d+)", mpec_id)
+    if not m:
+        return ""
+    year, half_month, num_str = int(m.group(1)), m.group(2), int(m.group(3))
+
+    # Pack century: 1800→I, 1900→J, 2000→K
+    century_letter = chr(ord("A") + (year // 100 - 10))
+    yy = f"{year % 100:02d}"
+    packed_year = f"{century_letter}{yy}"
+
+    # Pack number: 1-99 → two digits, 100+ → letter+digit
+    if num_str <= 99:
+        packed_num = f"{num_str:02d}"
+    else:
+        hundreds = (num_str - 100) // 10
+        ones = num_str % 10
+        packed_num = f"{chr(ord('A') + hundreds)}{ones}"
+
+    packed = f"{packed_year}{half_month}{packed_num}"
+    return f"{_MPC_BASE}/mpec/{packed_year}/{packed}.html"
+
+
 # In-memory cache for the recent list
 _list_cache = {"data": None, "ts": 0}
 
@@ -332,20 +361,56 @@ def parse_mpec_content(pre_text, mpec_id="", title="", path=""):
         m2, d2 = divmod(r2, 100)
         arc_days = (y2 - y1) * 365.25 + (m2 - m1) * 30.44 + (d2 - d1)
 
+    # For recovery MPECs, extract the "comparison with prediction" block
+    # from observer_details.  It starts with "First and last observations"
+    # and runs to the end of that section's content.
+    comparison = ""
+    obs_details = sections.get("observer_details", "")
+    comp_match = re.search(
+        r"^(First and last observations.*)", obs_details,
+        re.MULTILINE | re.DOTALL)
+    if comp_match:
+        comparison = comp_match.group(1).strip()
+        # Remove from observer_details
+        obs_details = obs_details[:comp_match.start()].rstrip()
+        sections["observer_details"] = obs_details
+
+    # Extract copyright line from raw pre_text (last non-blank line
+    # containing "(C) Copyright" or "Copyright").  Strip it from the
+    # ephemeris content so it isn't duplicated.
+    copyright_line = ""
+    ephemeris_text = sections.get("ephemeris", "")
+    for raw_line in reversed(pre_text.split("\n")):
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        if "Copyright" in stripped or "(C)" in stripped:
+            copyright_line = stripped
+        break  # only check the last non-blank line
+
+    # Remove copyright line from ephemeris if present
+    if copyright_line and ephemeris_text:
+        eph_lines = ephemeris_text.split("\n")
+        cleaned = [ln for ln in eph_lines if copyright_line not in ln]
+        ephemeris_text = "\n".join(cleaned).rstrip()
+
     return {
         "mpec_id": mpec_id,
         "date": date,
         "title": title,
         "designation": designation,
         "type": mpec_type,
+        "header": sections.get("header", ""),
         "observations": obs_text,
         "n_obs": n_obs,
         "arc_days": round(arc_days, 1) if arc_days is not None else None,
         "orbital_elements": orbital_elements,
         "orbital_elements_raw": sections.get("orbital_elements", ""),
         "residuals": sections.get("residuals", ""),
-        "ephemeris": sections.get("ephemeris", ""),
+        "ephemeris": ephemeris_text,
         "observers": sections.get("observer_details", ""),
+        "comparison": comparison,
+        "copyright": copyright_line,
         "mpec_url": mpec_url,
     }
 

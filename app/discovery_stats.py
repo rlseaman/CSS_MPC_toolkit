@@ -30,7 +30,7 @@ from dash.exceptions import PreventUpdate
 from plotly.subplots import make_subplots
 
 from lib.db import connect, timed_query
-from lib.mpec_parser import fetch_recent_mpecs, fetch_mpec_detail
+from lib.mpec_parser import fetch_recent_mpecs, fetch_mpec_detail, mpec_id_to_url
 from lib.mpc_convert import pack_designation
 from lib.nea_catalog import load_nea_h_lookup
 from lib.api_clients import (
@@ -2094,6 +2094,13 @@ app.layout = html.Div(
         dcc.Store(id="mpec-enrich-data", data=None),
         # Hidden input written by keyboard.js — triggers nav callback
         dcc.Input(id="mpec-kb-nav", type="text", value="",
+                  style={"display": "none"}),
+        # Section open/closed state (persists across MPEC nav + tab switches)
+        dcc.Store(id="mpec-section-state", storage_type="session",
+                  data={"0": True, "1": False, "2": False, "3": False,
+                        "4": False, "5": False, "6": False, "7": False}),
+        # Hidden input written by keyboard.js — section state sync
+        dcc.Input(id="mpec-section-state-input", type="text", value="",
                   style={"display": "none"}),
         dcc.Interval(id="mpec-refresh", interval=900_000,
                      n_intervals=0),  # 15 min
@@ -4167,50 +4174,58 @@ def _classify_orbit(a, e, q, designation=""):
     return "Amor"
 
 
-def _build_orbit_info_line(oe, detail=None):
-    """Build a compact orbit class / H / MOID / PHA summary, plus arc/obs."""
+def _get_orbit_class(oe, detail=None):
+    """Return the orbit class label (e.g. 'Apollo') from elements."""
     if not oe:
-        return html.Div()
-
+        return ""
     a = oe.get("a")
     e = oe.get("e")
     q = oe.get("q")
+    desig = detail.get("designation", "") if detail else ""
+    return _classify_orbit(a, e, q, designation=desig)
+
+
+def _is_pha(oe, detail=None):
+    """Check if object is a PHA from elements and raw text."""
+    if not oe:
+        return False
+    oe_raw = detail.get("orbital_elements_raw", "") if detail else ""
+    if "PHA," in oe_raw or "PHA " in oe_raw:
+        return True
+    moid = oe.get("earth_moid")
+    h_val = oe.get("H")
+    if moid is not None and h_val is not None:
+        return moid <= 0.05 and h_val <= 22.0
+    return False
+
+
+def _build_orbit_info_line(oe, detail=None):
+    """Build a single-line H / MOID / U / arc / obs summary."""
+    if not oe:
+        return html.Div()
+
     h_val = oe.get("H")
     moid = oe.get("earth_moid")
 
     parts = []
-    desig = detail.get("designation", "") if detail else ""
-    cls = _classify_orbit(a, e, q, designation=desig)
-    if cls:
-        parts.append(html.Span(cls, style={"fontWeight": "600"}))
     if h_val is not None:
         parts.append(html.Span(f"H={h_val:.1f}"))
     if moid is not None:
-        parts.append(html.Span(f"MOID={moid:.3f} AU"))
+        parts.append(html.Span(f"MOID={moid:.3f} au"))
 
-    # PHA check (explicit flag from MPC or computed)
-    oe_raw = detail.get("orbital_elements_raw", "") if detail else ""
-    is_pha = "PHA," in oe_raw or "PHA " in oe_raw
-    if not is_pha and moid is not None and h_val is not None:
-        is_pha = moid <= 0.05 and h_val <= 22.0
-    if is_pha:
-        parts.append(html.Span("PHA", className="mpec-badge", style=_PHA_BADGE))
-
-    if not parts:
-        return html.Div()
-
-    # Second line: U, arc, obs count — indented so U aligns with H
-    info_parts = []
     u_val = oe.get("U")
     if u_val is not None:
-        info_parts.append(f"U={int(u_val)}")
+        parts.append(html.Span(f"U={int(u_val)}"))
     if detail:
         arc = detail.get("arc_days")
         if arc is not None:
-            info_parts.append(f"Arc={arc:.0f} days")
+            parts.append(html.Span(f"arc={arc:.0f} days"))
         n_obs = detail.get("n_obs")
         if n_obs:
-            info_parts.append(f"Obs={n_obs}")
+            parts.append(html.Span(f"obs={n_obs}"))
+
+    if not parts:
+        return html.Div()
 
     interleaved = []
     for i, sp in enumerate(parts):
@@ -4218,36 +4233,77 @@ def _build_orbit_info_line(oe, detail=None):
             interleaved.append(html.Span(" \u00b7 "))
         interleaved.append(sp)
 
-    # Compute indent to align U= with H= on line above
-    # Find character position of "H=" in the first line
-    first_line_text = " \u00b7 ".join(
-        s.children if hasattr(s, "children") and isinstance(s.children, str)
-        else "" for s in parts)
-    h_pos = first_line_text.find("H=")
-    indent = f"{max(h_pos, 0) * 0.62}em" if h_pos > 0 else "0"
-
-    _line_style = {"fontFamily": "monospace", "fontSize": "13px",
-                   "color": "var(--subtext-color, #888)"}
-
-    children = [
-        html.Div(children=interleaved, style={**_line_style, "marginTop": "6px"}),
-    ]
-    if info_parts:
-        children.append(html.Div(
-            " \u00b7 ".join(info_parts),
-            style={**_line_style, "marginTop": "2px",
-                   "paddingLeft": indent},
-        ))
-
-    return html.Div(children=children)
+    return html.Div(
+        children=interleaved,
+        style={"fontFamily": "monospace", "fontSize": "15px",
+               "color": "var(--subtext-color, #888)",
+               "marginTop": "1px"},
+    )
 
 
-def _build_mpec_detail(detail):
+def _linkify_preamble(text):
+    """Convert MPEC references and URLs in preamble text to clickable links.
+
+    Patterns matched:
+    - "M.P.E.C. 2026-C105" → link to that MPEC on MPC
+    - "MPEC 2024-F104" → link to that MPEC on MPC
+    - "https://www.minorplanetcenter.net/" → clickable link
+    """
+    import re as _re
+    _LINK_STYLE = {"color": "#5b8def", "textDecoration": "none"}
+    # Combined pattern: MPEC references and the MPC URL
+    pattern = _re.compile(
+        r"(M\.P\.E\.C\.\s+(\d{4}-[A-Z]\d+))"   # "M.P.E.C. 2026-C105"
+        r"|(MPEC\s+(\d{4}-[A-Z]\d+))"            # "MPEC 2024-F104"
+        r"|(https://www\.minorplanetcenter\.net/)" # MPC URL
+    )
+    parts = []
+    pos = 0
+    for m in pattern.finditer(text):
+        # Add plain text before this match
+        if m.start() > pos:
+            parts.append(html.Span(text[pos:m.start()]))
+        if m.group(1):
+            # M.P.E.C. reference
+            url = mpec_id_to_url(m.group(2))
+            parts.append(html.A(m.group(1), href=url, target="_blank",
+                                style=_LINK_STYLE) if url
+                         else html.Span(m.group(1)))
+        elif m.group(3):
+            # MPEC reference (in revision lines)
+            url = mpec_id_to_url(m.group(4))
+            parts.append(html.A(m.group(3), href=url, target="_blank",
+                                style=_LINK_STYLE) if url
+                         else html.Span(m.group(3)))
+        elif m.group(5):
+            # MPC URL
+            parts.append(html.A(m.group(5), href=m.group(5),
+                                target="_blank", style=_LINK_STYLE))
+        pos = m.end()
+    # Trailing text
+    if pos < len(text):
+        parts.append(html.Span(text[pos:]))
+    return parts if parts else [html.Span(text)]
+
+
+_DEFAULT_SECTION_STATE = {
+    "0": True, "1": False, "2": False, "3": False,
+    "4": False, "5": False, "6": False, "7": False,
+}
+
+
+def _build_mpec_detail(detail, section_state=None):
     """Build the right-panel detail view for a selected MPEC."""
     if not detail:
         return html.Div("Could not load MPEC.",
                         style={"fontFamily": "sans-serif",
                                "color": "var(--subtext-color, #888)"})
+
+    if section_state is None:
+        section_state = _DEFAULT_SECTION_STATE
+
+    def _is_open(idx):
+        return section_state.get(str(idx), _DEFAULT_SECTION_STATE.get(str(idx), False))
 
     designation = detail.get("designation", detail.get("title", ""))
     mpec_id = detail.get("mpec_id", "")
@@ -4266,7 +4322,7 @@ def _build_mpec_detail(detail):
     # External links
     links = []
     if mpec_url:
-        links.append(html.A("MPEC", href=mpec_url, target="_blank",
+        links.append(html.A("Original MPEC", href=mpec_url, target="_blank",
                             style=_link_btn_style()))
     if packed:
         links.append(html.A(
@@ -4281,6 +4337,12 @@ def _build_mpec_detail(detail):
             "MPC DB",
             href=f"https://www.minorplanetcenter.net/db_search/show_object?utf8=✓&object_id={designation}",
             target="_blank", style=_link_btn_style()))
+    desig_nospace = designation.replace(" ", "") if designation else ""
+    if desig_nospace:
+        links.append(html.A(
+            "NEOCC",
+            href=f"https://neo.ssa.esa.int/search-for-asteroids?sum=1&des={desig_nospace}",
+            target="_blank", style=_link_btn_style()))
 
     # Parse observations to find discovery station
     disc_stn = None
@@ -4292,67 +4354,194 @@ def _build_mpec_detail(detail):
     observers = detail.get("observers", "")
     disc_info_line = _build_discoverer_line(observers, disc_stn)
 
-    # Build orbit summary line from parsed elements
+    # Build orbit summary line and class label from parsed elements
     oe = detail.get("orbital_elements", {})
+    orbit_class = _get_orbit_class(oe, detail)
+    is_pha = _is_pha(oe, detail)
     orbit_info = _build_orbit_info_line(oe, detail)
 
-    # Assemble accordion sections in order:
-    # 1. Orbital Elements (open)
-    # 2. Observer Credits (closed, discovery + follow-up highlighting)
-    # 3. Observations (closed)
-    # 4. Residuals (closed)
-    # 5. Ephemeris (closed)
+    # Assemble accordion sections matching original MPEC order:
+    # 0. Preamble (header text)
+    # 1. Observations / Additional Observations (tracklet-colored)
+    # 2. Observer details (discovery station highlighted)
+    # 3. Comparison with prediction (recovery MPECs only)
+    # 4. Orbital elements (monospace)
+    # 5. Residuals (discovery residuals highlighted)
+    # 6. Ephemeris (monospace)
+    # 7. Copyright (single line)
+    is_recovery = (mpec_type == "recovery")
     sections = []
+
+    header = detail.get("header", "")
+    if header:
+        sections.append(_mpec_section(
+            "Preamble", _linkify_preamble(header),
+            open_default=_is_open(0),
+            mono=True, section_id="mpec-section-0"))
+    else:
+        sections.append(_mpec_section(
+            "Preamble", "(no header)", open_default=_is_open(0),
+            mono=False, section_id="mpec-section-0"))
+
+    obs_label = "Additional Observations" if is_recovery else "Observations"
+    if obs_text:
+        obs_section, _ = _build_obs_section(
+            obs_text, open_default=_is_open(1),
+            section_id="mpec-section-1", label=obs_label)
+        sections.append(obs_section)
+    else:
+        sections.append(_mpec_section(
+            obs_label, "(none)", open_default=_is_open(1),
+            mono=False, section_id="mpec-section-1"))
+
+    if observers:
+        obs_credit = _build_observer_sections(
+            observers, disc_stn, open_default=_is_open(2),
+            section_id="mpec-section-2")
+        if obs_credit:
+            sections.append(obs_credit)
+        else:
+            sections.append(_mpec_section(
+                "Observer details", "(none)", open_default=_is_open(2),
+                mono=False, section_id="mpec-section-2"))
+    else:
+        sections.append(_mpec_section(
+            "Observer details", "(none)", open_default=_is_open(2),
+            mono=False, section_id="mpec-section-2"))
+
+    comparison = detail.get("comparison", "")
+    if comparison:
+        sections.append(_mpec_section(
+            "Comparison with prediction", comparison,
+            open_default=_is_open(3), mono=True,
+            section_id="mpec-section-3"))
 
     oe_raw = detail.get("orbital_elements_raw", "")
     if oe_raw:
         sections.append(_mpec_section(
-            "Orbital Elements \u2014 MPC", oe_raw, open_default=True,
-            mono=True))
-
-    if observers:
-        obs_credit = _build_observer_sections(
-            observers, disc_stn)
-        if obs_credit:
-            sections.append(obs_credit)
-
-    if obs_text:
-        obs_section, _ = _build_obs_section(obs_text)
-        sections.append(obs_section)
+            "Orbital elements", oe_raw, open_default=_is_open(4),
+            mono=True, section_id="mpec-section-4"))
+    else:
+        sections.append(_mpec_section(
+            "Orbital elements", "(none)", open_default=_is_open(4),
+            mono=False, section_id="mpec-section-4"))
 
     residuals = detail.get("residuals", "")
     if residuals:
-        sections.append(_build_residuals_section(residuals, disc_stn, obs_text))
+        sections.append(_build_residuals_section(
+            residuals, disc_stn, obs_text,
+            open_default=_is_open(5), section_id="mpec-section-5"))
+    else:
+        sections.append(_mpec_section(
+            "Residuals", "(none)", open_default=_is_open(5),
+            mono=False, section_id="mpec-section-5"))
 
     ephemeris = detail.get("ephemeris", "")
     if ephemeris:
         sections.append(_mpec_section(
-            "Ephemeris", ephemeris, open_default=False, mono=True))
+            "Ephemeris", ephemeris, open_default=_is_open(6),
+            mono=True, section_id="mpec-section-6"))
+    else:
+        sections.append(_mpec_section(
+            "Ephemeris", "(none)", open_default=_is_open(6),
+            mono=False, section_id="mpec-section-6"))
+
+    copyright_line = detail.get("copyright", "")
+    if copyright_line:
+        sections.append(_mpec_section(
+            "Copyright", _linkify_preamble(copyright_line),
+            open_default=_is_open(7),
+            mono=False, section_id="mpec-section-7"))
+    else:
+        sections.append(_mpec_section(
+            "Copyright", "(none)", open_default=_is_open(7),
+            mono=False, section_id="mpec-section-7"))
+
+    # Larger badge styles for summary (not used in MPEC list)
+    _SUMMARY_BADGE = {"display": "inline-block", "padding": "3px 10px",
+                      "borderRadius": "4px", "fontSize": "13px",
+                      "fontWeight": "600", "fontFamily": "sans-serif",
+                      "marginLeft": "10px", "verticalAlign": "middle"}
+
+    # Line 1: designation + badge + orbit class + PHA (inline)
+    line1_children = [
+        html.Span(designation,
+                   style={"fontFamily": "sans-serif", "fontSize": "26px",
+                          "fontWeight": "700"}),
+    ]
+    if mpec_type == "discovery":
+        line1_children.append(html.Span(
+            "Discovery", style={**_SUMMARY_BADGE,
+                                "backgroundColor": "#2e7d32",
+                                "color": "white"}))
+    else:
+        line1_children.append(html.Span(
+            "Recovery", style={**_SUMMARY_BADGE,
+                               "backgroundColor": "#1565c0",
+                               "color": "white"}))
+    if orbit_class:
+        line1_children.append(html.Span(
+            orbit_class,
+            style={"fontFamily": "sans-serif", "fontSize": "18px",
+                   "fontWeight": "600", "marginLeft": "10px",
+                   "verticalAlign": "middle"}))
+    if is_pha:
+        line1_children.append(html.Span(
+            "PHA", style={**_SUMMARY_BADGE,
+                          "backgroundColor": "#c62828",
+                          "color": "white"}))
+
+    # Line 2: linked MPEC ID + date
+    mpec_display = f"MPEC {mpec_id}" if mpec_id else ""
+    if mpec_display and mpec_url:
+        mpec_id_el = html.A(
+            mpec_display, href=mpec_url, target="_blank",
+            style={"fontFamily": "sans-serif", "fontSize": "16px",
+                   "color": "#5b8def", "textDecoration": "none"})
+    else:
+        mpec_id_el = html.Span(
+            mpec_display,
+            style={"fontFamily": "sans-serif", "fontSize": "16px",
+                   "color": "var(--subtext-color, #888)"})
+
+    _SUMMARY_HEIGHT = "160px"  # fixed height so all MPECs align
 
     return html.Div(children=[
-        # Header
+        # Summary section (fixed height)
         html.Div(
-            style={"marginBottom": "15px"},
+            style={"marginBottom": "10px", "minHeight": _SUMMARY_HEIGHT,
+                   "display": "flex", "flexDirection": "column"},
             children=[
-                html.H2(designation,
-                         style={"fontFamily": "sans-serif", "margin": "0 0 4px 0",
-                                "fontSize": "24px"}),
-                html.Span(mpec_id,
-                           style={"fontFamily": "sans-serif", "fontSize": "14px",
-                                  "color": "var(--subtext-color, #888)"}),
-                html.Span(f"  {date}",
-                           style={"fontFamily": "sans-serif", "fontSize": "14px",
-                                  "color": "var(--subtext-color, #888)",
-                                  "marginLeft": "12px"}),
-                _mpec_badge(mpec_type),
-                orbit_info,
+                html.Div(children=[
+                    # Line 1: designation + badge + class + PHA
+                    html.Div(children=line1_children,
+                             style={"display": "flex",
+                                    "alignItems": "center",
+                                    "flexWrap": "wrap",
+                                    "marginBottom": "5px"}),
+                    # Line 2: MPEC ID (linked) + date
+                    html.Div(children=[
+                        mpec_id_el,
+                        html.Span(f"  {date}",
+                                   style={"fontFamily": "sans-serif",
+                                          "fontSize": "16px",
+                                          "color": "var(--subtext-color, #888)",
+                                          "marginLeft": "10px"}),
+                    ], style={"marginBottom": "5px"}),
+                    # Line 3: discoverer
+                    disc_info_line,
+                    # Line 4: orbit params (combined)
+                    orbit_info,
+                ]),
+                # Spacer pushes annotations to bottom
+                html.Div(style={"flex": "1"}),
+                # Bottom: Sentry/NEOCC annotations
                 html.Div(id="mpec-risk-line"),
-                disc_info_line,
             ],
         ),
         # External links row
         html.Div(
-            style={"display": "flex", "gap": "8px", "marginBottom": "16px",
+            style={"display": "flex", "gap": "8px", "marginBottom": "14px",
                    "flexWrap": "wrap"},
             children=links,
         ) if links else html.Div(),
@@ -4671,7 +4860,8 @@ _TRACKLET_COLORS = [
 ]
 
 
-def _build_obs_section(obs_text):
+def _build_obs_section(obs_text, open_default=False, section_id=None,
+                        label="Observations"):
     """Build the Observations accordion with tracklet color-coding.
 
     Returns (section_element, discovery_station_code).
@@ -4752,14 +4942,14 @@ def _build_obs_section(obs_text):
         "whiteSpace": "pre",
     }
 
-    section = html.Details(
-        open=False,
-        style={"marginBottom": "12px",
-               "border": "1px solid var(--hr-color, #ccc)",
-               "borderRadius": "6px"},
-        children=[
+    props = {
+        "open": open_default,
+        "style": {"marginBottom": "12px",
+                  "border": "1px solid var(--hr-color, #ccc)",
+                  "borderRadius": "6px"},
+        "children": [
             html.Summary(
-                "Observations",
+                label,
                 style={"padding": "10px 14px", "cursor": "pointer",
                        "fontFamily": "sans-serif", "fontWeight": "600",
                        "fontSize": "14px",
@@ -4768,15 +4958,19 @@ def _build_obs_section(obs_text):
             ),
             html.Div(children=children, style=content_style),
         ],
-    )
+    }
+    if section_id is not None:
+        props["id"] = section_id
+    section = html.Details(**props)
     return section, disc_stn
 
 
 def _build_discoverer_line(observers_text, disc_stn):
-    """Parse discovery station block to extract site ID, name, observer.
+    """Parse discovery station block to extract site ID, name, observers.
 
-    Returns a compact Div: "G96 Mt. Lemmon Survey — D. Rankin"
+    Returns a compact Div: "G96 Mt. Lemmon Survey — D. Rankin, E. Smith"
     MPC observer blocks use double-spacing between sentences.
+    Observer list continues until "Measurers" or telescope description.
     """
     if not observers_text or not disc_stn:
         return html.Div()
@@ -4790,8 +4984,18 @@ def _build_discoverer_line(observers_text, disc_stn):
         # Site name: from after station code to first double-spaced period
         name_m = _re.match(r"^[A-Z0-9]{3}\s+(.+?)\.\s{2,}", block, _re.DOTALL)
         site_name = " ".join(name_m.group(1).split()) if name_m else ""
-        # Observer(s): after "Observer(s) " up to next double-spaced period
-        obs_m = _re.search(r"Observers?\s+(.+?)\.\s{2,}", block, _re.DOTALL)
+        # Observer(s): from "Observer(s) " up to ".  Measurer" if present,
+        # otherwise up to ".  " followed by a digit (telescope description).
+        obs_m = _re.search(
+            r"Observers?\s+(.+?)\.(?=\s{2,}Measurer)", block, _re.DOTALL)
+        if not obs_m:
+            # No measurers — observers run to period before telescope desc
+            obs_m = _re.search(
+                r"Observers?\s+(.+?)\.(?=\s{2,}\d)", block, _re.DOTALL)
+        if not obs_m:
+            # Fallback: observers to end of block
+            obs_m = _re.search(
+                r"Observers?\s+(.+)\.", block, _re.DOTALL)
         observer = " ".join(obs_m.group(1).split()) if obs_m else ""
 
         parts = [
@@ -4803,14 +5007,15 @@ def _build_discoverer_line(observers_text, disc_stn):
                          style={"color": "var(--subtext-color, #888)"}))
         return html.Div(
             children=parts,
-            style={"fontFamily": "sans-serif", "fontSize": "13px",
-                   "marginTop": "4px"},
+            style={"fontFamily": "sans-serif", "fontSize": "15px",
+                   "marginTop": "2px"},
         )
     return html.Div()
 
 
-def _build_observer_sections(observers_text, disc_stn, followup_stn=None):
-    """Build Observer Credits section with discovery station highlighted.
+def _build_observer_sections(observers_text, disc_stn, followup_stn=None,
+                              open_default=False, section_id=None):
+    """Build Observer details section with discovery station highlighted.
 
     Returns a single collapsible Details section (closed by default).
     """
@@ -4851,14 +5056,14 @@ def _build_observer_sections(observers_text, disc_stn, followup_stn=None):
         style={"padding": "10px", "maxHeight": "400px",
                "overflowY": "auto"},
     )
-    return html.Details(
-        open=False,
-        style={"marginBottom": "12px",
-               "border": "1px solid var(--hr-color, #ccc)",
-               "borderRadius": "6px"},
-        children=[
+    props = {
+        "open": open_default,
+        "style": {"marginBottom": "12px",
+                  "border": "1px solid var(--hr-color, #ccc)",
+                  "borderRadius": "6px"},
+        "children": [
             html.Summary(
-                "Observer Credits",
+                "Observer details",
                 style={"padding": "10px 14px", "cursor": "pointer",
                        "fontFamily": "sans-serif", "fontWeight": "600",
                        "fontSize": "14px",
@@ -4867,10 +5072,14 @@ def _build_observer_sections(observers_text, disc_stn, followup_stn=None):
             ),
             content_div,
         ],
-    )
+    }
+    if section_id is not None:
+        props["id"] = section_id
+    return html.Details(**props)
 
 
-def _build_residuals_section(residuals_text, disc_stn, obs_text):
+def _build_residuals_section(residuals_text, disc_stn, obs_text,
+                              open_default=False, section_id=None):
     """Build Residuals section with discovery tracklet entries highlighted.
 
     Residual entries look like: "260210 G96  0.5+  0.1-"
@@ -4892,7 +5101,8 @@ def _build_residuals_section(residuals_text, disc_stn, obs_text):
 
     if not disc_yymmdd or not disc_stn:
         return _mpec_section("Residuals", residuals_text,
-                             open_default=False, mono=True)
+                             open_default=open_default, mono=True,
+                             section_id=section_id)
 
     # The discovery tracklet residual marker: "YYMMDD STN"
     disc_marker = f"{disc_yymmdd} {disc_stn}"
@@ -4939,12 +5149,12 @@ def _build_residuals_section(residuals_text, disc_stn, obs_text):
             "fontFamily": "monospace", "whiteSpace": "pre",
         },
     )
-    return html.Details(
-        open=False,
-        style={"marginBottom": "12px",
-               "border": "1px solid var(--hr-color, #ccc)",
-               "borderRadius": "6px"},
-        children=[
+    props = {
+        "open": open_default,
+        "style": {"marginBottom": "12px",
+                  "border": "1px solid var(--hr-color, #ccc)",
+                  "borderRadius": "6px"},
+        "children": [
             html.Summary(
                 "Residuals",
                 style={"padding": "10px 14px", "cursor": "pointer",
@@ -4955,10 +5165,14 @@ def _build_residuals_section(residuals_text, disc_stn, obs_text):
             ),
             content_div,
         ],
-    )
+    }
+    if section_id is not None:
+        props["id"] = section_id
+    return html.Details(**props)
 
 
-def _mpec_section(title, content, open_default=False, mono=True):
+def _mpec_section(title, content, open_default=False, mono=True,
+                   section_id=None):
     """Build a collapsible section using html.Details/Summary."""
     content_style = {
         "padding": "10px",
@@ -4975,12 +5189,12 @@ def _mpec_section(title, content, open_default=False, mono=True):
         content_style["fontFamily"] = "sans-serif"
         content_style["whiteSpace"] = "pre-wrap"
 
-    return html.Details(
-        open=open_default,
-        style={"marginBottom": "12px",
-               "border": "1px solid var(--hr-color, #ccc)",
-               "borderRadius": "6px"},
-        children=[
+    props = {
+        "open": open_default,
+        "style": {"marginBottom": "12px",
+                  "border": "1px solid var(--hr-color, #ccc)",
+                  "borderRadius": "6px"},
+        "children": [
             html.Summary(
                 title,
                 style={"padding": "10px 14px", "cursor": "pointer",
@@ -4991,7 +5205,11 @@ def _mpec_section(title, content, open_default=False, mono=True):
             ),
             html.Div(content, style=content_style),
         ],
-    )
+    }
+    if section_id is not None:
+        props["id"] = section_id
+
+    return html.Details(**props)
 
 
 def _prefetch_mpec_details(entries):
@@ -5141,8 +5359,9 @@ def update_auto_indicator(auto_mode):
     Output("mpec-enrich-poll", "n_intervals"),
     Output("mpec-enrich-data", "data"),
     Input("mpec-selected-path", "data"),
+    State("mpec-section-state", "data"),
 )
-def show_mpec_detail(path):
+def show_mpec_detail(path, section_state):
     if not path:
         return (html.Div("Select an MPEC from the list.",
                          style={"fontFamily": "sans-serif", "fontSize": "14px",
@@ -5151,7 +5370,29 @@ def show_mpec_detail(path):
                 True, 0, None)
     detail = fetch_mpec_detail(path, cache_dir=_MPEC_CACHE_DIR)
     # Start enrichment polling (reset counter, enable interval)
-    return _build_mpec_detail(detail), False, 0, None
+    return _build_mpec_detail(detail, section_state), False, 0, None
+
+
+@app.callback(
+    Output("mpec-section-state", "data"),
+    Input("mpec-section-state-input", "value"),
+    State("mpec-section-state", "data"),
+    prevent_initial_call=True,
+)
+def sync_section_state(json_val, current_state):
+    """Sync section open/closed state from JS toggle events."""
+    if not json_val:
+        raise PreventUpdate
+    import json
+    # JS appends "|<timestamp>" to force uniqueness — strip it
+    raw = json_val.rsplit("|", 1)[0] if "|" in json_val else json_val
+    try:
+        new_state = json.loads(raw)
+        if isinstance(new_state, dict):
+            return new_state
+    except (json.JSONDecodeError, TypeError):
+        pass
+    raise PreventUpdate
 
 
 # ---------------------------------------------------------------------------
@@ -5230,11 +5471,16 @@ def update_obs_chart(path, site, plot_height):
 # Enrichment callback — fetches SBDB, Sentry, NEOfixer, NEOCC
 # ---------------------------------------------------------------------------
 
-def _build_risk_line(sentry, neocc_risk):
+def _build_risk_line(sentry, neocc_risk, designation=""):
     """Build compact Sentry/NEOCC risk status for MPEC detail header."""
+    import urllib.parse
     parts = []
-    _ss = {"fontFamily": "sans-serif", "fontSize": "12px"}
+    _ss = {"fontFamily": "sans-serif", "fontSize": "13px"}
     _dim = {"color": "var(--subtext-color, #888)"}
+    _link = {"color": "inherit", "textDecoration": "underline",
+             "textUnderlineOffset": "2px"}
+
+    encoded = urllib.parse.quote(designation) if designation else ""
 
     # Sentry status
     if sentry is not None:
@@ -5248,11 +5494,18 @@ def _build_risk_line(sentry, neocc_risk):
             ts_max = sentry.get("ts_max", "0")
             ps_cum = sentry.get("ps_cum", "")
             risk_color = "#c62828" if str(ts_max) != "0" else "#f57f17"
-            parts.append(html.Span(
-                f"Sentry: Torino {ts_max}, IP={ip}, Palermo={ps_cum}",
-                className="color-explicit",
-                style={**_ss, "--explicit-color": risk_color,
-                       "fontWeight": "600"}))
+            sentry_url = (f"https://cneos.jpl.nasa.gov/sentry/details.html"
+                          f"#?des={encoded}")
+            parts.append(html.Span(children=[
+                html.Span("Sentry: ", style={**_ss, "fontWeight": "600",
+                           "color": risk_color}),
+                html.A(f"Torino {ts_max}, IP={ip}, Palermo={ps_cum}",
+                       href=sentry_url, target="_blank",
+                       className="color-explicit",
+                       style={**_ss, **_link,
+                              "--explicit-color": risk_color,
+                              "fontWeight": "600"}),
+            ]))
         # If not on list, say nothing (normal case)
     else:
         parts.append(html.Span(
@@ -5264,11 +5517,19 @@ def _build_risk_line(sentry, neocc_risk):
     if neocc_risk:
         lines = [l for l in neocc_risk.strip().split("\n") if l.strip()]
         if lines:
-            parts.append(html.Span(
-                f"NEOCC: listed ({len(lines)} VI)",
-                className="color-explicit",
-                style={**_ss, "--explicit-color": "#f57f17",
-                       "fontWeight": "600"}))
+            desig_nospace = designation.replace(" ", "")
+            neocc_url = (f"https://neo.ssa.esa.int/"
+                         f"search-for-asteroids?tab=closeapp&des={desig_nospace}")
+            parts.append(html.Span(children=[
+                html.Span("NEOCC: ", style={**_ss, "fontWeight": "600",
+                           "color": "#f57f17"}),
+                html.A(f"listed ({len(lines)} VI)",
+                       href=neocc_url, target="_blank",
+                       className="color-explicit",
+                       style={**_ss, **_link,
+                              "--explicit-color": "#f57f17",
+                              "fontWeight": "600"}),
+            ]))
     # If not listed, say nothing (normal case)
 
     if not parts:
@@ -5331,7 +5592,7 @@ def enrich_mpec_detail(n_intervals, path, prev_data):
         sources_pending += 1
 
     # Build Sentry/NEOCC risk line for MPEC header
-    risk_line = _build_risk_line(sentry, neocc_risk)
+    risk_line = _build_risk_line(sentry, neocc_risk, designation)
 
     # Stop polling if all sources responded or max intervals reached
     stop_poll = (sources_pending == 0) or (n_intervals >= 10)
