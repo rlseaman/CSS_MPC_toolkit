@@ -5085,13 +5085,16 @@ def select_mpec(item_clicks, follow_clicks):
     prevent_initial_call=True,
 )
 def keyboard_navigate(value):
-    """Handle arrow-key navigation from keyboard.js."""
+    """Handle keyboard navigation from keyboard.js."""
     if not value:
         raise PreventUpdate
     # JS appends "|<timestamp>" to force uniqueness — strip it
     path = value.rsplit("|", 1)[0] if "|" in value else value
     if not path:
         raise PreventUpdate
+    if path == "PIN":
+        # F key toggle: switch from Following to Pinned (no path change)
+        return no_update, False
     return path, False
 
 

@@ -2,13 +2,14 @@
  * Keyboard shortcuts for the Planetary Defense Dashboard — MPEC Browser tab.
  *
  * Shortcuts are active only when the MPEC Browser tab is selected and no
- * text input is focused.  Navigation uses dash_clientside.set_props() to
- * update Dash stores directly (DOM .click() does not trigger React state).
+ * text input is focused.  List navigation writes to a hidden dcc.Input
+ * (#mpec-kb-nav) which a server callback reads.
  *
  * Keys:
  *   ↑ / ↓          Step through MPEC list
- *   Home / End      Jump to first / last MPEC in list
- *   F               Toggle "Follow latest" mode
+ *   [ / ]           Jump to first / last MPEC (Mac Home/End alternative)
+ *   Home / End      Jump to first / last MPEC
+ *   F               Toggle Follow / Pin mode
  *   1-5             Toggle detail accordion sections
  *   O               Cycle observatory site forward
  *   ?               Show / hide keyboard shortcut overlay
@@ -19,13 +20,11 @@
 
     // ── Helpers ──────────────────────────────────────────────────────
 
-    /** Is the MPEC Browser tab currently active? */
     function isMpecTab() {
         var tab = document.querySelector(".nav-tab--selected");
         return tab && tab.textContent.trim().startsWith("MPEC");
     }
 
-    /** Is focus inside a text input, textarea, or contenteditable? */
     function isTyping() {
         var el = document.activeElement;
         if (!el) return false;
@@ -35,15 +34,12 @@
         return false;
     }
 
-    /** Get all MPEC list item divs (children of #mpec-list-panel with
-     *  a data-path attribute). */
     function getListItems() {
         var panel = document.getElementById("mpec-list-panel");
         if (!panel) return [];
         return Array.from(panel.querySelectorAll("[data-path]"));
     }
 
-    /** Find the index of the currently selected (blue-bordered) item. */
     function selectedIndex(items) {
         for (var i = 0; i < items.length; i++) {
             var bs = items[i].style.boxShadow || "";
@@ -52,48 +48,74 @@
         return -1;
     }
 
-    /** Scroll an item into view within the list panel. */
     function scrollIntoView(el) {
         if (el && el.scrollIntoView) {
             el.scrollIntoView({ block: "nearest", behavior: "smooth" });
         }
     }
 
-    /** Navigate to a specific list item by index.
-     *  Primary: dash_clientside.set_props on the mpec-selected-path store.
-     *  Fallback: write to hidden dcc.Input #mpec-kb-nav via React's
-     *  native value setter + dispatched input event. */
+    // ── Hidden-input bridge to Dash ──────────────────────────────────
+    //
+    // dcc.Input in Dash 4.0 renders an <input> inside a wrapper div.
+    // We find the actual <input>, use the native HTMLInputElement value
+    // setter (bypasses React's controlled-input guard), then dispatch
+    // a native "input" event so React's onChange fires and Dash sees
+    // the new value.
+
+    var _nativeSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype, "value"
+    ).set;
+
+    /** Find the real <input> element for a Dash dcc.Input by id. */
+    function findDashInput(id) {
+        var el = document.getElementById(id);
+        if (!el) return null;
+        if (el.tagName === "INPUT") return el;
+        // dcc.Input wraps the <input> in a div
+        return el.querySelector("input") || null;
+    }
+
+    /** Set a Dash dcc.Input's value and trigger its callback. */
+    function setDashInputValue(id, value) {
+        var input = findDashInput(id);
+        if (!input) return false;
+        _nativeSetter.call(input, value);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        return true;
+    }
+
+    /** Navigate the MPEC list to the item at `idx`. */
     function navigateTo(items, idx) {
         if (idx < 0 || idx >= items.length) return;
         var el = items[idx];
         var path = el.getAttribute("data-path");
         if (!path) return;
-
-        // Primary: use Dash renderer's set_props (Dash ≥ 2.17)
-        var dc = window.dash_clientside;
-        if (dc && typeof dc.set_props === "function") {
-            dc.set_props("mpec-selected-path", { data: path });
-            dc.set_props("mpec-auto-mode", { data: false });
-            scrollIntoView(el);
-            return;
-        }
-
-        // Fallback: write to hidden input, triggering server callback
-        var input = document.getElementById("mpec-kb-nav");
-        if (!input) {
-            // The dcc.Input wrapper may contain a child <input>
-            var wrapper = document.querySelector('[id="mpec-kb-nav"]');
-            input = wrapper && wrapper.querySelector
-                ? wrapper.querySelector("input") || wrapper
-                : null;
-        }
-        if (!input) return;
-        var setter = Object.getOwnPropertyDescriptor(
-            window.HTMLInputElement.prototype, "value"
-        ).set;
-        setter.call(input, path + "|" + Date.now());
-        input.dispatchEvent(new Event("input", { bubbles: true }));
+        // Append timestamp so repeated nav to the same item still
+        // triggers a change (React deduplicates identical values).
+        setDashInputValue("mpec-kb-nav", path + "|" + Date.now());
         scrollIntoView(el);
+    }
+
+    // ── Follow / Pin toggle ──────────────────────────────────────────
+
+    function isAutoFollowing() {
+        var label = document.getElementById("mpec-auto-label");
+        return label && label.textContent.indexOf("Following") !== -1;
+    }
+
+    function toggleFollow() {
+        if (isAutoFollowing()) {
+            // Currently following — pin to current selection.
+            // Arrow-down then arrow-up would also pin, but this is
+            // more explicit.  Write a special command to the hidden
+            // input; the server callback treats "PIN" as a no-path
+            // auto-mode-off signal.
+            setDashInputValue("mpec-kb-nav", "PIN|" + Date.now());
+        } else {
+            // Currently pinned — click "Follow latest" button
+            var btn = document.getElementById("mpec-follow-btn");
+            if (btn) btn.click();
+        }
     }
 
     // ── Overlay ──────────────────────────────────────────────────────
@@ -101,11 +123,8 @@
     var OVERLAY_ID = "kb-shortcut-overlay";
 
     function buildOverlay() {
-        // Read theme colors from #page-container so the overlay matches
         var container = document.getElementById("page-container");
-        var cs = container
-            ? getComputedStyle(container)
-            : null;
+        var cs = container ? getComputedStyle(container) : null;
         var bgColor = cs
             ? cs.getPropertyValue("--paper-bg").trim() || "#1e1e1e"
             : "#1e1e1e";
@@ -135,22 +154,23 @@
             "font-family: sans-serif",
             "font-size: 14px",
             "box-shadow: 0 8px 32px rgba(0,0,0,0.4)",
-            "min-width: 320px",
-            "max-width: 420px",
+            "min-width: 340px",
+            "max-width: 440px",
         ].join("; ");
 
         var title = document.createElement("div");
-        title.style.cssText = "font-size: 16px; font-weight: 700; margin-bottom: 16px; color: " + fgColor + ";";
+        title.style.cssText =
+            "font-size: 16px; font-weight: 700; margin-bottom: 16px; color: " + fgColor + ";";
         title.textContent = "Keyboard Shortcuts";
         overlay.appendChild(title);
 
         var shortcuts = [
-            ["\u2191 / \u2193", "Step through MPEC list"],
-            ["Home / End", "Jump to first / last MPEC"],
-            ["F", "Toggle \u201cFollow latest\u201d mode"],
-            ["1 \u2013 5", "Toggle detail sections"],
-            ["O", "Cycle observatory site"],
-            ["?", "Show / hide this overlay"],
+            ["\u2191 / \u2193",    "Step through MPEC list"],
+            ["[ / ]",              "Jump to first / last MPEC"],
+            ["F",                  "Toggle Follow / Pin mode"],
+            ["1 \u2013 5",        "Toggle detail sections"],
+            ["O",                  "Cycle observatory site"],
+            ["?",                  "Show / hide this overlay"],
         ];
 
         var table = document.createElement("table");
@@ -186,7 +206,6 @@
             existing.remove();
             return;
         }
-        // Append inside #page-container so theme CSS variables apply
         var container = document.getElementById("page-container") || document.body;
         container.appendChild(buildOverlay());
     }
@@ -217,24 +236,15 @@
         arr[nextIdx].click();
     }
 
-    // ── Click "Follow latest" button ─────────────────────────────────
-
-    function clickFollowLatest() {
-        var btn = document.getElementById("mpec-follow-btn");
-        if (btn) btn.click();
-    }
-
     // ── Main keydown handler ─────────────────────────────────────────
 
     document.addEventListener("keydown", function (e) {
-        // ? works on MPEC tab — but not in text inputs
         if (e.key === "?" && !isTyping()) {
             e.preventDefault();
             toggleOverlay();
             return;
         }
 
-        // Escape closes overlay if open
         if (e.key === "Escape") {
             var ov = document.getElementById(OVERLAY_ID);
             if (ov) {
@@ -244,10 +254,7 @@
             }
         }
 
-        // All other shortcuts require MPEC tab active and no typing
         if (!isMpecTab() || isTyping()) return;
-
-        // Ignore when modifier keys are held (allow browser shortcuts)
         if (e.ctrlKey || e.metaKey || e.altKey) return;
 
         var items, cur, next;
@@ -270,12 +277,14 @@
                 break;
 
             case "Home":
+            case "[":
                 e.preventDefault();
                 items = getListItems();
                 navigateTo(items, 0);
                 break;
 
             case "End":
+            case "]":
                 e.preventDefault();
                 items = getListItems();
                 navigateTo(items, items.length - 1);
@@ -284,7 +293,7 @@
             case "f":
             case "F":
                 e.preventDefault();
-                clickFollowLatest();
+                toggleFollow();
                 break;
 
             case "o":
