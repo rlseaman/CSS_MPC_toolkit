@@ -440,17 +440,56 @@
     // item whose designation or MPEC ID matches and navigate to it
     // (equivalent to using arrow keys).
 
+    /**
+     * Convert an MPEC ID like "2026-C105" or "1996-W06" to an MPC archive path.
+     * Returns "" if the input doesn't look like a valid MPEC ID.
+     */
+    function mpecIdToPath(id) {
+        // Strip optional "MPEC " prefix
+        id = id.replace(/^MPEC\s+/i, "").trim();
+        var m = id.match(/^(\d{4})-([A-Z])(\d+)$/i);
+        if (!m) return "";
+        var year = parseInt(m[1], 10);
+        var halfMonth = m[2].toUpperCase();
+        var num = parseInt(m[3], 10);
+        if (year < 1800 || year > 2099) return "";
+        // Century letter: 1800→I, 1900→J, 2000→K
+        var centuryLetter = String.fromCharCode(65 + Math.floor(year / 100) - 10);
+        var yy = ("0" + (year % 100)).slice(-2);
+        var packedYear = centuryLetter + yy;
+        // Pack number: 1-99 → two digits, 100+ → letter+digit
+        var packedNum;
+        if (num <= 99) {
+            packedNum = ("0" + num).slice(-2);
+        } else {
+            var hundreds = Math.floor((num - 100) / 10);
+            var ones = num % 10;
+            if (hundreds > 25) return "";  // beyond Z
+            packedNum = String.fromCharCode(65 + hundreds) + ones;
+        }
+        var packed = packedYear + halfMonth + packedNum;
+        return "/mpec/" + packedYear + "/" + packed + ".html";
+    }
+
     function doSearch(query) {
         if (!query) return;
         var q = query.trim().toUpperCase();
         if (!q) return;
         var items = getListItems();
+        // First: scan list items for a text match
         for (var i = 0; i < items.length; i++) {
             var text = (items[i].textContent || "").toUpperCase();
             if (text.indexOf(q) !== -1) {
                 navigateTo(items, i);
                 return;
             }
+        }
+        // No list match — try interpreting query as an MPEC ID
+        var path = mpecIdToPath(query.trim());
+        if (path) {
+            // Write directly to mpec-kb-nav to trigger the server callback
+            // (same mechanism as navigateTo but without a list element)
+            setDashInputValue("mpec-kb-nav", path + "|" + Date.now());
         }
     }
 
@@ -471,7 +510,53 @@
                 input.blur();
                 e.preventDefault();
             }
+            // Enter re-triggers the search (useful after navigating away
+            // and returning to the search box with a previous query)
+            if (e.key === "Enter") {
+                e.preventDefault();
+                doSearch(input.value);
+            }
         });
     }
     initSearch();
+
+    // ── MPEC navigation buttons ────────────────────────────────────────
+    // Prev, Next, Earliest: write target path to mpec-kb-nav.
+    // Most Recent: click "Follow latest" to restore auto mode.
+    // If the target is in the visible list, scroll it into view.
+
+    function navigateToPath(path) {
+        if (!path) return;
+        setDashInputValue("mpec-kb-nav", path + "|" + Date.now());
+        // Scroll matching list item into view
+        var items = getListItems();
+        for (var i = 0; i < items.length; i++) {
+            if (items[i].getAttribute("data-path") === path) {
+                _kbIndex = i;
+                scrollIntoView(items[i]);
+                break;
+            }
+        }
+    }
+
+    document.addEventListener("click", function (e) {
+        // Most Recent — re-engage auto mode via Follow latest button
+        if (e.target.closest("#mpec-nav-latest")) {
+            var btn = document.getElementById("mpec-follow-btn");
+            if (btn) btn.click();
+            // Scroll list to top
+            var items = getListItems();
+            if (items.length) {
+                _kbIndex = 0;
+                scrollIntoView(items[0]);
+            }
+            return;
+        }
+        // Prev, Next, Earliest — navigate by path
+        var navBtn = e.target.closest(
+            "#mpec-nav-prev, #mpec-nav-next, #mpec-nav-earliest");
+        if (!navBtn) return;
+        var path = navBtn.getAttribute("data-path");
+        if (path) navigateToPath(path);
+    });
 })();

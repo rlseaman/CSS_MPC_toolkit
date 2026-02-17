@@ -110,12 +110,24 @@ class _MPECPageParser(HTMLParser):
         self._in_title = False
         self.title = ""
         self.pre_text = ""
+        self.prev_path = ""
+        self.next_path = ""
+        self._last_href = ""
 
     def handle_starttag(self, tag, attrs):
         if tag == "pre":
             self._in_pre = True
         elif tag == "title":
             self._in_title = True
+        elif tag == "a":
+            href = dict(attrs).get("href", "")
+            self._last_href = href
+        elif tag == "img":
+            src = dict(attrs).get("src", "")
+            if "LArrow" in src and self._last_href:
+                self.prev_path = self._last_href
+            elif "RArrow" in src and self._last_href:
+                self.next_path = self._last_href
 
     def handle_endtag(self, tag):
         if tag == "pre":
@@ -123,6 +135,8 @@ class _MPECPageParser(HTMLParser):
             self.pre_text = "".join(self._pre_parts)
         elif tag == "title":
             self._in_title = False
+        elif tag == "a":
+            self._last_href = ""
 
     def handle_data(self, data):
         if self._in_pre:
@@ -136,27 +150,38 @@ class _MPECPageParser(HTMLParser):
 # ---------------------------------------------------------------------------
 
 def classify_mpec(title, pre_text=""):
-    """Classify an MPEC as discovery, recovery, or editorial.
+    """Classify an MPEC as discovery, recovery, dou, retraction, or editorial.
 
     Args:
         title: MPEC title text (e.g. "2026 CE3" or "DAILY ORBIT UPDATE")
         pre_text: Full pre-formatted content (for fallback classification)
 
     Returns:
-        "discovery", "recovery", or "editorial"
+        "discovery", "recovery", "dou", "retraction", or "editorial"
     """
     upper = (title or "").upper()
     if "DAILY ORBIT UPDATE" in upper:
-        return "editorial"
+        return "dou"
+    if "RETRACTION" in upper:
+        return "retraction"
     if "EDITORIAL" in upper:
         return "editorial"
 
-    # Check pre_text for recovery indicators
+    # Check pre_text for DOU/editorial/recovery indicators
     if pre_text:
+        pre_upper = pre_text[:2000].upper()
+        if "DAILY ORBIT UPDATE" in pre_upper:
+            return "dou"
+        if "RETRACTION" in pre_upper:
+            return "retraction"
+        # Match "EDITORIAL" as a standalone line (not part of "editorial
+        # announcements" or similar phrases in boilerplate)
+        if re.search(r"^\s*EDITORIAL", pre_text[:2000], re.MULTILINE):
+            return "editorial"
         if "Revision to MPEC" in pre_text or "Additional Observations" in pre_text:
             return "recovery"
 
-    # If we have pre_text but no recovery indicators, it's a discovery
+    # If we have pre_text but no special indicators, it's a discovery
     if pre_text:
         return "discovery"
 
@@ -182,9 +207,11 @@ def classify_mpec(title, pre_text=""):
 
 _SECTION_PATTERNS = {
     "observations": re.compile(
-        r"^(?:Additional\s+)?Observations?:", re.MULTILINE),
+        r"^(?:Available\s+|Additional\s+)?Observations?:",
+        re.MULTILINE | re.IGNORECASE),
     "observer_details": re.compile(r"^Observer details?:", re.MULTILINE),
-    "orbital_elements": re.compile(r"^Orbital elements?:", re.MULTILINE),
+    "orbital_elements": re.compile(r"^Orbital elements?\b.*:",
+                                       re.MULTILINE | re.IGNORECASE),
     "residuals": re.compile(r"^Residuals?\b", re.MULTILINE),
     "ephemeris": re.compile(r"^Ephemeris:?\s*$", re.MULTILINE),
 }
@@ -315,6 +342,13 @@ def parse_mpec_content(pre_text, mpec_id="", title="", path=""):
     designation = _extract_designation(pre_text) or title
     mpec_type = classify_mpec(title, pre_text)
 
+    # A discovery MPEC must contain observations; if none are present
+    # but we have a designation, it's a recovery announcement.
+    if (mpec_type == "discovery"
+            and designation
+            and "observations" not in sections):
+        mpec_type = "recovery"
+
     # Parse orbital elements if present
     orbital_elements = {}
     if "orbital_elements" in sections:
@@ -361,6 +395,32 @@ def parse_mpec_content(pre_text, mpec_id="", title="", path=""):
         m2, d2 = divmod(r2, 100)
         arc_days = (y2 - y1) * 365.25 + (m2 - m1) * 30.44 + (d2 - d1)
 
+    # Fallback: extract obs count and arc from orbital elements summary line
+    # e.g. "From 8 observations 1977 Aug. 21-1978 Jan. 6, mean residual 0".71."
+    if n_obs == 0:
+        oe_raw = sections.get("orbital_elements", "")
+        m_from = re.search(
+            r"From\s+(\d+)\s+observations?\s+"
+            r"(\d{4})\s+(\w+)\.?\s+([\d.]+)"
+            r"(?:\s*-\s*(\d{4})\s+(\w+)\.?\s+([\d.]+))?",
+            oe_raw)
+        if m_from:
+            n_obs = int(m_from.group(1))
+            _months = {"Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4,
+                        "May": 5, "Jun": 6, "June": 6, "Jul": 7,
+                        "July": 7, "Aug": 8, "Sep": 9, "Sept": 9,
+                        "Oct": 10, "Nov": 11, "Dec": 12}
+            if m_from.group(5):
+                y1 = int(m_from.group(2))
+                mo1 = _months.get(m_from.group(3), 1)
+                d1 = float(m_from.group(4))
+                y2 = int(m_from.group(5))
+                mo2 = _months.get(m_from.group(6), 1)
+                d2 = float(m_from.group(7))
+                arc_days = ((y2 - y1) * 365.25
+                            + (mo2 - mo1) * 30.44
+                            + (d2 - d1))
+
     # For recovery MPECs, extract the "comparison with prediction" block
     # from observer_details.  It starts with "First and last observations"
     # and runs to the end of that section's content.
@@ -375,8 +435,9 @@ def parse_mpec_content(pre_text, mpec_id="", title="", path=""):
         obs_details = obs_details[:comp_match.start()].rstrip()
         sections["observer_details"] = obs_details
 
-    # Extract copyright line from raw pre_text (last non-blank line
-    # containing "(C) Copyright" or "Copyright").  Strip it from the
+    # Extract copyright/author line from raw pre_text.  Modern MPECs have
+    # "(C) Copyright" or "Copyright"; older ones have an author name on
+    # the left and "M.P.E.C. YYYY-XXX" on the right.  Strip it from the
     # ephemeris content so it isn't duplicated.
     copyright_line = ""
     ephemeris_text = sections.get("ephemeris", "")
@@ -384,7 +445,8 @@ def parse_mpec_content(pre_text, mpec_id="", title="", path=""):
         stripped = raw_line.strip()
         if not stripped:
             continue
-        if "Copyright" in stripped or "(C)" in stripped:
+        if ("Copyright" in stripped or "(C)" in stripped
+                or "M.P.E.C." in stripped):
             copyright_line = stripped
         break  # only check the last non-blank line
 
@@ -432,7 +494,8 @@ def fetch_recent_mpecs(force=False):
     """Fetch and parse the recent MPECs list.
 
     Returns list of dicts with keys: mpec_id, path, title, date, type.
-    Filters out DAILY ORBIT UPDATEs. Cached for 15 minutes.
+    Includes all MPEC types (discovery, recovery, editorial).
+    Cached for 15 minutes.
     """
     now = time.time()
     if not force and _list_cache["data"] and (now - _list_cache["ts"]) < _LIST_TTL_SEC:
@@ -450,8 +513,6 @@ def fetch_recent_mpecs(force=False):
     for entry in parsed:
         title = entry.get("title", "")
         mpec_type = classify_mpec(title)
-        if mpec_type == "editorial":
-            continue
         entry["type"] = mpec_type
         results.append(entry)
 
@@ -475,6 +536,7 @@ def fetch_mpec_detail(mpec_path, cache_dir=None):
         os.makedirs(cache_dir, exist_ok=True)
         safe_name = mpec_path.replace("/", "_").strip("_") + ".txt"
         cache_path = os.path.join(cache_dir, safe_name)
+        nav_path = os.path.join(cache_dir, safe_name.replace(".txt", ".nav"))
         if os.path.exists(cache_path):
             with open(cache_path, "r") as f:
                 pre_text = f.read()
@@ -498,8 +560,32 @@ def fetch_mpec_detail(mpec_path, cache_dir=None):
                     break
             mpec_m = re.search(r"M\.P\.E\.C\.\s+(\S+)", pre_text)
             mpec_id = mpec_m.group(1) if mpec_m else ""
-            return parse_mpec_content(
+            result = parse_mpec_content(
                 pre_text, mpec_id=mpec_id, title=title_line, path=mpec_path)
+            # Load cached nav links; backfill from web if missing
+            if os.path.exists(nav_path):
+                try:
+                    with open(nav_path, "r") as f:
+                        lines = f.read().split("\n")
+                    result["prev_path"] = lines[0] if len(lines) > 0 else ""
+                    result["next_path"] = lines[1] if len(lines) > 1 else ""
+                except OSError:
+                    pass
+            else:
+                # Backfill: fetch HTML just for nav links
+                try:
+                    html_text = _fetch_url(f"{_MPC_BASE}{mpec_path}")
+                    nav_parser = _MPECPageParser()
+                    nav_parser.feed(html_text)
+                    result["prev_path"] = nav_parser.prev_path
+                    result["next_path"] = nav_parser.next_path
+                    if nav_parser.prev_path or nav_parser.next_path:
+                        with open(nav_path, "w") as f:
+                            f.write(f"{nav_parser.prev_path}\n"
+                                    f"{nav_parser.next_path}\n")
+                except Exception:
+                    pass
+            return result
 
     url = f"{_MPC_BASE}{mpec_path}"
     try:
@@ -529,11 +615,22 @@ def fetch_mpec_detail(mpec_path, cache_dir=None):
     if cache_dir and pre_text:
         safe_name = mpec_path.replace("/", "_").strip("_") + ".txt"
         cache_path = os.path.join(cache_dir, safe_name)
+        nav_path = os.path.join(cache_dir, safe_name.replace(".txt", ".nav"))
         try:
             with open(cache_path, "w") as f:
                 f.write(pre_text)
         except OSError:
             pass
+        # Cache nav links (prev/next MPEC paths)
+        if page_parser.prev_path or page_parser.next_path:
+            try:
+                with open(nav_path, "w") as f:
+                    f.write(f"{page_parser.prev_path}\n{page_parser.next_path}\n")
+            except OSError:
+                pass
 
-    return parse_mpec_content(pre_text, mpec_id=mpec_id, title=title,
-                              path=mpec_path)
+    result = parse_mpec_content(pre_text, mpec_id=mpec_id, title=title,
+                                path=mpec_path)
+    result["prev_path"] = page_parser.prev_path
+    result["next_path"] = page_parser.next_path
+    return result

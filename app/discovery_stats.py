@@ -3984,6 +3984,12 @@ _140M_BADGE = {**_BADGE_STYLE,
                "backgroundColor": "#e65100", "color": "white"}
 _1KM_BADGE = {**_BADGE_STYLE,
               "backgroundColor": "#b71c1c", "color": "white"}
+_DOU_BADGE = {**_BADGE_STYLE,
+              "backgroundColor": "#7b1fa2", "color": "white"}
+_RETRACTION_BADGE = {**_BADGE_STYLE,
+                     "backgroundColor": "#d84315", "color": "white"}
+_EDITORIAL_BADGE = {**_BADGE_STYLE,
+                    "backgroundColor": "#e68a00", "color": "white"}
 
 # List item styles
 _MPEC_ITEM_STYLE = {
@@ -4003,12 +4009,18 @@ _MPEC_ITEM_SELECTED = {
 }
 
 
+_MPEC_TYPE_LABELS = {
+    "discovery": ("Discovery", _DISCOVERY_BADGE),
+    "recovery": ("Recovery", _RECOVERY_BADGE),
+    "dou": ("DOU", _DOU_BADGE),
+    "retraction": ("Retraction", _RETRACTION_BADGE),
+    "editorial": ("Editorial", _EDITORIAL_BADGE),
+}
+
+
 def _mpec_badge(mpec_type):
-    if mpec_type == "discovery":
-        return html.Span("Discovery", className="mpec-badge",
-                         style=_DISCOVERY_BADGE)
-    return html.Span("Recovery", className="mpec-badge",
-                     style=_RECOVERY_BADGE)
+    label, style = _MPEC_TYPE_LABELS.get(mpec_type, ("Editorial", _EDITORIAL_BADGE))
+    return html.Span(label, className="mpec-badge", style=style)
 
 
 def _get_cached_summary(mpec_path):
@@ -4327,7 +4339,7 @@ _DEFAULT_SECTION_STATE = {
 }
 
 
-def _build_mpec_detail(detail, section_state=None):
+def _build_mpec_detail(detail, section_state=None, in_recent=True):
     """Build the right-panel detail view for a selected MPEC."""
     if not detail:
         return html.Div("Could not load MPEC.",
@@ -4346,9 +4358,11 @@ def _build_mpec_detail(detail, section_state=None):
     mpec_type = detail.get("type", "discovery")
     mpec_url = detail.get("mpec_url", "")
 
-    # Build packed designation for external links
+    is_editorial = mpec_type not in ("discovery", "recovery")
+
+    # Build packed designation for external links (skip for editorials)
     packed = ""
-    if designation:
+    if designation and not is_editorial:
         try:
             packed = pack_designation(designation).strip()
         except Exception:
@@ -4383,118 +4397,129 @@ def _build_mpec_detail(detail, section_state=None):
         links.append(html.A("MPEC", href=mpec_url, target="_blank",
                             style=_link_btn_style()))
 
-    # Parse observations to find discovery station
+    # Parse observations to find discovery station (skip for editorials)
     disc_stn = None
     obs_text = detail.get("observations", "")
-    if obs_text:
+    if obs_text and not is_editorial:
         _, disc_stn = _build_obs_section(obs_text)
 
     # Parse discoverer info from observer credits
     observers = detail.get("observers", "")
-    disc_info_line = _build_discoverer_line(observers, disc_stn)
+    disc_info_line = _build_discoverer_line(observers, disc_stn) if not is_editorial else html.Div()
 
     # Build orbit summary line and class label from parsed elements
     oe = detail.get("orbital_elements", {})
-    orbit_class = _get_orbit_class(oe, detail)
-    is_pha = _is_pha(oe, detail)
-    orbit_info = _build_orbit_info_line(oe, detail)
+    orbit_class = _get_orbit_class(oe, detail) if not is_editorial else ""
+    is_pha = _is_pha(oe, detail) if not is_editorial else False
+    orbit_info = _build_orbit_info_line(oe, detail) if not is_editorial else html.Div()
 
-    # Assemble accordion sections matching original MPEC order:
-    # 0. Preamble (header text)
-    # 1. Observations / Additional Observations (tracklet-colored)
-    # 2. Observer details (discovery station highlighted)
-    # 3. Comparison with prediction (recovery MPECs only)
-    # 4. Orbital elements (monospace)
-    # 5. Residuals (discovery residuals highlighted)
-    # 6. Ephemeris (monospace)
-    # 7. Copyright (single line)
+    # Assemble accordion sections.
+    #
+    # Discovery / Recovery: full section treatment:
+    #   0. Preamble, 1. Observations, 2. Observer details,
+    #   3. Comparison with prediction (recovery only),
+    #   4. Orbital elements, 5. Residuals, 6. Ephemeris, 7. Copyright
+    #
+    # All other types (DOU, Retraction, Editorial): single section
+    # with the full content, labeled by type.
     is_recovery = (mpec_type == "recovery")
     sections = []
-
     header = detail.get("header", "")
-    if header:
-        sections.append(_mpec_section(
-            "Preamble", _linkify_preamble(header),
-            open_default=_is_open(0),
-            mono=True, section_id="mpec-section-0"))
-    else:
-        sections.append(_mpec_section(
-            "Preamble", "(no header)", open_default=_is_open(0),
-            mono=False, section_id="mpec-section-0"))
 
-    obs_label = "Additional Observations" if is_recovery else "Observations"
-    if obs_text:
-        obs_section, _ = _build_obs_section(
-            obs_text, open_default=_is_open(1),
-            section_id="mpec-section-1", label=obs_label)
-        sections.append(obs_section)
-    else:
+    if is_editorial:
+        # Single section with full content, labeled by type
+        _section_labels = {"dou": "Daily Orbit Update",
+                           "retraction": "Retraction",
+                           "editorial": "Editorial"}
+        section_label = _section_labels.get(mpec_type, "Editorial")
+        content = header or "(no content)"
         sections.append(_mpec_section(
-            obs_label, "(none)", open_default=_is_open(1),
-            mono=False, section_id="mpec-section-1"))
+            section_label, _linkify_preamble(content) if header else content,
+            open_default=True, mono=True, section_id="mpec-section-0"))
+    else:
+        if header:
+            sections.append(_mpec_section(
+                "Preamble", _linkify_preamble(header),
+                open_default=_is_open(0),
+                mono=True, section_id="mpec-section-0"))
+        else:
+            sections.append(_mpec_section(
+                "Preamble", "(no header)", open_default=_is_open(0),
+                mono=False, section_id="mpec-section-0"))
 
-    if observers:
-        obs_credit = _build_observer_sections(
-            observers, disc_stn, open_default=_is_open(2),
-            section_id="mpec-section-2")
-        if obs_credit:
-            sections.append(obs_credit)
+        obs_label = "Additional Observations" if is_recovery else "Observations"
+        if obs_text:
+            obs_section, _ = _build_obs_section(
+                obs_text, open_default=_is_open(1),
+                section_id="mpec-section-1", label=obs_label)
+            sections.append(obs_section)
+        else:
+            sections.append(_mpec_section(
+                obs_label, "(none)", open_default=_is_open(1),
+                mono=False, section_id="mpec-section-1"))
+
+        if observers:
+            obs_credit = _build_observer_sections(
+                observers, disc_stn, open_default=_is_open(2),
+                section_id="mpec-section-2")
+            if obs_credit:
+                sections.append(obs_credit)
+            else:
+                sections.append(_mpec_section(
+                    "Observer details", "(none)", open_default=_is_open(2),
+                    mono=False, section_id="mpec-section-2"))
         else:
             sections.append(_mpec_section(
                 "Observer details", "(none)", open_default=_is_open(2),
                 mono=False, section_id="mpec-section-2"))
-    else:
-        sections.append(_mpec_section(
-            "Observer details", "(none)", open_default=_is_open(2),
-            mono=False, section_id="mpec-section-2"))
 
-    comparison = detail.get("comparison", "")
-    if comparison:
-        sections.append(_mpec_section(
-            "Comparison with prediction", comparison,
-            open_default=_is_open(3), mono=True,
-            section_id="mpec-section-3"))
+        comparison = detail.get("comparison", "")
+        if comparison:
+            sections.append(_mpec_section(
+                "Comparison with prediction", comparison,
+                open_default=_is_open(3), mono=True,
+                section_id="mpec-section-3"))
 
-    oe_raw = detail.get("orbital_elements_raw", "")
-    if oe_raw:
-        sections.append(_mpec_section(
-            "Orbital elements", oe_raw, open_default=_is_open(4),
-            mono=True, section_id="mpec-section-4"))
-    else:
-        sections.append(_mpec_section(
-            "Orbital elements", "(none)", open_default=_is_open(4),
-            mono=False, section_id="mpec-section-4"))
+        oe_raw = detail.get("orbital_elements_raw", "")
+        if oe_raw:
+            sections.append(_mpec_section(
+                "Orbital elements", oe_raw, open_default=_is_open(4),
+                mono=True, section_id="mpec-section-4"))
+        else:
+            sections.append(_mpec_section(
+                "Orbital elements", "(none)", open_default=_is_open(4),
+                mono=False, section_id="mpec-section-4"))
 
-    residuals = detail.get("residuals", "")
-    if residuals:
-        sections.append(_build_residuals_section(
-            residuals, disc_stn, obs_text,
-            open_default=_is_open(5), section_id="mpec-section-5"))
-    else:
-        sections.append(_mpec_section(
-            "Residuals", "(none)", open_default=_is_open(5),
-            mono=False, section_id="mpec-section-5"))
+        residuals = detail.get("residuals", "")
+        if residuals:
+            sections.append(_build_residuals_section(
+                residuals, disc_stn, obs_text,
+                open_default=_is_open(5), section_id="mpec-section-5"))
+        else:
+            sections.append(_mpec_section(
+                "Residuals", "(none)", open_default=_is_open(5),
+                mono=False, section_id="mpec-section-5"))
 
-    ephemeris = detail.get("ephemeris", "")
-    if ephemeris:
-        sections.append(_mpec_section(
-            "Ephemeris", ephemeris, open_default=_is_open(6),
-            mono=True, section_id="mpec-section-6"))
-    else:
-        sections.append(_mpec_section(
-            "Ephemeris", "(none)", open_default=_is_open(6),
-            mono=False, section_id="mpec-section-6"))
+        ephemeris = detail.get("ephemeris", "")
+        if ephemeris:
+            sections.append(_mpec_section(
+                "Ephemeris", ephemeris, open_default=_is_open(6),
+                mono=True, section_id="mpec-section-6"))
+        else:
+            sections.append(_mpec_section(
+                "Ephemeris", "(none)", open_default=_is_open(6),
+                mono=False, section_id="mpec-section-6"))
 
-    copyright_line = detail.get("copyright", "")
-    if copyright_line:
-        sections.append(_mpec_section(
-            "Copyright", _linkify_preamble(copyright_line),
-            open_default=_is_open(7),
-            mono=False, section_id="mpec-section-7"))
-    else:
-        sections.append(_mpec_section(
-            "Copyright", "(none)", open_default=_is_open(7),
-            mono=False, section_id="mpec-section-7"))
+        copyright_line = detail.get("copyright", "")
+        if copyright_line:
+            sections.append(_mpec_section(
+                "Copyright", _linkify_preamble(copyright_line),
+                open_default=_is_open(7),
+                mono=False, section_id="mpec-section-7"))
+        else:
+            sections.append(_mpec_section(
+                "Copyright", "(none)", open_default=_is_open(7),
+                mono=False, section_id="mpec-section-7"))
 
     # Larger badge styles for summary (not used in MPEC list)
     _SUMMARY_BADGE = {"display": "inline-block", "padding": "3px 10px",
@@ -4508,16 +4533,12 @@ def _build_mpec_detail(detail, section_state=None):
                    style={"fontFamily": "sans-serif", "fontSize": "26px",
                           "fontWeight": "700"}),
     ]
-    if mpec_type == "discovery":
-        line1_children.append(html.Span(
-            "Discovery", style={**_SUMMARY_BADGE,
-                                "backgroundColor": "#2e7d32",
-                                "color": "white"}))
-    else:
-        line1_children.append(html.Span(
-            "Recovery", style={**_SUMMARY_BADGE,
-                               "backgroundColor": "#1565c0",
-                               "color": "white"}))
+    _type_label, _type_badge_style = _MPEC_TYPE_LABELS.get(
+        mpec_type, ("Editorial", _EDITORIAL_BADGE))
+    line1_children.append(html.Span(
+        _type_label, style={**_SUMMARY_BADGE,
+                            "backgroundColor": _type_badge_style["backgroundColor"],
+                            "color": _type_badge_style["color"]}))
     if orbit_class:
         line1_children.append(html.Span(
             orbit_class,
@@ -4542,7 +4563,7 @@ def _build_mpec_detail(detail, section_state=None):
                           "backgroundColor": "#e65100",
                           "color": "white"}))
 
-    # Line 2: linked MPEC ID + date
+    # Line 2: linked MPEC ID + date + prev/next nav
     mpec_display = f"MPEC {mpec_id}" if mpec_id else ""
     if mpec_display and mpec_url:
         mpec_id_el = html.A(
@@ -4555,9 +4576,53 @@ def _build_mpec_detail(detail, section_state=None):
             style={"fontFamily": "sans-serif", "fontSize": "16px",
                    "color": "var(--subtext-color, #888)"})
 
+    # MPEC navigation row: Prev / jump buttons / Next
+    _EARLIEST_MPEC_PATH = "/mpec/J93/J93S01.html"
+    prev_path = detail.get("prev_path", "")
+    next_path = detail.get("next_path", "")
+    _nav_btn = {"display": "inline-block", "padding": "4px 12px",
+                "borderRadius": "4px", "fontSize": "13px",
+                "fontFamily": "sans-serif", "fontWeight": "500",
+                "border": "1px solid var(--hr-color, #ccc)",
+                "color": "inherit",
+                "backgroundColor": "var(--paper-bg, white)",
+                "cursor": "pointer"}
+    _nav_btn_subtle = {**_nav_btn, "fontSize": "12px", "padding": "3px 10px",
+                       "color": "var(--subtext-color, #888)"}
+    _nav_hidden = {**_nav_btn, "visibility": "hidden"}
+    nav_children = [
+        html.Button(
+            "\u2190 Prev", id="mpec-nav-prev",
+            **{"data-path": prev_path or ""},
+            style=_nav_btn if prev_path else _nav_hidden),
+        html.Div(
+            style={"flex": "1", "display": "flex",
+                   "justifyContent": "center", "gap": "6px"},
+            children=[
+                html.Button(
+                    "\u21e4 Earliest", id="mpec-nav-earliest",
+                    **{"data-path": _EARLIEST_MPEC_PATH},
+                    style=_nav_btn_subtle),
+                html.Button(
+                    "Most Recent \u21e5", id="mpec-nav-latest",
+                    style=_nav_btn_subtle),
+            ],
+        ),
+        html.Button(
+            "Next \u2192", id="mpec-nav-next",
+            **{"data-path": next_path or ""},
+            style=_nav_btn if next_path else _nav_hidden),
+    ]
+    nav_row = html.Div(
+        nav_children,
+        style={"display": "flex", "alignItems": "center",
+               "marginBottom": "8px"})
+
     _SUMMARY_HEIGHT = "150px"  # fixed height so all MPECs align
 
     summary = html.Div(children=[
+        # Navigation row
+        nav_row,
         # Summary section (fixed height)
         html.Div(
             style={"marginBottom": "10px", "minHeight": _SUMMARY_HEIGHT,
@@ -4585,9 +4650,22 @@ def _build_mpec_detail(detail, section_state=None):
                     disc_info_line,
                 ]),
                 # Spacer pushes annotations to bottom
-                html.Div(style={"flex": "0"}),
-                # Bottom: Sentry/NEOCC annotations
-                html.Div(id="mpec-risk-line"),
+                html.Div(style={"flex": "1"}),
+                # Bottom row: Sentry/NEOCC annotations + direct lookup note
+                html.Div(
+                    style={"display": "flex", "alignItems": "flex-end"},
+                    children=[
+                        html.Div(id="mpec-risk-line",
+                                 style={"flex": "1"}),
+                    ] + ([html.Span(
+                        "Direct lookup",
+                        style={"fontFamily": "sans-serif",
+                               "fontSize": "11px",
+                               "color": "var(--subtext-color, #888)",
+                               "fontStyle": "italic",
+                               "whiteSpace": "nowrap"})]
+                         if not in_recent else []),
+                ),
             ],
         ),
         # External links row
@@ -5304,14 +5382,9 @@ def refresh_mpec_list(_n, active_tab, auto_mode, current_path):
                      daemon=True).start()
     items = [_build_mpec_list_item(e, i) for i, e in enumerate(entries)]
 
-    # Auto-select: pick first discovery MPEC (or first entry)
+    # Auto-select: pick the latest MPEC (first in list)
     if auto_mode:
-        auto_path = entries[0]["path"]
-        for e in entries:
-            if e.get("type") == "discovery":
-                auto_path = e["path"]
-                break
-        return items, auto_path
+        return items, entries[0]["path"]
 
     return items, no_update
 
@@ -5330,12 +5403,7 @@ def select_mpec(item_clicks, follow_clicks):
     if triggered == "mpec-follow-btn":
         entries = fetch_recent_mpecs()
         if entries:
-            auto_path = entries[0]["path"]
-            for e in entries:
-                if e.get("type") == "discovery":
-                    auto_path = e["path"]
-                    break
-            return auto_path, True
+            return entries[0]["path"], True
         raise PreventUpdate
 
     # User clicked an MPEC item — disable auto mode
@@ -5424,9 +5492,16 @@ def show_mpec_detail(path, section_state):
                                       "paddingTop": "20px"})
         return placeholder, html.Div(), True, 0, None
     detail = fetch_mpec_detail(path, cache_dir=_MPEC_CACHE_DIR)
-    # Start enrichment polling (reset counter, enable interval)
-    summary, sections = _build_mpec_detail(detail, section_state)
-    return summary, sections, False, 0, None
+    # Pass whether this MPEC is in the recent list
+    recent = fetch_recent_mpecs()
+    recent_paths = {e.get("path") for e in recent}
+    in_recent = path in recent_paths
+    summary, sections = _build_mpec_detail(detail, section_state,
+                                           in_recent=in_recent)
+    # Skip enrichment polling for DOUs/editorials (no object to query)
+    mpec_type = detail.get("type", "discovery") if detail else "discovery"
+    enable_enrich = mpec_type in ("discovery", "recovery")
+    return summary, sections, not enable_enrich, 0, None
 
 
 @app.callback(
@@ -5622,6 +5697,10 @@ def enrich_mpec_detail(n_intervals, path, prev_data):
     # Get the detail so we have the designation
     detail = fetch_mpec_detail(path, cache_dir=_MPEC_CACHE_DIR)
     if not detail:
+        return html.Div(), True, None
+
+    # Skip enrichment for DOUs/editorials — no object to query
+    if detail.get("type") not in ("discovery", "recovery"):
         return html.Div(), True, None
 
     designation = detail.get("designation", "")
