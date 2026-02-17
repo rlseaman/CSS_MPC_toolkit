@@ -31,7 +31,7 @@ from plotly.subplots import make_subplots
 
 from lib.db import connect, timed_query
 from lib.mpec_parser import fetch_recent_mpecs, fetch_mpec_detail, mpec_id_to_url
-from lib.mpc_convert import pack_designation
+from lib.mpc_convert import pack_designation, unpack_designation
 from lib.nea_catalog import load_nea_h_lookup
 from lib.identifications import resolve_designation
 from lib.api_clients import (
@@ -3991,6 +3991,8 @@ _RETRACTION_BADGE = {**_BADGE_STYLE,
                      "backgroundColor": "#d84315", "color": "white"}
 _EDITORIAL_BADGE = {**_BADGE_STYLE,
                     "backgroundColor": "#e68a00", "color": "white"}
+_IDENTIFICATION_BADGE = {**_BADGE_STYLE,
+                         "backgroundColor": "#00838f", "color": "white"}
 
 # List item styles
 _MPEC_ITEM_STYLE = {
@@ -4016,6 +4018,7 @@ _MPEC_TYPE_LABELS = {
     "dou": ("DOU", _DOU_BADGE),
     "retraction": ("Retraction", _RETRACTION_BADGE),
     "editorial": ("Editorial", _EDITORIAL_BADGE),
+    "identification": ("Identification", _IDENTIFICATION_BADGE),
 }
 
 
@@ -4359,7 +4362,21 @@ def _build_mpec_detail(detail, section_state=None, in_recent=True):
     mpec_type = detail.get("type", "discovery")
     mpec_url = detail.get("mpec_url", "")
 
+    # Detect identification MPECs ("1993 TA = 1985 FF") and recover
+    # the subject designation from the packed obs80 observations.
+    identification_title = ""
     is_editorial = mpec_type not in ("discovery", "recovery")
+    if " = " in designation and not is_editorial:
+        identification_title = designation  # preserve for subtitle
+        mpec_type = "identification"
+        obs_text = detail.get("observations", "")
+        if obs_text:
+            packed_obs = obs_text.strip().split("\n")[0][:12].strip()
+            if packed_obs:
+                try:
+                    designation = unpack_designation(packed_obs)
+                except Exception:
+                    pass  # keep original designation
 
     # Resolve designation to current identity (discovery/recovery only)
     resolved = None
@@ -4684,6 +4701,14 @@ def _build_mpec_detail(detail, section_state=None, in_recent=True):
                                     "alignItems": "center",
                                     "flexWrap": "wrap",
                                     "marginBottom": "10px"}),
+                    # Identification subtitle (e.g. "1993 TA = 1985 FF")
+                    html.Div(
+                        identification_title,
+                        style={"fontFamily": "sans-serif",
+                               "fontSize": "15px", "fontStyle": "italic",
+                               "color": "var(--subtext-color, #888)",
+                               "marginBottom": "6px"},
+                    ) if identification_title else None,
                     # Line 2: MPEC ID (linked) + date
                     html.Div(children=[
                         mpec_id_el,
