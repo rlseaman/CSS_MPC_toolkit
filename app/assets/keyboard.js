@@ -455,18 +455,20 @@
     }
 
     function initSearch() {
-        var box = document.getElementById("mpec-search");
-        if (!box) {
+        var wrapper = document.getElementById("mpec-search");
+        if (!wrapper) {
             setTimeout(initSearch, 500);
             return;
         }
-        box.addEventListener("input", function () {
-            doSearch(box.value);
+        // dcc.Input renders a wrapper div; the actual <input> is inside
+        var input = wrapper.querySelector("input") || wrapper;
+        input.addEventListener("input", function () {
+            doSearch(input.value);
         });
-        box.addEventListener("keydown", function (e) {
+        input.addEventListener("keydown", function (e) {
             if (e.key === "Escape") {
-                box.value = "";
-                box.blur();
+                input.value = "";
+                input.blur();
                 e.preventDefault();
             }
         });
