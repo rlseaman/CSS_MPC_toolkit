@@ -33,6 +33,7 @@ from lib.db import connect, timed_query
 from lib.mpec_parser import fetch_recent_mpecs, fetch_mpec_detail, mpec_id_to_url
 from lib.mpc_convert import pack_designation
 from lib.nea_catalog import load_nea_h_lookup
+from lib.identifications import resolve_designation
 from lib.api_clients import (
     fetch_sbdb, fetch_sentry, fetch_neofixer_orbit, fetch_neocc_risk,
     fetch_neofixer_ephem,
@@ -4360,6 +4361,14 @@ def _build_mpec_detail(detail, section_state=None, in_recent=True):
 
     is_editorial = mpec_type not in ("discovery", "recovery")
 
+    # Resolve designation to current identity (discovery/recovery only)
+    resolved = None
+    if not is_editorial and designation:
+        try:
+            resolved = resolve_designation(designation)
+        except Exception:
+            resolved = None
+
     # Build packed designation for external links (skip for editorials)
     packed = ""
     if designation and not is_editorial:
@@ -4368,30 +4377,44 @@ def _build_mpec_detail(detail, section_state=None, in_recent=True):
         except Exception:
             packed = ""
 
-    # External links
+    # External links — use resolved designation for better lookup on
+    # external services (permanent number or current primary designation)
     links = []
-    desig_nospace = designation.replace(" ", "") if designation else ""
-    if packed:
+    link_desig = designation  # default to MPEC designation
+    if resolved and resolved["permid"]:
+        link_desig = resolved["permid"]
+    elif resolved and resolved["is_secondary"] and resolved["primary_desig"]:
+        link_desig = resolved["primary_desig"]
+    link_packed = ""
+    if link_desig:
+        try:
+            link_packed = pack_designation(link_desig).strip()
+        except Exception:
+            link_packed = packed  # fall back to original
+    if not link_packed:
+        link_packed = packed
+    link_nospace = link_desig.replace(" ", "") if link_desig else ""
+    if link_packed:
         links.append(html.A(
             "NEOfixer",
-            href=f"https://neofixer.arizona.edu/site/500/{packed}",
+            href=f"https://neofixer.arizona.edu/site/500/{link_packed}",
             target="_blank", style=_link_btn_style()))
         links.append(html.A(
             "JPL SBDB",
-            href=f"https://ssd.jpl.nasa.gov/tools/sbdb_lookup.html#/?sstr={packed}",
+            href=f"https://ssd.jpl.nasa.gov/tools/sbdb_lookup.html#/?sstr={link_packed}",
             target="_blank", style=_link_btn_style()))
-        if desig_nospace:
+        if link_nospace:
             links.append(html.A(
                 "NEOCC",
-                href=f"https://neo.ssa.esa.int/search-for-asteroids?sum=1&des={desig_nospace}",
+                href=f"https://neo.ssa.esa.int/search-for-asteroids?sum=1&des={link_nospace}",
                 target="_blank", style=_link_btn_style()))
         links.append(html.A(
             "MPC Explorer",
-            href=f"https://data.minorplanetcenter.net/explorer/?tab=Designated&search={designation}",
+            href=f"https://data.minorplanetcenter.net/explorer/?tab=Designated&search={link_desig}",
             target="_blank", style=_link_btn_style()))
         links.append(html.A(
             "MPC DB",
-            href=f"https://www.minorplanetcenter.net/db_search/show_object?utf8=✓&object_id={designation}",
+            href=f"https://www.minorplanetcenter.net/db_search/show_object?utf8=✓&object_id={link_desig}",
             target="_blank", style=_link_btn_style()))
     if mpec_url:
         links.append(html.A("MPEC", href=mpec_url, target="_blank",
@@ -4407,9 +4430,12 @@ def _build_mpec_detail(detail, section_state=None, in_recent=True):
     observers = detail.get("observers", "")
     disc_info_line = _build_discoverer_line(observers, disc_stn) if not is_editorial else html.Div()
 
-    # Build orbit summary line and class label from parsed elements
+    # Build orbit summary line and class label from parsed elements.
+    # Prefer DB-resolved orbit class (precise) over MPEC element classification.
     oe = detail.get("orbital_elements", {})
     orbit_class = _get_orbit_class(oe, detail) if not is_editorial else ""
+    if resolved and resolved.get("orbit_class"):
+        orbit_class = resolved["orbit_class"]
     is_pha = _is_pha(oe, detail) if not is_editorial else False
     orbit_info = _build_orbit_info_line(oe, detail) if not is_editorial else html.Div()
 
@@ -4435,7 +4461,8 @@ def _build_mpec_detail(detail, section_state=None, in_recent=True):
         content = header or "(no content)"
         sections.append(_mpec_section(
             section_label, _linkify_preamble(content) if header else content,
-            open_default=True, mono=True, section_id="mpec-section-0"))
+            open_default=True, mono=True, section_id="mpec-section-0",
+            max_height=None))
     else:
         if header:
             sections.append(_mpec_section(
@@ -4550,18 +4577,40 @@ def _build_mpec_detail(detail, section_state=None, in_recent=True):
             "PHA", style={**_SUMMARY_BADGE,
                           "backgroundColor": "#c62828",
                           "color": "white"}))
-    # Size badges based on H magnitude
+    # Size badges based on H magnitude (NEOs only)
+    _NEO_CLASSES = {"Atira", "Aten", "Apollo", "Amor",
+                    "Interior Earth Object", "Dual-status (NEO/comet)"}
+    is_neo = orbit_class in _NEO_CLASSES
     h_for_badge = oe.get("H")
-    if h_for_badge is not None and h_for_badge <= 17.75:
+    if is_neo and h_for_badge is not None and h_for_badge <= 17.75:
         line1_children.append(html.Span(
             "1km", style={**_SUMMARY_BADGE,
                           "backgroundColor": "#b71c1c",
                           "color": "white"}))
-    elif h_for_badge is not None and h_for_badge <= 22.0 and not is_pha:
+    elif is_neo and h_for_badge is not None and h_for_badge <= 22.0 and not is_pha:
         line1_children.append(html.Span(
             "140m", style={**_SUMMARY_BADGE,
                           "backgroundColor": "#e65100",
                           "color": "white"}))
+
+    if resolved:
+        id_text = ""
+        has_secondary = resolved["is_secondary"] and resolved["primary_desig"]
+        has_number = resolved["is_numbered"] and resolved["permid"]
+        if has_secondary and has_number:
+            name_suffix = f" {resolved['iau_name']}" if resolved["iau_name"] else ""
+            id_text = f"{resolved['primary_desig']} ({resolved['permid']}{name_suffix})"
+        elif has_secondary:
+            id_text = resolved["primary_desig"]
+        elif has_number:
+            name_suffix = f" {resolved['iau_name']}" if resolved["iau_name"] else ""
+            id_text = f"{resolved['permid']}{name_suffix}"
+        if id_text:
+            line1_children.append(html.Span(
+                id_text,
+                style={"fontFamily": "sans-serif", "fontSize": "26px",
+                       "fontWeight": "700",
+                       "marginLeft": "auto", "whiteSpace": "nowrap"}))
 
     # Line 2: linked MPEC ID + date + prev/next nav
     mpec_display = f"MPEC {mpec_id}" if mpec_id else ""
@@ -5304,16 +5353,17 @@ def _build_residuals_section(residuals_text, disc_stn, obs_text,
 
 
 def _mpec_section(title, content, open_default=False, mono=True,
-                   section_id=None):
+                   section_id=None, max_height="400px"):
     """Build a collapsible section using html.Details/Summary."""
     content_style = {
         "padding": "10px",
         "fontSize": "13px",
         "lineHeight": "1.5",
         "overflowX": "auto",
-        "maxHeight": "400px",
-        "overflowY": "auto",
     }
+    if max_height:
+        content_style["maxHeight"] = max_height
+        content_style["overflowY"] = "auto"
     if mono:
         content_style["fontFamily"] = "monospace"
         content_style["whiteSpace"] = "pre"
