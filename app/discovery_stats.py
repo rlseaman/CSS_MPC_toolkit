@@ -2180,6 +2180,23 @@ app.layout = html.Div(
                                                 ),
                                             ],
                                         ),
+                                        dcc.Input(
+                                            id="mpec-search",
+                                            type="text",
+                                            placeholder="Search designation or MPEC ID...",
+                                            debounce=True,
+                                            className="mpec-search-input",
+                                            style={
+                                                "width": "100%",
+                                                "fontSize": "13px",
+                                                "fontFamily": "sans-serif",
+                                                "padding": "6px 10px",
+                                                "marginBottom": "8px",
+                                                "borderRadius": "4px",
+                                                "boxSizing": "border-box",
+                                                "border": "none",
+                                            },
+                                        ),
                                         html.Div(
                                             id="mpec-list-panel",
                                             style={
@@ -4339,6 +4356,7 @@ def _build_mpec_detail(detail, section_state=None):
 
     # External links
     links = []
+    desig_nospace = designation.replace(" ", "") if designation else ""
     if packed:
         links.append(html.A(
             "NEOfixer",
@@ -4348,15 +4366,18 @@ def _build_mpec_detail(detail, section_state=None):
             "JPL SBDB",
             href=f"https://ssd.jpl.nasa.gov/tools/sbdb_lookup.html#/?sstr={packed}",
             target="_blank", style=_link_btn_style()))
+        if desig_nospace:
+            links.append(html.A(
+                "NEOCC",
+                href=f"https://neo.ssa.esa.int/search-for-asteroids?sum=1&des={desig_nospace}",
+                target="_blank", style=_link_btn_style()))
+        links.append(html.A(
+            "MPC Explorer",
+            href=f"https://data.minorplanetcenter.net/explorer/?tab=Designated&search={designation}",
+            target="_blank", style=_link_btn_style()))
         links.append(html.A(
             "MPC DB",
             href=f"https://www.minorplanetcenter.net/db_search/show_object?utf8=✓&object_id={designation}",
-            target="_blank", style=_link_btn_style()))
-    desig_nospace = designation.replace(" ", "") if designation else ""
-    if desig_nospace:
-        links.append(html.A(
-            "NEOCC",
-            href=f"https://neo.ssa.esa.int/search-for-asteroids?sum=1&des={desig_nospace}",
             target="_blank", style=_link_btn_style()))
     if mpec_url:
         links.append(html.A("MPEC", href=mpec_url, target="_blank",

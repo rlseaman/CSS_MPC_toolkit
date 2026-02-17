@@ -217,6 +217,22 @@
     color: var(--explicit-color) !important;
 }
 
+/* ── MPEC search input ── */
+#page-container .mpec-search-input {
+    background-color: var(--paper-bg, white) !important;
+    color: inherit !important;
+    border: none !important;
+    outline: none !important;
+    box-shadow: none !important;
+}
+#page-container .mpec-search-input input {
+    background-color: var(--paper-bg, white) !important;
+    color: inherit !important;
+    border: 1px solid var(--hr-color, #ccc) !important;
+    outline: none !important;
+    box-shadow: none !important;
+}
+
 /* ── Observatory site code input ── */
 #page-container .obs-site-input {
     background-color: var(--paper-bg, white) !important;

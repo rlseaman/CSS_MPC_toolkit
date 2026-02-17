@@ -31,6 +31,8 @@
         var tag = el.tagName;
         if (tag === "INPUT" || tag === "TEXTAREA") return true;
         if (el.isContentEditable) return true;
+        if (el.getAttribute("role") === "slider") return true;
+        if (el.classList && el.classList.contains("dash-slider-thumb")) return true;
         return false;
     }
 
@@ -177,6 +179,7 @@
         overlay.appendChild(title);
 
         var shortcuts = [
+            ["\u2190 / \u2192",    "Switch tabs"],
             ["\u2191 / \u2193",    "Step through MPEC list"],
             ["[ / ]",              "Jump to first / last MPEC"],
             ["F",                  "Toggle Follow / Pin mode"],
@@ -350,6 +353,26 @@
             }
         }
 
+        // ── Left/Right arrows: switch tabs (all tabs, not just MPEC) ──
+        if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !isTyping()
+            && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            var tabs = Array.from(document.querySelectorAll(".nav-tab"));
+            if (tabs.length > 1) {
+                var curTab = -1;
+                tabs.forEach(function (t, i) {
+                    if (t.classList.contains("nav-tab--selected")) curTab = i;
+                });
+                var nextTab = curTab;
+                if (e.key === "ArrowLeft" && curTab > 0) nextTab = curTab - 1;
+                if (e.key === "ArrowRight" && curTab < tabs.length - 1) nextTab = curTab + 1;
+                if (nextTab !== curTab) {
+                    e.preventDefault();
+                    tabs[nextTab].click();
+                }
+            }
+            return;
+        }
+
         if (!isMpecTab() || isTyping()) return;
         if (e.ctrlKey || e.metaKey || e.altKey) return;
 
@@ -411,4 +434,42 @@
                 break;
         }
     });
+
+    // ── Search box ────────────────────────────────────────────────────
+    // Pure client-side search: on each keystroke, find the first list
+    // item whose designation or MPEC ID matches and navigate to it
+    // (equivalent to using arrow keys).
+
+    function doSearch(query) {
+        if (!query) return;
+        var q = query.trim().toUpperCase();
+        if (!q) return;
+        var items = getListItems();
+        for (var i = 0; i < items.length; i++) {
+            var text = (items[i].textContent || "").toUpperCase();
+            if (text.indexOf(q) !== -1) {
+                navigateTo(items, i);
+                return;
+            }
+        }
+    }
+
+    function initSearch() {
+        var box = document.getElementById("mpec-search");
+        if (!box) {
+            setTimeout(initSearch, 500);
+            return;
+        }
+        box.addEventListener("input", function () {
+            doSearch(box.value);
+        });
+        box.addEventListener("keydown", function (e) {
+            if (e.key === "Escape") {
+                box.value = "";
+                box.blur();
+                e.preventDefault();
+            }
+        });
+    }
+    initSearch();
 })();
