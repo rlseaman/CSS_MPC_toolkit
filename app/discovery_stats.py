@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import plotly.io as pio
 import dash
 from dash import ALL, Dash, Input, Output, State, ctx, dcc, html, no_update
 from dash.dcc import send_data_frame
@@ -338,6 +339,21 @@ THEMES = {
 
 def theme(name):
     return THEMES.get(name, THEMES["light"])
+
+
+# Customize Plotly templates: dark-mode hover labels and spike lines
+pio.templates["plotly_dark"].layout.update(
+    hoverlabel=dict(bgcolor="#2a2a2a", font_color="#e0e0e0",
+                    bordercolor="#555555"),
+    xaxis_spikecolor="#888888",
+    yaxis_spikecolor="#888888",
+)
+pio.templates["plotly_white"].layout.update(
+    hoverlabel=dict(bgcolor="white", font_color="#222222",
+                    bordercolor="#cccccc"),
+    xaxis_spikecolor="#999999",
+    yaxis_spikecolor="#999999",
+)
 
 
 # Plotly modebar config — enable PNG download with 2x resolution
