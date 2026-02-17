@@ -229,7 +229,7 @@
         var state = {};
         for (var i = 0; i < 8; i++) {
             var el = document.getElementById("mpec-section-" + i);
-            state[String(i)] = el ? el.open : (i === 0);
+            state[String(i)] = el ? el.open : false;
         }
         return state;
     }

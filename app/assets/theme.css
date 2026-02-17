@@ -21,13 +21,19 @@
 }
 
 /* ── Range sliders ── */
-/* Mark labels */
+/* Mark labels (Dash 4.x) */
+#page-container .dash-slider-mark {
+    color: inherit !important;
+}
+/* Legacy rc-slider mark labels */
 #page-container .rc-slider-mark-text {
     color: inherit !important;
 }
-/* Editable input boxes at slider ends and tooltips */
-#page-container .rc-slider-tooltip-inner,
+/* Editable input boxes at slider ends */
 #page-container .dash-slider input,
+#page-container .range-slider-input,
+#page-container .range-slider-min-input,
+#page-container .range-slider-max-input,
 #page-container input[type="number"],
 #page-container input[type="text"],
 #page-container .dash-slider ~ input,
@@ -36,7 +42,16 @@
     color: inherit !important;
     border: 1px solid var(--hr-color, #ccc) !important;
 }
-/* Slider tooltip popup */
+/* Slider tooltip popup (Dash 4.x) */
+#page-container .dash-slider-tooltip {
+    background-color: var(--paper-bg, white) !important;
+    color: inherit !important;
+    box-shadow: none !important;
+    border: 1px solid var(--hr-color, #ccc) !important;
+    border-radius: 3px !important;
+    padding: 2px 6px !important;
+}
+/* Legacy rc-slider tooltip */
 #page-container .rc-slider-tooltip-inner {
     background-color: var(--paper-bg, white) !important;
     color: inherit !important;
@@ -47,7 +62,18 @@
     border-top-color: var(--paper-bg, white) !important;
     border-bottom-color: var(--paper-bg, white) !important;
 }
-/* Slider handle and track */
+/* Slider handle and track (Dash 4.x) */
+#page-container .dash-slider-range {
+    background-color: #5b8def !important;
+}
+#page-container .dash-slider-thumb {
+    border-color: #5b8def !important;
+    background-color: var(--paper-bg, white) !important;
+}
+#page-container .dash-slider-track {
+    background-color: var(--hr-color, #ccc) !important;
+}
+/* Legacy rc-slider handle and track */
 #page-container .rc-slider-track {
     background-color: #5b8def !important;
 }
@@ -59,11 +85,20 @@
     background-color: var(--hr-color, #ccc) !important;
 }
 
-/* ── Dropdowns (Dash 2.x rewritten component) ── */
+/* ── Dropdowns (Dash 4.x component) ── */
+/* Outer wrapper */
+#page-container .dash-dropdown-wrapper {
+    background-color: var(--paper-bg, white) !important;
+    color: inherit !important;
+}
 /* Trigger button (the visible closed dropdown box) */
 #page-container .dash-dropdown-trigger {
     background-color: var(--paper-bg, white) !important;
     border-color: var(--hr-color, #ccc) !important;
+    color: inherit !important;
+}
+/* Trigger icon (chevron) */
+#page-container .dash-dropdown-trigger-icon {
     color: inherit !important;
 }
 /* Grid container wrapping the trigger */
@@ -71,9 +106,59 @@
     background-color: var(--paper-bg, white) !important;
     color: inherit !important;
 }
+/* Selected value text inside the trigger */
+#page-container .dash-dropdown-value,
+#page-container .dash-dropdown-value-item,
+#page-container .dash-dropdown-placeholder {
+    color: inherit !important;
+}
 /* All spans/divs inside the trigger (selected value text, arrow) */
 #page-container .dash-dropdown-trigger span,
 #page-container .dash-dropdown-trigger div {
+    color: inherit !important;
+}
+/* Search container inside dropdown */
+#page-container .dash-dropdown-search-container {
+    background-color: var(--paper-bg, white) !important;
+    color: inherit !important;
+}
+#page-container .dash-dropdown-search {
+    background-color: var(--paper-bg, white) !important;
+    color: inherit !important;
+}
+/* Dropdown options list (open menu) — theme-aware */
+#page-container .dash-dropdown-content {
+    background-color: var(--paper-bg, white) !important;
+    color: inherit !important;
+    border-color: var(--hr-color, #ccc) !important;
+}
+#page-container .dash-dropdown-option {
+    background-color: var(--paper-bg, white) !important;
+    color: inherit !important;
+}
+#page-container .dash-dropdown-option:hover {
+    background-color: var(--hr-color, #deebff) !important;
+    color: inherit !important;
+}
+/* Multi-select action buttons (Select all / Unselect) */
+#page-container .dash-dropdown-actions {
+    background-color: var(--paper-bg, white) !important;
+    border-color: var(--hr-color, #ccc) !important;
+}
+#page-container .dash-dropdown-action-button {
+    background-color: var(--paper-bg, white) !important;
+    color: inherit !important;
+    border-color: var(--hr-color, #ccc) !important;
+}
+/* Options panel inner elements inherit theme colors */
+#page-container .dash-dropdown-options {
+    background-color: var(--paper-bg, white) !important;
+    color: inherit !important;
+}
+/* Dash 4.x search input inside the dropdown trigger area */
+#page-container .dash-dropdown input[type="text"],
+#page-container .dash-dropdown input {
+    background-color: var(--paper-bg, white) !important;
     color: inherit !important;
 }
 /* Legacy react-select classes (older Dash / RHEL fallback) */
@@ -95,49 +180,31 @@
 #page-container .Select-arrow {
     border-color: currentColor transparent transparent !important;
 }
-/* Open menu and search input — stay light for readability.
-   Must beat the generic #page-container span/div inherit rule */
+/* Legacy open menu — theme-aware */
 #page-container .dash-dropdown-menu,
 #page-container .dash-dropdown-menu span,
 #page-container .dash-dropdown-menu div,
 #page-container .dash-dropdown-menu label,
 #page-container .dash-dropdown-menu input {
-    background-color: white !important;
-    color: #222 !important;
-}
-/* Dash 2.x search input inside the dropdown trigger area */
-#page-container .dash-dropdown input[type="text"],
-#page-container .dash-dropdown input {
     background-color: var(--paper-bg, white) !important;
     color: inherit !important;
-}
-/* Themed dropdown: trigger inherits the dark/light theme colors.
-   Use .themed-dropdown class + #page-container for high specificity. */
-#page-container .themed-dropdown,
-#page-container .themed-dropdown div,
-#page-container .themed-dropdown span,
-#page-container .themed-dropdown input,
-#page-container .themed-dropdown button {
-    background-color: var(--paper-bg, white) !important;
-    color: inherit !important;
-    border-color: var(--hr-color, #ccc) !important;
 }
 #page-container .Select-menu-outer,
 #page-container .Select-menu-outer *,
 .Select-menu-outer,
 .Select-menu-outer * {
-    background-color: white !important;
-    color: #222 !important;
+    background-color: var(--paper-bg, white) !important;
+    color: inherit !important;
 }
 #page-container .VirtualizedSelectOption,
 .VirtualizedSelectOption {
-    background-color: white !important;
-    color: #222 !important;
+    background-color: var(--paper-bg, white) !important;
+    color: inherit !important;
 }
 #page-container .VirtualizedSelectFocusedOption,
 .VirtualizedSelectFocusedOption {
-    background-color: #deebff !important;
-    color: #222 !important;
+    background-color: var(--hr-color, #deebff) !important;
+    color: inherit !important;
 }
 
 /* ── Badges (Discovery, PHA — always white text on colored bg) ── */
@@ -151,7 +218,13 @@
 }
 
 /* ── Observatory site code input ── */
-#page-container .obs-site-input,
+#page-container .obs-site-input {
+    background-color: var(--paper-bg, white) !important;
+    color: inherit !important;
+    border: none !important;
+    outline: none !important;
+    box-shadow: none !important;
+}
 #page-container .obs-site-input input {
     background-color: var(--paper-bg, white) !important;
     color: inherit !important;

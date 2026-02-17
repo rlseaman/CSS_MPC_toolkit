@@ -2097,7 +2097,7 @@ app.layout = html.Div(
                   style={"display": "none"}),
         # Section open/closed state (persists across MPEC nav + tab switches)
         dcc.Store(id="mpec-section-state", storage_type="session",
-                  data={"0": True, "1": False, "2": False, "3": False,
+                  data={"0": False, "1": False, "2": False, "3": False,
                         "4": False, "5": False, "6": False, "7": False}),
         # Hidden input written by keyboard.js — section state sync
         dcc.Input(id="mpec-section-state-input", type="text", value="",
@@ -2207,7 +2207,7 @@ app.layout = html.Div(
                                     },
                                     children=[
                                         html.Div(
-                                            id="mpec-detail-panel",
+                                            id="mpec-detail-summary",
                                             children=[
                                                 html.Div(
                                                     "Select an MPEC from the list.",
@@ -2226,6 +2226,9 @@ app.layout = html.Div(
                                             html.Div(id="mpec-obs-chart"),
                                             type="circle",
                                             color="#5b8def",
+                                        ),
+                                        html.Div(
+                                            id="mpec-detail-panel",
                                         ),
                                     ],
                                 ),
@@ -4302,7 +4305,7 @@ def _linkify_preamble(text):
 
 
 _DEFAULT_SECTION_STATE = {
-    "0": True, "1": False, "2": False, "3": False,
+    "0": False, "1": False, "2": False, "3": False,
     "4": False, "5": False, "6": False, "7": False,
 }
 
@@ -4356,7 +4359,7 @@ def _build_mpec_detail(detail, section_state=None):
             href=f"https://neo.ssa.esa.int/search-for-asteroids?sum=1&des={desig_nospace}",
             target="_blank", style=_link_btn_style()))
     if mpec_url:
-        links.append(html.A("Original MPEC", href=mpec_url, target="_blank",
+        links.append(html.A("MPEC", href=mpec_url, target="_blank",
                             style=_link_btn_style()))
 
     # Parse observations to find discovery station
@@ -4533,7 +4536,7 @@ def _build_mpec_detail(detail, section_state=None):
 
     _SUMMARY_HEIGHT = "150px"  # fixed height so all MPECs align
 
-    return html.Div(children=[
+    summary = html.Div(children=[
         # Summary section (fixed height)
         html.Div(
             style={"marginBottom": "10px", "minHeight": _SUMMARY_HEIGHT,
@@ -4572,9 +4575,11 @@ def _build_mpec_detail(detail, section_state=None):
                    "flexWrap": "wrap"},
             children=links,
         ) if links else html.Div(),
-        # Sections
-        *sections,
     ])
+
+    section_panel = html.Div(children=sections)
+
+    return summary, section_panel
 
 
 def _link_btn_style():
@@ -4626,10 +4631,11 @@ def _obs_site_buttons(selected_site):
             dcc.Input(id={"type": "obs-site-custom", "code": "input"},
                       type="text", placeholder="code", debounce=True,
                       className="obs-site-input",
-                      style={"width": "55px", "fontSize": "12px",
+                      style={"width": "70px", "fontSize": "12px",
                              "fontFamily": "monospace",
                              "padding": "3px 6px", "marginLeft": "4px",
-                             "borderRadius": "3px"}),
+                             "borderRadius": "3px",
+                             "border": "none"}),
         ],
         style={"display": "flex", "alignItems": "center",
                "flexWrap": "wrap", "padding": "8px 10px 4px"},
@@ -5381,6 +5387,7 @@ def update_auto_indicator(auto_mode):
 
 
 @app.callback(
+    Output("mpec-detail-summary", "children"),
     Output("mpec-detail-panel", "children"),
     Output("mpec-enrich-poll", "disabled"),
     Output("mpec-enrich-poll", "n_intervals"),
@@ -5390,14 +5397,15 @@ def update_auto_indicator(auto_mode):
 )
 def show_mpec_detail(path, section_state):
     if not path:
-        return (html.Div("Select an MPEC from the list.",
-                         style={"fontFamily": "sans-serif", "fontSize": "14px",
-                                "color": "var(--subtext-color, #888)",
-                                "paddingTop": "20px"}),
-                True, 0, None)
+        placeholder = html.Div("Select an MPEC from the list.",
+                               style={"fontFamily": "sans-serif", "fontSize": "14px",
+                                      "color": "var(--subtext-color, #888)",
+                                      "paddingTop": "20px"})
+        return placeholder, html.Div(), True, 0, None
     detail = fetch_mpec_detail(path, cache_dir=_MPEC_CACHE_DIR)
     # Start enrichment polling (reset counter, enable interval)
-    return _build_mpec_detail(detail, section_state), False, 0, None
+    summary, sections = _build_mpec_detail(detail, section_state)
+    return summary, sections, False, 0, None
 
 
 @app.callback(
