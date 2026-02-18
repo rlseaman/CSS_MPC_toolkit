@@ -10,7 +10,7 @@
 -- the flat column is NULL.
 --
 -- Usage:
---   psql -h sibyl -d mpc_sbn -v orbit_types="1,2,3,4" -f sql/viz/orbit_elements.sql
+--   psql -h $PGHOST -d mpc_sbn -v orbit_types="1,2,3,4" -f sql/viz/orbit_elements.sql
 --
 -- For all objects (no filter), comment out the WHERE clause.
 -- ==============================================================================

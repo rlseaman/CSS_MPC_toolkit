@@ -16,7 +16,7 @@ server with daily automated data refreshes.
                   └──────────┬─────────────────┘
                              │ psycopg2
                   ┌──────────▼─────────────────┐
-                  │  sibyl (PostgreSQL 15.2)     │
+                  │  DB replica (PostgreSQL 15.2) │
                   └────────────────────────────┘
 ```
 
@@ -34,8 +34,9 @@ yellow banner informing users that updated data is being prepared.
 | nginx           | any      | Reverse proxy, TLS termination   |
 | git             | any      | Deploy from repository           |
 
-The server needs network access to `sibyl` on port 5432 (PostgreSQL) and
-a `~/.pgpass` entry for `claude_ro` on the account running the app.
+The server needs network access to the database replica on port 5432
+(PostgreSQL) and a `~/.pgpass` entry for `claude_ro` on the account
+running the app.
 
 ## 2. System Setup
 
@@ -71,7 +72,7 @@ pip install gunicorn
 Create `~/.pgpass` for the service account:
 
 ```
-sibyl:5432:mpc_sbn:claude_ro:PASSWORD_HERE
+your-db-host:5432:mpc_sbn:your-user:YOUR_PASSWORD
 ```
 
 ```bash
@@ -81,7 +82,7 @@ chmod 600 ~/.pgpass
 Verify connectivity:
 
 ```bash
-psql -h sibyl -U claude_ro mpc_sbn -c "SELECT COUNT(*) FROM mpc_orbits"
+psql -h $PGHOST -U claude_ro mpc_sbn -c "SELECT COUNT(*) FROM mpc_orbits"
 ```
 
 ### Initial Cache Population
@@ -170,7 +171,7 @@ Create `/etc/nginx/conf.d/neo-dash.conf`:
 ```nginx
 server {
     listen 443 ssl http2;
-    server_name neo-dash.lpl.arizona.edu;  # adjust to actual hostname
+    server_name your-hostname.example.edu;  # adjust to actual hostname
 
     ssl_certificate     /etc/pki/tls/certs/your-cert.pem;
     ssl_certificate_key /etc/pki/tls/private/your-key.pem;
@@ -201,7 +202,7 @@ server {
 # Redirect HTTP to HTTPS
 server {
     listen 80;
-    server_name neo-dash.lpl.arizona.edu;
+    server_name your-hostname.example.edu;
     return 301 https://$host$request_uri;
 }
 ```
@@ -411,6 +412,6 @@ find /home/neo-dash/CSS_MPC_toolkit/app -name '.neo_cache_*.csv' \
 | View logs                 | `journalctl -u neo-dash -f`               |
 | View refresh log          | `tail -f /var/log/neo-dash/refresh.log`    |
 | Manual refresh            | `scripts/daily_refresh.sh`                 |
-| Test DB connectivity      | `psql -h sibyl -U claude_ro mpc_sbn`       |
+| Test DB connectivity      | `psql -h $PGHOST -U claude_ro mpc_sbn`     |
 | Check cache age           | `ls -la app/.neo_cache_*.csv`              |
 | Check if refresh running  | `ls app/.refreshing 2>/dev/null && echo Y` |

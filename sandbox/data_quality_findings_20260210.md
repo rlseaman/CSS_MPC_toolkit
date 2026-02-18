@@ -1,7 +1,7 @@
 # Data Quality Findings: mpc_orbits (2026-02-10)
 
 Observations from `notebooks/03_data_quality.ipynb` run against
-`mpc_sbn` on `sibyl` via `claude_ro`.  These are raw observations,
+`mpc_sbn` on the local replica via `claude_ro`.  These are raw observations,
 not recommendations — interpretation depends on project goals.
 
 ## Row Count

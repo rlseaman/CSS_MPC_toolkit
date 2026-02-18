@@ -15,7 +15,7 @@ PostgreSQL replica of the [Minor Planet Center's](https://www.minorplanetcenter.
 - Schema: https://www.minorplanetcenter.net/mpcops/documentation/replicated-tables-schema/
 - General info: https://www.minorplanetcenter.net/mpcops/documentation/replicated-tables-info-general/
 
-The database resides on host `sibyl` (RHEL 8.6, 251 GB RAM, HDD), running
+The database resides on a local replica (RHEL 8.6, 251 GB RAM, HDD), running
 PostgreSQL 15.2 with logical replication from MPC. The database is 446 GB
 with 18 tables in the public schema, dominated by `obs_sbn` (526M+ rows,
 239 GB).
@@ -110,8 +110,8 @@ The replicated database contains 18 tables. Full analysis in
 
 ### Near-term
 
-- **Install `css_utilities` schema** on sibyl (needs privileged user)
-- **Install `postgresql15-contrib`** on sibyl for `pg_buffercache` and
+- **Install `css_utilities` schema** on the replica (needs privileged user)
+- **Install `postgresql15-contrib`** on the replica for `pg_buffercache` and
   `pg_stat_statements` extensions
 - **Enable huge pages** at next maintenance reboot (instructions in
   `scripts/enable_huge_pages.md`)

@@ -9,7 +9,7 @@
 -- is NULL (~57% of rows).  Adjust the column expression for other columns.
 --
 -- Usage (with psql variables):
---   psql -h sibyl -d mpc_sbn -v col=a -v nbins=100 -v lo=0 -v hi=100 \
+--   psql -h $PGHOST -d mpc_sbn -v col=a -v nbins=100 -v lo=0 -v hi=100 \
 --        -f sql/viz/value_distributions.sql
 -- ==============================================================================
 

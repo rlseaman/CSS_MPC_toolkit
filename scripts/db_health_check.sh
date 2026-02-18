@@ -7,7 +7,7 @@
 # and flags potential problems.
 #
 # Usage:
-#   ./scripts/db_health_check.sh                  # Default: connect to sibyl
+#   ./scripts/db_health_check.sh                  # Default: $PGHOST or localhost
 #   ./scripts/db_health_check.sh --host myhost     # Override host
 #   ./scripts/db_health_check.sh --output report   # Save to file
 #   ./scripts/db_health_check.sh --help            # Show usage
@@ -19,7 +19,7 @@ set -euo pipefail
 
 # --- Configuration -----------------------------------------------------------
 
-PGHOST="${PGHOST:-sibyl}"
+PGHOST="${PGHOST:-localhost}"
 PGDATABASE="${PGDATABASE:-mpc_sbn}"
 PGUSER="${PGUSER:-claude_ro}"
 OUTPUT=""
@@ -34,7 +34,7 @@ while [[ $# -gt 0 ]]; do
             echo "Usage: $0 [--host HOST] [--output FILE] [--help]"
             echo ""
             echo "Options:"
-            echo "  --host HOST     Database host (default: sibyl)"
+            echo "  --host HOST     Database host (default: \$PGHOST or localhost)"
             echo "  --output FILE   Write report to file (default: stdout)"
             echo "  --help          Show this help"
             exit 0 ;;

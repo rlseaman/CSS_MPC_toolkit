@@ -122,7 +122,7 @@ infrastructure.
    (cron refresh + CSV cache), but there's no `Dockerfile`, no
    `gunicorn` config, no health endpoint, and no automated cache refresh
    script beyond `--refresh`. Packaging it for a persistent internal
-   deployment (even just a systemd service on sibyl or a lab server)
+   deployment (even just a systemd service on a lab server)
    would make the dashboard available to the team without someone
    running it locally.
 

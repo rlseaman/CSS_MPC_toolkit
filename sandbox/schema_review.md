@@ -3,7 +3,7 @@
 **Project:** CSS_MPC_toolkit
 **Authors:** Rob Seaman (Catalina Sky Survey) / Claude (Anthropic)
 **Date:** 2026-02-08
-**Database:** PostgreSQL 15.2, host `sibyl`, database `mpc_sbn`
+**Database:** PostgreSQL 15.2, database `mpc_sbn` (local replica)
 **Schema:** 18 tables, ~526M observations, ~1.51M orbits
 
 ---
@@ -204,7 +204,7 @@ Several fields in the JSONB have no flat-column equivalent:
 
 ## Value-Added Opportunities
 
-### For the CSS Replicated Database (on sibyl)
+### For the CSS Replicated Database
 
 #### A. Materialize JSONB into Queryable Views
 
@@ -320,9 +320,9 @@ From obs_sbn's rmsra/rmsdec/rmsfit/seeing/exp columns:
 
 **Source:** https://sbnmpc.astro.umd.edu/MPC_database/replication-info.shtml
 
-The CSS replica on sibyl uses **logical replication** via PostgreSQL's built-in
+The CSS replica uses **logical replication** via PostgreSQL's built-in
 publication/subscription system.  The MPC master publishes all publicly
-distributed tables; sibyl subscribes and receives decoded row changes
+distributed tables; the replica subscribes and receives decoded row changes
 (INSERTs, UPDATEs, DELETEs) continuously.
 
 ### Subscriber Constraints (from MPC)
@@ -337,7 +337,7 @@ distributed tables; sibyl subscribes and receives decoded row changes
 
 ### What Logical Replication Allows Locally
 
-Because sibyl is a fully independent read-write database that happens to
+Because the replica is a fully independent read-write database that happens to
 receive changes from the publisher, the following are all safe:
 
 - **Custom indexes** on replicated tables (explicitly confirmed by MPC docs)
@@ -375,7 +375,7 @@ derived data maintenance.
 ### Recommended Architecture for Derived Work
 
 ```
-sibyl (mpc_sbn database)
+MPC/SBN replica (mpc_sbn database)
 ├── public schema          ← replicated tables (do not modify schema)
 │   ├── obs_sbn            ← 526M+ rows, keep indexes minimal
 │   ├── mpc_orbits         ← 1.51M rows

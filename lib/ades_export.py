@@ -10,18 +10,19 @@ are used as provID or permID.
 
 Usage:
     # All current NEOCP observations
-    python3 -m lib.ades_export --host sibyl --format xml --all -o neocp_live.xml
+    python3 -m lib.ades_export --host $PGHOST --format xml --all -o neocp_live.xml
 
     # Single designation from the live NEOCP
-    python3 -m lib.ades_export --host sibyl --format psv --desig CE5W292 -o output.psv
+    python3 -m lib.ades_export --host $PGHOST --format psv --desig CE5W292 -o output.psv
 
     # Historical lookup from the archive (by IAU or NEOCP designation)
-    python3 -m lib.ades_export --host sibyl --archive --desig "2024 YR4" -o yr4.xml
+    python3 -m lib.ades_export --host $PGHOST --archive --desig "2024 YR4" -o yr4.xml
 
 Requires: psycopg2 (pip install psycopg2-binary)
 """
 
 import argparse
+import os
 import sys
 import xml.etree.ElementTree as ET
 from xml.dom import minidom
@@ -296,8 +297,8 @@ def main():
     parser = argparse.ArgumentParser(
         description="Export NEOCP observations in ADES XML or PSV format"
     )
-    parser.add_argument("--host", default="sibyl",
-                        help="PostgreSQL host (default: sibyl)")
+    parser.add_argument("--host", default=os.environ.get("PGHOST", "localhost"),
+                        help="PostgreSQL host (default: $PGHOST or localhost)")
     parser.add_argument("--db", default="mpc_sbn",
                         help="Database name (default: mpc_sbn)")
     parser.add_argument("--user", default="claude_ro",

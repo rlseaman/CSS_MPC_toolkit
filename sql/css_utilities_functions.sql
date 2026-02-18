@@ -7,7 +7,7 @@
 -- mpc_sbn replica, keeping them separate from replicated MPC tables.
 --
 -- Usage:
---   psql -h sibyl -U <owner> mpc_sbn -f css_utilities_functions.sql
+--   psql -h $PGHOST -U <owner> mpc_sbn -f css_utilities_functions.sql
 --
 -- Requires: CREATE SCHEMA and CREATE FUNCTION privileges.
 --

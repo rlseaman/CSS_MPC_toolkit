@@ -1,7 +1,7 @@
 -- ==============================================================================
 -- MPC/SBN Database Tuning Recommendations
 -- ==============================================================================
--- Host: sibyl (RHEL 8.6 VM, 251 GB RAM, HDD)
+-- Host: MPC/SBN replica (RHEL 8.6 VM, 251 GB RAM, HDD)
 -- Database: mpc_sbn (PostgreSQL 15.2, 446 GB, logical replica)
 -- Generated: 2026-02-08
 --
@@ -193,7 +193,7 @@ ALTER TABLE obs_sbn SET (
 -- ADDITIONAL: Storage-type tuning
 -- ==============================================================================
 --
--- sibyl uses spinning disks (lsblk ROTA=1).  Keep defaults:
+-- The replica uses spinning disks (lsblk ROTA=1).  Keep defaults:
 --   random_page_cost = 4             (already default — correct for HDD)
 --   effective_io_concurrency = 1     (already default — correct for HDD)
 --
@@ -203,7 +203,7 @@ ALTER TABLE obs_sbn SET (
 
 
 -- ==============================================================================
--- SUMMARY: postgresql.conf changes for sibyl
+-- SUMMARY: postgresql.conf changes for the MPC/SBN replica
 -- ==============================================================================
 --
 -- VM: RHEL 8.6, 251 GB RAM, spinning disks (HDD)

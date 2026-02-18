@@ -9,9 +9,9 @@ University of Arizona.
 
 ## Database Access
 
-- **Host:** `sibyl` (RHEL 8.6, 251 GB RAM, HDD)
+- **Host:** `$PGHOST` (set in environment; RHEL 8.6, 251 GB RAM, HDD)
 - **Database:** `mpc_sbn` — PostgreSQL 15.2, logical replication from MPC
-- **Connect:** `psql -h sibyl -U claude_ro mpc_sbn`
+- **Connect:** `psql -h $PGHOST -U claude_ro mpc_sbn`
 - **Python:** `from lib.db import connect, timed_query`
 - **Credentials:** `~/.pgpass` (readonly role `claude_ro`)
 

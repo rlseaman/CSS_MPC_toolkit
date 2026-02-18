@@ -1,6 +1,6 @@
-# Enabling Huge Pages for PostgreSQL on sibyl
+# Enabling Huge Pages for PostgreSQL on the MPC/SBN Replica
 
-**Host:** sibyl (RHEL 8.6, 251 GB RAM, HDD)
+**Host:** MPC/SBN replica (RHEL 8.6, 251 GB RAM, HDD)
 **Status:** Deferred — memory fragmentation prevented full allocation on 2026-02-08.
 Best attempted during a maintenance reboot when contiguous memory is guaranteed.
 

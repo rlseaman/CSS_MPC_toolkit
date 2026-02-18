@@ -11,10 +11,10 @@
 --
 -- Usage:
 --   -- All current NEOCP observations:
---   psql -h sibyl -U claude_ro mpc_sbn -v desig="''" -f sql/ades_export.sql
+--   psql -h $PGHOST -U claude_ro mpc_sbn -v desig="''" -f sql/ades_export.sql
 --
 --   -- Single designation:
---   psql -h sibyl -U claude_ro mpc_sbn -v desig="'CE5W292'" -f sql/ades_export.sql
+--   psql -h $PGHOST -U claude_ro mpc_sbn -v desig="'CE5W292'" -f sql/ades_export.sql
 --
 -- Add --csv for CSV output, or pipe through lib/ades_export.py for XML/PSV.
 -- ===========================================================================

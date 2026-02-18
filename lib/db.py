@@ -12,6 +12,7 @@ Usage:
         df = timed_query(conn, "SELECT q, e, i FROM mpc_orbits WHERE orbit_type_int = %s", [2])
 """
 
+import os
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -26,7 +27,10 @@ import psycopg2.extras
 # ---------------------------------------------------------------------------
 
 @contextmanager
-def connect(host="sibyl", dbname="mpc_sbn", user="claude_ro"):
+def connect(host=None, dbname="mpc_sbn", user="claude_ro"):
+    # Default host from $PGHOST environment variable (no hardcoded hostname)
+    if host is None:
+        host = os.environ.get("PGHOST", "localhost")
     """
     Context manager for a read-only database connection.
 

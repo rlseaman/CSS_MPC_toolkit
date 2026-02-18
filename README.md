@@ -8,7 +8,7 @@ developed by the Catalina Sky Survey at the University of Arizona.
 The Minor Planet Center (MPC) publishes asteroid observations and orbital
 elements through the Planetary Data System (PDS) Small Bodies Node (SBN) as
 a PostgreSQL database. Catalina Sky Survey maintains a local replica of this
-database on host `sibyl`. This project provides SQL scripts, Python
+database. This project provides SQL scripts, Python
 libraries, and derived data products useful to the NEO community.
 
 ## Interactive Application
@@ -97,13 +97,13 @@ not available in the main `obs_sbn` table.
 **Usage:**
 ```bash
 # All current NEOCP observations
-python3 -m lib.ades_export --host sibyl --format xml --all -o neocp_live.xml
+python3 -m lib.ades_export --host $PGHOST --format xml --all -o neocp_live.xml
 
 # Single designation from live NEOCP
-python3 -m lib.ades_export --host sibyl --format psv --desig CE5W292 -o output.psv
+python3 -m lib.ades_export --host $PGHOST --format psv --desig CE5W292 -o output.psv
 
 # Historical lookup from archive
-python3 -m lib.ades_export --host sibyl --archive --desig "2024 YR4" -o yr4.xml
+python3 -m lib.ades_export --host $PGHOST --archive --desig "2024 YR4" -o yr4.xml
 ```
 
 Requires `psycopg2`: `pip install psycopg2-binary`
@@ -140,15 +140,15 @@ vacuum/analyze staleness), index usage, configuration review, and active
 connections.
 
 ```bash
-bash scripts/db_health_check.sh --host sibyl
-bash scripts/db_health_check.sh --host sibyl --output health_$(date +%Y%m%d).txt
+bash scripts/db_health_check.sh --host $PGHOST
+bash scripts/db_health_check.sh --host $PGHOST --output health_$(date +%Y%m%d).txt
 ```
 
 ### Tuning Recommendations
 
 **File:** [`scripts/db_tune_recommendations.sql`](scripts/db_tune_recommendations.sql)
 
-PostgreSQL configuration recommendations for the `sibyl` replica
+PostgreSQL configuration recommendations for a large MPC/SBN replica
 (251 GB RAM, HDD). Covers `shared_buffers`, `work_mem`,
 `maintenance_work_mem`, autovacuum thresholds, and per-table overrides
 for `obs_sbn`.
@@ -215,7 +215,7 @@ CSS_MPC_toolkit/
 ### Prerequisites
 
 - PostgreSQL client (`psql`)
-- Access to an MPC/SBN database replica (host `sibyl` by default)
+- Access to an MPC/SBN database replica (set `$PGHOST` or pass `--host`)
 - Python 3.10+ with `venv/` (pinned in `requirements.txt`)
 - Key packages: `dash`, `plotly`, `pandas`, `numpy`, `psycopg2`
 - `gh` CLI for uploading release assets (optional)
@@ -224,7 +224,7 @@ CSS_MPC_toolkit/
 
 ```bash
 # Run the query directly
-psql -h sibyl -d mpc_sbn -f sql/discovery_tracklets.sql \
+psql -h $PGHOST -d mpc_sbn -f sql/discovery_tracklets.sql \
     --csv -o NEO_discovery_tracklets.csv
 
 # Or use the automated pipeline
@@ -235,13 +235,13 @@ psql -h sibyl -d mpc_sbn -f sql/discovery_tracklets.sql \
 
 ```bash
 # Requires CREATE SCHEMA / CREATE FUNCTION privileges
-psql -h sibyl -U <owner> mpc_sbn -f sql/css_utilities_functions.sql
+psql -h $PGHOST -U <owner> mpc_sbn -f sql/css_utilities_functions.sql
 ```
 
 ### Run the Health Check
 
 ```bash
-bash scripts/db_health_check.sh --host sibyl
+bash scripts/db_health_check.sh --host $PGHOST
 ```
 
 ## Distribution
@@ -257,7 +257,7 @@ Data products are distributed in two ways:
 
 These scripts are designed to run against a PostgreSQL replica of the MPC/SBN
 database. See [docs/source_tables.md](docs/source_tables.md) for the required
-tables and columns. The database on `sibyl` is PostgreSQL 15.2 receiving
+tables and columns. The database is a PostgreSQL 15.2 replica receiving
 logical replication from MPC.
 
 ## License

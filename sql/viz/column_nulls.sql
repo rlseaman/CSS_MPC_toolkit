@@ -5,7 +5,7 @@
 -- Returns column_name, total rows, null count, and null percentage.
 --
 -- Usage:
---   psql -h sibyl -d mpc_sbn -f sql/viz/column_nulls.sql
+--   psql -h $PGHOST -d mpc_sbn -f sql/viz/column_nulls.sql
 -- ==============================================================================
 
 SELECT 'q' AS column_name, COUNT(*) AS total, COUNT(*) - COUNT(q) AS null_count, ROUND(100.0 * (COUNT(*) - COUNT(q)) / COUNT(*), 2) AS null_pct FROM mpc_orbits
