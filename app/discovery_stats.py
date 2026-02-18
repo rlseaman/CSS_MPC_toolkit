@@ -3490,6 +3490,22 @@ def _get_defaults():
         "circ-year-range": [2004, year_max],
         "circ-size-filter": "all",
         "circ-color-by": "survey",
+        # Tab 7 — Tools
+        "tool-pack-input": "",
+        "tool-unpack-input": "",
+        "tool-validate-input": "",
+        "tool-hmag-h": None,
+        "tool-hmag-diam": None,
+        "tool-hmag-albedo": 0.14,
+        "tool-tj-a": None,
+        "tool-tj-e": None,
+        "tool-tj-i": None,
+        "tool-class-a": None,
+        "tool-class-e": None,
+        "tool-class-i": None,
+        "tool-class-q": None,
+        "tool-obs80-input": "",
+        "tool-date-input": "",
         # Shared
         "group-by": "combined",
         "plot-height": "700",
@@ -3505,7 +3521,11 @@ _TAB_KEYS = {
     "tab-followup": {"fu-year-range", "fu-size-filter", "fu-max-days"},
     "tab-circumstances": {"circ-year-range", "circ-size-filter",
                           "circ-color-by"},
-    "tab-tools": set(),  # no resettable controls
+    "tab-tools": {"tool-pack-input", "tool-unpack-input",
+                   "tool-validate-input", "tool-hmag-h", "tool-hmag-diam",
+                   "tool-hmag-albedo", "tool-tj-a", "tool-tj-e", "tool-tj-i",
+                   "tool-class-a", "tool-class-e", "tool-class-i",
+                   "tool-class-q", "tool-obs80-input", "tool-date-input"},
 }
 _SHARED_KEYS = {"group-by", "plot-height"}
 
@@ -3518,6 +3538,11 @@ _RESET_ORDER = [
     "comp-precovery",
     "fu-year-range", "fu-size-filter", "fu-max-days",
     "circ-year-range", "circ-size-filter", "circ-color-by",
+    "tool-pack-input", "tool-unpack-input", "tool-validate-input",
+    "tool-hmag-h", "tool-hmag-diam", "tool-hmag-albedo",
+    "tool-tj-a", "tool-tj-e", "tool-tj-i",
+    "tool-class-a", "tool-class-e", "tool-class-i", "tool-class-q",
+    "tool-obs80-input", "tool-date-input",
     "group-by", "plot-height",
 ]
 
