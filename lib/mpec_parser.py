@@ -16,6 +16,8 @@ Usage:
     from lib.mpec_parser import fetch_recent_mpecs, fetch_mpec_detail
 """
 
+import email.utils
+import json
 import os
 import re
 import time
@@ -634,3 +636,82 @@ def fetch_mpec_detail(mpec_path, cache_dir=None):
     result["prev_path"] = page_parser.prev_path
     result["next_path"] = page_parser.next_path
     return result
+
+
+# ---------------------------------------------------------------------------
+# Designation → MPEC lookup via MPC API
+# ---------------------------------------------------------------------------
+
+_API_URL = "https://data.minorplanetcenter.net/api/mpecs"
+_desig_lookup_cache = {}
+
+
+def lookup_mpecs_by_designation(designation):
+    """Look up MPECs associated with a designation via the MPC API.
+
+    Args:
+        designation: Any designation format the API accepts (e.g.
+            "2026 CY1", "K24Y04R", "433", "C/2026 A1").
+
+    Returns:
+        List of dicts sorted by pubdate ascending (earliest first):
+        [{"mpec_id": "MPEC 2026-C89", "path": "/mpec/K26/K26C89.html",
+          "title": "2026 CY1", "date": "2026 Feb 13"}, ...]
+        Returns [] for no matches.
+    """
+    query = designation.strip()
+    if not query:
+        return []
+    key = query.upper()
+    if key in _desig_lookup_cache:
+        return _desig_lookup_cache[key]
+
+    payload = json.dumps([query]).encode("utf-8")
+    req = urllib.request.Request(
+        _API_URL,
+        data=payload,
+        method="GET",
+        headers={"User-Agent": "CSS-MPC-Toolkit/1.0",
+                 "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            raw = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except Exception as e:
+        print(f"MPEC API lookup error for {query!r}: {e}")
+        return []
+
+    # Response is a dict keyed by designation; collect all MPEC entries
+    items = []
+    if isinstance(raw, dict):
+        for desig_key, mpec_list in raw.items():
+            if isinstance(mpec_list, list):
+                items.extend(mpec_list)
+    elif isinstance(raw, list):
+        items = raw
+
+    results = []
+    for item in items:
+        link = item.get("link", "")
+        # Strip domain prefix to get path
+        path = re.sub(r"^https?://[^/]+", "", link)
+        raw_id = item.get("fullname", "")
+        mpec_id = f"MPEC {raw_id}" if raw_id else ""
+        title = item.get("title", "")
+        pubdate = item.get("pubdate", "")
+        # Parse RFC 2822 date for reliable sorting; format for display
+        parsed = email.utils.parsedate(pubdate)
+        sort_key = time.mktime(parsed) if parsed else 0
+        display_date = time.strftime("%Y %b %d", parsed) if parsed else pubdate
+        results.append({
+            "mpec_id": mpec_id,
+            "path": path,
+            "title": title,
+            "date": display_date,
+            "_sort": sort_key,
+        })
+
+    # Sort by pubdate ascending (earliest first)
+    results.sort(key=lambda r: r["_sort"])
+    _desig_lookup_cache[key] = results
+    return results

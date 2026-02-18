@@ -31,7 +31,8 @@ from dash.exceptions import PreventUpdate
 from plotly.subplots import make_subplots
 
 from lib.db import connect, timed_query
-from lib.mpec_parser import fetch_recent_mpecs, fetch_mpec_detail, mpec_id_to_url
+from lib.mpec_parser import (fetch_recent_mpecs, fetch_mpec_detail,
+                              mpec_id_to_url, lookup_mpecs_by_designation)
 from lib.mpc_convert import pack_designation, unpack_designation
 from lib.nea_catalog import load_nea_h_lookup
 from lib.identifications import resolve_designation
@@ -2109,8 +2110,12 @@ app.layout = html.Div(
         dcc.Store(id="mpec-detail-data", storage_type="memory"),
         dcc.Store(id="mpec-auto-mode", data=True),
         dcc.Store(id="mpec-enrich-data", data=None),
+        dcc.Store(id="mpec-item-paths", data=[]),
         # Hidden input written by keyboard.js — triggers nav callback
         dcc.Input(id="mpec-kb-nav", type="text", value="",
+                  style={"display": "none"}),
+        # Hidden input for designation search (set by keyboard.js)
+        dcc.Input(id="mpec-desig-search", type="text", value="",
                   style={"display": "none"}),
         # Section open/closed state (persists across MPEC nav + tab switches)
         dcc.Store(id="mpec-section-state", storage_type="session",
@@ -5454,30 +5459,38 @@ def _prefetch_mpec_details(entries):
 @app.callback(
     Output("mpec-list-panel", "children"),
     Output("mpec-selected-path", "data"),
+    Output("mpec-item-paths", "data"),
     Input("mpec-refresh", "n_intervals"),
     Input("tabs", "value"),
-    State("mpec-auto-mode", "data"),
+    Input("mpec-auto-mode", "data"),
     State("mpec-selected-path", "data"),
 )
 def refresh_mpec_list(_n, active_tab, auto_mode, current_path):
     if active_tab != "tab-mpec":
-        return no_update, no_update
+        return no_update, no_update, no_update
+    # Only rebuild the list when auto-mode is (re-)enabled or on
+    # interval/tab-switch.  When auto-mode is turned off (e.g.
+    # designation search, keyboard nav), keep the current list.
+    trigger = ctx.triggered_id
+    if trigger == "mpec-auto-mode" and not auto_mode:
+        return no_update, no_update, no_update
     entries = fetch_recent_mpecs()
     if not entries:
         return ([html.Div("No MPECs available.",
                           style={"fontFamily": "sans-serif", "fontSize": "14px",
                                  "color": "var(--subtext-color, #888)"})],
-                no_update)
+                no_update, [])
     # Pre-fetch all MPECs in background so annotations appear on next render
     threading.Thread(target=_prefetch_mpec_details, args=(entries,),
                      daemon=True).start()
     items = [_build_mpec_list_item(e, i) for i, e in enumerate(entries)]
+    paths = [e.get("path", "") for e in entries]
 
     # Auto-select: pick the latest MPEC (first in list)
     if auto_mode:
-        return items, entries[0]["path"]
+        return items, entries[0]["path"], paths
 
-    return items, no_update
+    return items, no_update, paths
 
 
 @app.callback(
@@ -5485,9 +5498,10 @@ def refresh_mpec_list(_n, active_tab, auto_mode, current_path):
     Output("mpec-auto-mode", "data"),
     Input({"type": "mpec-item", "index": dash.ALL}, "n_clicks"),
     Input("mpec-follow-btn", "n_clicks"),
+    State("mpec-item-paths", "data"),
     prevent_initial_call=True,
 )
-def select_mpec(item_clicks, follow_clicks):
+def select_mpec(item_clicks, follow_clicks, item_paths):
     triggered = ctx.triggered_id
 
     # "Follow latest" button re-enables auto mode
@@ -5502,9 +5516,8 @@ def select_mpec(item_clicks, follow_clicks):
         if not any(item_clicks):
             raise PreventUpdate
         idx = triggered["index"]
-        entries = fetch_recent_mpecs()
-        if idx < len(entries):
-            return entries[idx]["path"], False
+        if item_paths and idx < len(item_paths):
+            return item_paths[idx], False
 
     raise PreventUpdate
 
@@ -5530,16 +5543,85 @@ def keyboard_navigate(value):
 
 
 @app.callback(
-    Output({"type": "mpec-item", "index": dash.ALL}, "style"),
-    Input("mpec-selected-path", "data"),
+    Output("mpec-selected-path", "data", allow_duplicate=True),
+    Output("mpec-auto-mode", "data", allow_duplicate=True),
+    Output("mpec-list-panel", "children", allow_duplicate=True),
+    Output("mpec-item-paths", "data", allow_duplicate=True),
+    Input("mpec-desig-search", "value"),
     prevent_initial_call=True,
 )
-def highlight_selected_mpec(selected_path):
+def search_designation(value):
+    """Resolve a designation to its MPEC(s) via the MPC API."""
+    if not value:
+        raise PreventUpdate
+    query = value.rsplit("|", 1)[0] if "|" in value else value
+    query = query.strip()
+    if not query:
+        raise PreventUpdate
+
+    results = lookup_mpecs_by_designation(query)
+    if not results:
+        raise PreventUpdate
+
+    if len(results) == 1:
+        return results[0]["path"], False, no_update, no_update
+
+    # Multiple results — build a list panel showing all MPECs
+    header = html.Div(
+        f"{len(results)} MPECs for {results[0].get('title') or query}",
+        style={"fontSize": "13px", "fontWeight": "700",
+               "fontFamily": "sans-serif", "padding": "8px 12px 4px",
+               "color": "var(--subtext-color, #888)"},
+    )
+    items = []
+    for i, r in enumerate(results):
+        items.append(html.Div(
+            id={"type": "mpec-item", "index": i},
+            n_clicks=0,
+            style=_MPEC_ITEM_SELECTED if i == 0 else _MPEC_ITEM_STYLE,
+            children=[
+                html.Div(
+                    style={"display": "flex", "justifyContent": "space-between",
+                           "alignItems": "center"},
+                    children=[
+                        html.Span([
+                            html.Span(r.get("title", ""),
+                                      style={"fontSize": "14px",
+                                             "fontWeight": "600"}),
+                            html.Span(
+                                f" ({r.get('mpec_id', '')})",
+                                style={"fontSize": "12px", "fontWeight": "400",
+                                       "color": "var(--subtext-color, #888)"}),
+                        ]),
+                    ],
+                ),
+                html.Div(
+                    r.get("date", ""),
+                    style={"fontSize": "12px",
+                           "color": "var(--subtext-color, #888)",
+                           "marginTop": "2px"},
+                ),
+            ],
+            **{"data-path": r.get("path", "")},
+        ))
+
+    paths = [r.get("path", "") for r in results]
+    return results[0]["path"], False, [header] + items, paths
+
+
+@app.callback(
+    Output({"type": "mpec-item", "index": dash.ALL}, "style"),
+    Input("mpec-selected-path", "data"),
+    State("mpec-item-paths", "data"),
+    prevent_initial_call=True,
+)
+def highlight_selected_mpec(selected_path, item_paths):
     """Highlight the selected MPEC in the list."""
-    entries = fetch_recent_mpecs()
+    if not item_paths:
+        raise PreventUpdate
     styles = []
-    for i, e in enumerate(entries):
-        if e.get("path") == selected_path:
+    for path in item_paths:
+        if path == selected_path:
             styles.append(_MPEC_ITEM_SELECTED)
         else:
             styles.append(_MPEC_ITEM_STYLE)

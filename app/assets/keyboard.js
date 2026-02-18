@@ -471,7 +471,7 @@
         return "/mpec/" + packedYear + "/" + packed + ".html";
     }
 
-    function doSearch(query) {
+    function doSearch(query, submit) {
         if (!query) return;
         var q = query.trim().toUpperCase();
         if (!q) return;
@@ -490,7 +490,13 @@
             // Write directly to mpec-kb-nav to trigger the server callback
             // (same mechanism as navigateTo but without a list element)
             setDashInputValue("mpec-kb-nav", path + "|" + Date.now());
+            return;
         }
+        // Not an MPEC ID — send to server API for designation/name lookup
+        // Only on Enter (submit=true) to avoid firing on every keystroke
+        if (!submit) return;
+        setDashInputValue("mpec-desig-search",
+                          query.trim() + "|" + Date.now());
     }
 
     function initSearch() {
@@ -502,7 +508,7 @@
         // dcc.Input renders a wrapper div; the actual <input> is inside
         var input = wrapper.querySelector("input") || wrapper;
         input.addEventListener("input", function () {
-            doSearch(input.value);
+            doSearch(input.value, false);
         });
         input.addEventListener("keydown", function (e) {
             if (e.key === "Escape") {
@@ -510,11 +516,10 @@
                 input.blur();
                 e.preventDefault();
             }
-            // Enter re-triggers the search (useful after navigating away
-            // and returning to the search box with a previous query)
+            // Enter: submit search (includes designation API lookup)
             if (e.key === "Enter") {
                 e.preventDefault();
-                doSearch(input.value);
+                doSearch(input.value, true);
             }
         });
     }
