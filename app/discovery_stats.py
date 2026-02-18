@@ -5737,6 +5737,12 @@ def show_mpec_detail(path, section_state):
                                       "paddingTop": "20px"})
         return placeholder, html.Div(), True, 0, None
     detail = fetch_mpec_detail(path, cache_dir=_MPEC_CACHE_DIR)
+    if not detail:
+        err = html.Div("Could not load MPEC.",
+                        style={"fontFamily": "sans-serif",
+                               "color": "var(--subtext-color, #888)",
+                               "paddingTop": "20px"})
+        return err, html.Div(), True, 0, None
     # Pass whether this MPEC is in the recent list
     recent = fetch_recent_mpecs()
     recent_paths = {e.get("path") for e in recent}
@@ -5744,7 +5750,7 @@ def show_mpec_detail(path, section_state):
     summary, sections = _build_mpec_detail(detail, section_state,
                                            in_recent=in_recent)
     # Skip enrichment polling for DOUs/editorials (no object to query)
-    mpec_type = detail.get("type", "discovery") if detail else "discovery"
+    mpec_type = detail.get("type", "discovery")
     enable_enrich = mpec_type in ("discovery", "recovery")
     return summary, sections, not enable_enrich, 0, None
 
