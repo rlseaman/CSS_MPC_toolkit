@@ -3109,7 +3109,7 @@ app.layout = html.Div(
                                                 dcc.Input(
                                                     id="tool-hmag-diam",
                                                     type="number",
-                                                    placeholder="D (km)",
+                                                    placeholder="D (m)",
                                                     debounce=True,
                                                     style={
                                                         **_tool_input_style(),
@@ -6769,24 +6769,25 @@ def tool_validate(value):
 
 @app.callback(
     Output("tool-hmag-output", "children"),
+    Output("tool-hmag-h", "value", allow_duplicate=True),
+    Output("tool-hmag-diam", "value", allow_duplicate=True),
     Input("tool-hmag-h", "value"),
     Input("tool-hmag-diam", "value"),
     Input("tool-hmag-albedo", "value"),
     prevent_initial_call=True,
 )
-def tool_hmag(h_val, d_val, albedo):
+def tool_hmag(h_val, d_m, albedo):
     import math
     if albedo is None or albedo <= 0:
         albedo = 0.14
     triggered = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
-    # Determine direction: if H was edited, compute D; if D was edited, compute H
-    if "tool-hmag-diam" in triggered and d_val is not None and d_val > 0:
-        # D → H
-        h_calc = 5 * math.log10(1329 / (d_val * math.sqrt(albedo)))
-        label = "H" if d_val >= 1 else "H"
-        d_str = (f"{d_val:.1f} km" if d_val >= 1
-                 else f"{d_val * 1000:.0f} m")
-        return html.Span([
+    # D input is in meters; formula uses km internally
+    if "tool-hmag-diam" in triggered and d_m is not None and d_m > 0:
+        # D (m) → H
+        d_km = d_m / 1000
+        h_calc = 5 * math.log10(1329 / (d_km * math.sqrt(albedo)))
+        d_str = f"{d_m:g} m" if d_m >= 1 else f"{d_m:.2f} m"
+        result = html.Span([
             html.Span(f"D = {d_str}  \u2192  ",
                        style={"fontSize": "12px"}),
             html.Span(f"H = {h_calc:.2f}",
@@ -6795,16 +6796,18 @@ def tool_hmag(h_val, d_val, albedo):
                        className="subtext",
                        style={"fontSize": "11px", "marginLeft": "6px"}),
         ])
-    elif h_val is not None:
-        # H → D
-        d_calc = 1329 / math.sqrt(albedo) * 10 ** (-h_val / 5)
-        if d_calc >= 1:
-            d_str = f"{d_calc:.2f} km"
-        elif d_calc >= 0.01:
-            d_str = f"{d_calc * 1000:.1f} m"
+        return result, None, no_update
+    elif "tool-hmag-h" in triggered and h_val is not None:
+        # H → D (m)
+        d_km = 1329 / math.sqrt(albedo) * 10 ** (-h_val / 5)
+        d_m_calc = d_km * 1000
+        if d_m_calc >= 1000:
+            d_str = f"{d_m_calc / 1000:.2f} km ({d_m_calc:,.0f} m)"
+        elif d_m_calc >= 1:
+            d_str = f"{d_m_calc:,.1f} m"
         else:
-            d_str = f"{d_calc * 1000:.2f} m"
-        return html.Span([
+            d_str = f"{d_m_calc:.2f} m"
+        result = html.Span([
             html.Span(f"H = {h_val}  \u2192  ",
                        style={"fontSize": "12px"}),
             html.Span(f"D \u2248 {d_str}",
@@ -6813,7 +6816,41 @@ def tool_hmag(h_val, d_val, albedo):
                        className="subtext",
                        style={"fontSize": "11px", "marginLeft": "6px"}),
         ])
-    return ""
+        return result, no_update, None
+    elif "tool-hmag-albedo" in triggered:
+        # Albedo changed — recompute from whichever field has a value
+        if h_val is not None:
+            d_km = 1329 / math.sqrt(albedo) * 10 ** (-h_val / 5)
+            d_m_calc = d_km * 1000
+            if d_m_calc >= 1000:
+                d_str = f"{d_m_calc / 1000:.2f} km ({d_m_calc:,.0f} m)"
+            elif d_m_calc >= 1:
+                d_str = f"{d_m_calc:,.1f} m"
+            else:
+                d_str = f"{d_m_calc:.2f} m"
+            return html.Span([
+                html.Span(f"H = {h_val}  \u2192  ",
+                           style={"fontSize": "12px"}),
+                html.Span(f"D \u2248 {d_str}",
+                           style={"fontWeight": "600", "fontSize": "14px"}),
+                html.Span(f"  (p\u2092 = {albedo})",
+                           className="subtext",
+                           style={"fontSize": "11px", "marginLeft": "6px"}),
+            ]), no_update, no_update
+        elif d_m is not None and d_m > 0:
+            d_km = d_m / 1000
+            h_calc = 5 * math.log10(1329 / (d_km * math.sqrt(albedo)))
+            d_str = f"{d_m:g} m" if d_m >= 1 else f"{d_m:.2f} m"
+            return html.Span([
+                html.Span(f"D = {d_str}  \u2192  ",
+                           style={"fontSize": "12px"}),
+                html.Span(f"H = {h_calc:.2f}",
+                           style={"fontWeight": "600", "fontSize": "14px"}),
+                html.Span(f"  (p\u2092 = {albedo})",
+                           className="subtext",
+                           style={"fontSize": "11px", "marginLeft": "6px"}),
+            ]), no_update, no_update
+    return "", no_update, no_update
 
 
 @app.callback(
