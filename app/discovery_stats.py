@@ -2111,6 +2111,7 @@ app.layout = html.Div(
         dcc.Store(id="mpec-auto-mode", data=True),
         dcc.Store(id="mpec-enrich-data", data=None),
         dcc.Store(id="mpec-item-paths", data=[]),
+        dcc.Store(id="mpec-restore-list", data=0),
         # Hidden input written by keyboard.js — triggers nav callback
         dcc.Input(id="mpec-kb-nav", type="text", value="",
                   style={"display": "none"}),
@@ -4766,8 +4767,24 @@ def _build_mpec_detail(detail, section_state=None, in_recent=True):
         # External links row
         html.Div(
             style={"display": "flex", "gap": "8px", "marginBottom": "14px",
-                   "flexWrap": "wrap"},
-            children=links,
+                   "flexWrap": "wrap", "alignItems": "flex-end"},
+            children=links + ([
+                html.Span(style={"flex": "1"}),  # spacer pushes right
+                html.Span("NEOfixer download:",
+                          style={"fontSize": "11px", "whiteSpace": "nowrap",
+                                 "color": "var(--subtext-color, #888)",
+                                 "fontFamily": "sans-serif",
+                                 "alignSelf": "center"}),
+                html.A("Orbit",
+                       href=f"https://neofixerapi.arizona.edu/orbit/?object={link_packed}",
+                       target="_blank", style=_link_btn_style()),
+                html.A("Obs",
+                       href=f"https://neofixerapi.arizona.edu/obs/?object={link_packed}",
+                       target="_blank", style=_link_btn_style()),
+                html.A("ADES",
+                       href=f"https://neofixerapi.arizona.edu/obs/?object={link_packed}&format=xml",
+                       target="_blank", style=_link_btn_style()),
+            ] if link_packed else []),
         ) if links else html.Div(),
     ])
 
@@ -5062,11 +5079,17 @@ def _build_observability_section(packed_desig, designation, site="I52",
         style={"height": f"{chart_height}px"},
     )
 
+    _stats_style = {"fontFamily": "monospace", "fontSize": "12px",
+                    "color": "var(--subtext-color, #888)"}
     stats_line = html.Div(
-        " \u2502 ".join(stats_parts) if stats_parts else "Below horizon",
-        style={"fontFamily": "monospace", "fontSize": "12px",
-               "padding": "6px 10px",
-               "color": "var(--subtext-color, #888)"},
+        style={"display": "flex", "justifyContent": "space-between",
+               "padding": "6px 10px"},
+        children=[
+            html.Span(
+                " \u2502 ".join(stats_parts) if stats_parts else "Below horizon",
+                style=_stats_style),
+            html.Span("from NEOfixer", style=_stats_style),
+        ],
     )
 
     return html.Div(children=[
@@ -5462,17 +5485,12 @@ def _prefetch_mpec_details(entries):
     Output("mpec-item-paths", "data"),
     Input("mpec-refresh", "n_intervals"),
     Input("tabs", "value"),
-    Input("mpec-auto-mode", "data"),
+    Input("mpec-restore-list", "data"),
+    State("mpec-auto-mode", "data"),
     State("mpec-selected-path", "data"),
 )
-def refresh_mpec_list(_n, active_tab, auto_mode, current_path):
+def refresh_mpec_list(_n, active_tab, _restore, auto_mode, current_path):
     if active_tab != "tab-mpec":
-        return no_update, no_update, no_update
-    # Only rebuild the list when auto-mode is (re-)enabled or on
-    # interval/tab-switch.  When auto-mode is turned off (e.g.
-    # designation search, keyboard nav), keep the current list.
-    trigger = ctx.triggered_id
-    if trigger == "mpec-auto-mode" and not auto_mode:
         return no_update, no_update, no_update
     entries = fetch_recent_mpecs()
     if not entries:
@@ -5496,19 +5514,21 @@ def refresh_mpec_list(_n, active_tab, auto_mode, current_path):
 @app.callback(
     Output("mpec-selected-path", "data", allow_duplicate=True),
     Output("mpec-auto-mode", "data"),
+    Output("mpec-restore-list", "data", allow_duplicate=True),
     Input({"type": "mpec-item", "index": dash.ALL}, "n_clicks"),
     Input("mpec-follow-btn", "n_clicks"),
     State("mpec-item-paths", "data"),
+    State("mpec-restore-list", "data"),
     prevent_initial_call=True,
 )
-def select_mpec(item_clicks, follow_clicks, item_paths):
+def select_mpec(item_clicks, follow_clicks, item_paths, restore_count):
     triggered = ctx.triggered_id
 
-    # "Follow latest" button re-enables auto mode
+    # "Follow latest" button re-enables auto mode and restores list
     if triggered == "mpec-follow-btn":
         entries = fetch_recent_mpecs()
         if entries:
-            return entries[0]["path"], True
+            return entries[0]["path"], True, (restore_count or 0) + 1
         raise PreventUpdate
 
     # User clicked an MPEC item — disable auto mode
@@ -5517,7 +5537,7 @@ def select_mpec(item_clicks, follow_clicks, item_paths):
             raise PreventUpdate
         idx = triggered["index"]
         if item_paths and idx < len(item_paths):
-            return item_paths[idx], False
+            return item_paths[idx], False, no_update
 
     raise PreventUpdate
 
@@ -5703,10 +5723,10 @@ def sync_section_state(json_val, current_state):
 # Observability chart callback
 # ---------------------------------------------------------------------------
 
-def _obs_details_wrapper(site, designation, content):
+def _obs_details_wrapper(site, designation, content, open_default=True):
     """Wrap observability content in a Details/Summary accordion."""
     return html.Details(
-        open=True,
+        open=open_default,
         style={"marginBottom": "12px",
                "border": "1px solid var(--hr-color, #ccc)",
                "borderRadius": "6px"},
@@ -5761,14 +5781,14 @@ def update_obs_chart(path, site, plot_height):
     if chart_content:
         return _obs_details_wrapper(site, designation, chart_content)
 
-    # No data — still show site buttons so user can try a different site
+    # No data — collapsed; still show site buttons so user can try a different site
     return _obs_details_wrapper(site, designation, html.Div(children=[
         _obs_site_buttons(site),
         html.Div("No ephemeris available from NEOfixer for this object or site.",
                  style={"fontFamily": "sans-serif", "fontSize": "12px",
                         "color": "var(--subtext-color, #888)",
                         "padding": "10px"}),
-    ]))
+    ]), open_default=False)
 
 
 # ---------------------------------------------------------------------------
