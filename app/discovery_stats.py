@@ -6753,8 +6753,7 @@ def tool_hmag(h_val, d_val, albedo):
     import math
     if albedo is None or albedo <= 0:
         albedo = 0.14
-    ctx = callback_context
-    triggered = ctx.triggered[0]["prop_id"] if ctx.triggered else ""
+    triggered = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
     # Determine direction: if H was edited, compute D; if D was edited, compute H
     if "tool-hmag-diam" in triggered and d_val is not None and d_val > 0:
         # D → H
