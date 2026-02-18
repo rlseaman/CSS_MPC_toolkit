@@ -76,7 +76,11 @@ def resolve_designation(designation):
             return result
         result = _resolve_by_packed(designation, packed, result)
 
-    _cache[designation] = result
+    # Only cache when the DB query succeeded.  If the DB was
+    # unreachable, _db_ok won't be set — don't cache so the next
+    # request retries.
+    if result.pop("_db_ok", False):
+        _cache[designation] = result
     return result
 
 
@@ -143,6 +147,7 @@ def _resolve_by_permid(designation, result):
                     result["orbit_class"] = _lookup_orbit_class(
                         cur, ni_packed[0])
 
+            result["_db_ok"] = True
             cur.close()
     except Exception:
         pass
@@ -151,7 +156,12 @@ def _resolve_by_permid(designation, result):
 
 
 def _resolve_by_packed(designation, packed, result):
-    """Resolve a packed provisional designation through the identification chain."""
+    """Resolve a packed provisional designation through the identification chain.
+
+    Sets result["_db_ok"] = True when the DB query succeeded (even if
+    no rows were found), so callers can distinguish "not found" from
+    "DB error".
+    """
     try:
         with connect() as conn:
             cur = conn.cursor()
@@ -167,6 +177,7 @@ def _resolve_by_packed(designation, packed, result):
             ci_row = cur.fetchone()
 
             if not ci_row:
+                result["_db_ok"] = True
                 cur.close()
                 return result
 
@@ -194,6 +205,7 @@ def _resolve_by_packed(designation, packed, result):
             result["orbit_class"] = _lookup_orbit_class(
                 cur, packed_primary)
 
+            result["_db_ok"] = True
             cur.close()
     except Exception:
         pass

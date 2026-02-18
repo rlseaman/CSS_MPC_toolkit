@@ -29,7 +29,11 @@ _cache = {}  # key -> (timestamp, value)
 
 
 def _cached(key, func):
-    """Return cached value if fresh, otherwise call func and cache result."""
+    """Return cached value if fresh, otherwise call func and cache result.
+
+    Only caches non-None results.  Transient failures (None / exception)
+    are never cached so the next request retries immediately.
+    """
     now = time.time()
     if key in _cache:
         ts, val = _cache[key]
@@ -40,7 +44,8 @@ def _cached(key, func):
     except Exception as e:
         print(f"API error [{key}]: {e}")
         return None
-    _cache[key] = (now, val)
+    if val is not None:
+        _cache[key] = (now, val)
     return val
 
 
@@ -534,7 +539,8 @@ def fetch_neofixer_ades(packed_desig, station_to_project=None):
         return None
 
     result = _parse_ades_xml(text, station_to_project)
-    _ades_cache[key] = result
+    if result is not None:
+        _ades_cache[key] = result
     return result
 
 
