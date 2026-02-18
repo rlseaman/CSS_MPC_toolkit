@@ -1979,10 +1979,15 @@ def _tool_card(title, description, controls, output_id, info=None):
                                           "fontSize": "14px"})]
     if info:
         title_row.append(html.Span(
-            " \u24d8",
+            "i",
             title=info,
-            style={"cursor": "help", "fontSize": "13px",
-                    "opacity": "0.45", "marginLeft": "4px"},
+            style={"cursor": "help", "marginLeft": "6px",
+                    "display": "inline-block", "width": "16px",
+                    "height": "16px", "lineHeight": "16px",
+                    "textAlign": "center", "borderRadius": "50%",
+                    "border": "1px solid var(--hr-color, #999)",
+                    "fontSize": "11px", "fontStyle": "italic",
+                    "opacity": "0.5", "verticalAlign": "middle"},
         ))
     return html.Div(
         style={
