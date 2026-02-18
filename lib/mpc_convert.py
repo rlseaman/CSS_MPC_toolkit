@@ -337,123 +337,49 @@ def _decode_cycle(packed_cycle):
 def unpack_designation(packed):
     """Unpack an MPC packed designation to human-readable form.
 
-    Handles numbered objects (pure digits or with letter prefix) and
-    provisional designations (century-encoded).
-
-    Args:
-        packed: 7-character packed designation, e.g. "K24Y04R" or "00433"
-
-    Returns:
-        Unpacked designation, e.g. "2024 YR4" or "433"
+    Delegates to the mpc_designation library which handles all formats
+    including tilde-encoded numbers >= 620000, comets, and satellites.
 
     Examples:
         >>> unpack_designation("K24Y04R")
         '2024 YR4'
         >>> unpack_designation("00433  ")
         '433'
-        >>> unpack_designation("J95X00A")
-        '1995 XA'
-        >>> unpack_designation("K20C03D")
-        '2020 CD3'
+        >>> unpack_designation("~0fr6")
+        '780896'
     """
+    from mpc_designation import unpack as _unpack
     s = packed.strip()
-
     if not s:
         return ""
-
-    # Numbered object: digits optionally with leading A-Z for > 99999
-    # Format: (letter?)(digits) left-padded in 5 chars
-    # 00001 = 1, 00433 = 433, A0001 = 100001, a0001 = 360001
-    if len(s) <= 5 and (s.isdigit() or (s[0].isalpha() and s[1:].isdigit())):
-        if s[0].isalpha():
-            num = _LETTER_NUM.get(s[0], 0) * 10000 + int(s[1:])
-        else:
-            num = int(s)
-        return str(num) if num > 0 else s
-
-    if len(s) < 7:
-        return s  # can't parse, return as-is
-
-    # Provisional designation: K24Y04R -> 2024 YR4
-    century_code = s[0]
-    if century_code not in _CENTURY_PACK:
-        return s  # unknown format
-
-    century = _CENTURY_PACK[century_code]
-    year = century + s[1:3]
-    half_month = s[3]
-    cycle = _decode_cycle(s[4:6])
-    order = s[6]
-
-    if cycle == 0:
-        return f"{year} {half_month}{order}"
-    else:
-        return f"{year} {half_month}{order}{cycle}"
+    try:
+        return _unpack(s)
+    except Exception:
+        return s
 
 
 def pack_designation(unpacked):
-    """Pack a human-readable designation into MPC 7-character packed form.
+    """Pack a human-readable designation into MPC packed form.
 
-    Args:
-        unpacked: e.g. "2024 YR4" or "433"
+    Delegates to the mpc_designation library which handles all formats
+    including tilde-encoded numbers >= 620000, comets, and satellites.
 
-    Returns:
-        7-character packed designation, e.g. "K24Y04R" or "00433  "
+    Examples:
+        >>> pack_designation("2024 YR4")
+        'K24Y04R'
+        >>> pack_designation("433")
+        '00433'
+        >>> pack_designation("780896")
+        '~0fr6'
     """
+    from mpc_designation import pack as _pack
     s = unpacked.strip()
-
-    # Numbered: pure digits
-    if s.isdigit():
-        num = int(s)
-        if num <= 99999:
-            return f"{num:05d}  "
-        elif num <= 619999:
-            prefix_val = num // 10000
-            remainder = num % 10000
-            # Find the letter for this prefix value
-            for ch, val in _LETTER_NUM.items():
-                if val == prefix_val:
-                    return f"{ch}{remainder:04d}  "
-
-    # Provisional: "2024 YR4" -> "K24Y04R"
-    parts = s.split()
-    if len(parts) != 2 or len(parts[0]) != 4:
-        return s  # can't pack
-
-    year = parts[0]
-    century = year[:2]
-    yy = year[2:4]
-
-    century_code = _CENTURY_UNPACK.get(century)
-    if not century_code:
+    if not s:
         return s
-
-    desig_part = parts[1]
-    if len(desig_part) < 2:
+    try:
+        return _pack(s)
+    except Exception:
         return s
-
-    half_month = desig_part[0]
-    order = desig_part[1]
-    cycle_str = desig_part[2:] if len(desig_part) > 2 else "0"
-
-    cycle = int(cycle_str) if cycle_str.isdigit() else 0
-
-    if cycle < 100:
-        cycle_packed = f"{cycle:02d}"
-    else:
-        # base-62 encode the tens digit
-        high_val = cycle // 10
-        low_val = cycle % 10
-        high_char = None
-        for ch, val in _LETTER_NUM.items():
-            if val == high_val:
-                high_char = ch
-                break
-        if high_char is None:
-            return s
-        cycle_packed = f"{high_char}{low_val}"
-
-    return f"{century_code}{yy}{half_month}{cycle_packed}{order}"
 
 
 # ---------------------------------------------------------------------------
@@ -588,12 +514,15 @@ if __name__ == "__main__":
     # Designation tests
     assert unpack_designation("K24Y04R") == "2024 YR4"
     assert unpack_designation("00433  ") == "433"
+    assert unpack_designation("00433") == "433"
     assert unpack_designation("J95X00A") == "1995 XA"
     assert unpack_designation("K20C03D") == "2020 CD3"
+    assert unpack_designation("~0fr6") == "780896"
     assert pack_designation("2024 YR4") == "K24Y04R"
-    assert pack_designation("433") == "00433  "
+    assert pack_designation("433") == "00433"
     assert pack_designation("1995 XA") == "J95X00A"
     assert pack_designation("2020 CD3") == "K20C03D"
+    assert pack_designation("780896") == "~0fr6"
 
     # Catalog mapping
     assert mpc_cat_to_ades("V") == "Gaia2"

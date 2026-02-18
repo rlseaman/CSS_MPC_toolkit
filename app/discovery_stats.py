@@ -33,7 +33,7 @@ from plotly.subplots import make_subplots
 from lib.db import connect, timed_query
 from lib.mpec_parser import (fetch_recent_mpecs, fetch_mpec_detail,
                               mpec_id_to_url, lookup_mpecs_by_designation)
-from lib.mpc_convert import pack_designation, unpack_designation
+from mpc_designation import pack as pack_designation, unpack as unpack_designation
 from lib.nea_catalog import load_nea_h_lookup
 from lib.identifications import resolve_designation
 from lib.api_clients import (
