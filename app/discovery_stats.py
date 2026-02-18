@@ -3349,25 +3349,30 @@ app.layout = html.Div(
                                              "code in fixed-width fields. "
                                              "Being replaced by ADES format.",
                                     ),
-                                    # ── 8. MPC date ↔ ISO date ──
+                                    # ── 8. Date converter ──
                                     _tool_card(
-                                        "MPC Date \u2194 ISO Date",
-                                        "Convert packed or decimal dates.",
+                                        "Date Converter",
+                                        "MJD, JD, ISO, decimal day, "
+                                        "MPC packed.",
                                         [dcc.Input(
                                             id="tool-date-input",
                                             type="text",
-                                            placeholder="e.g. K24CG or "
-                                                        "2024-12-27.238",
+                                            placeholder="e.g. 60700, "
+                                                "2461087.5, 2024-12-27.238, "
+                                                "K24CG",
                                             debounce=True,
-                                            style=_tool_input_style(),
+                                            style={**_tool_input_style(),
+                                                   "width": "320px"},
                                         )],
                                         output_id="tool-date-output",
-                                        info="MPC packed dates encode "
-                                             "year+month+day in 5 characters "
-                                             "(e.g. K24CG = 2024-12-16). "
-                                             "Decimal days like 2024-12-27"
-                                             ".238 are expanded to "
-                                             "hours:minutes:seconds UT.",
+                                        info="Accepts any of: Modified "
+                                             "Julian Date (MJD, e.g. 60700),"
+                                             " Julian Date (JD, e.g. "
+                                             "2461087.5), ISO date "
+                                             "(2024-12-27T05:42:49Z), "
+                                             "decimal day (2024-12-27.238), "
+                                             "or MPC packed date (K24CG). "
+                                             "Shows ISO, JD, and MJD.",
                                     ),
                                 ],
                             ),
@@ -7185,53 +7190,88 @@ def tool_date(value):
     if not value or not value.strip():
         return ""
     s = value.strip()
-    # Try MPC packed date → ISO
     from lib.mpc_convert import mpc_date_to_iso8601
+    from datetime import datetime as _dt, timedelta as _td
     import re as _re
-    # Detect MPC packed date: letter + 2 digits + optional hex-ish chars
+
+    _arrow = "  \u2192  "
+    _bold = {"fontWeight": "600", "fontSize": "14px"}
+    _small = {"fontSize": "12px"}
+    _sub = {"fontSize": "11px", "marginLeft": "8px"}
+
+    # --- MPC packed date (e.g. K24CG) ---
     if _re.match(r"^[A-Za-z]\d{2}", s) and len(s) <= 5:
         try:
             iso = mpc_date_to_iso8601(s)
             return html.Span([
                 html.Code(s, style={"fontSize": "13px"}),
-                html.Span("  \u2192  ", style={"fontSize": "12px"}),
-                html.Span(iso, style={"fontWeight": "600",
-                                       "fontSize": "14px"}),
+                html.Span(_arrow, style=_small),
+                html.Span(iso, style=_bold),
+                html.Span("  (MPC packed date)",
+                           className="subtext", style=_sub),
             ])
         except Exception as exc:
             return html.Span(f"Error: {exc}",
                               style={"color": "#c0392b", "fontSize": "12px"})
-    # Try ISO/decimal date → parse and display
+
+    # --- Pure numeric: MJD or JD ---
+    try:
+        num = float(s)
+        # JD is ~2.4M+ for modern dates; MJD is ~40000-70000
+        if num > 2400000:
+            # Julian Date → ISO
+            jd_epoch = _dt(2000, 1, 1, 12, 0, 0)  # J2000.0 = JD 2451545.0
+            dt = jd_epoch + _td(days=num - 2451545.0)
+            mjd = num - 2400000.5
+            return html.Span([
+                html.Span(f"JD {s}", style=_small),
+                html.Span(_arrow, style=_small),
+                html.Span(dt.strftime("%Y-%m-%d %H:%M:%S UT"), style=_bold),
+                html.Span(f"  (MJD {mjd:.5f})",
+                           className="subtext", style=_sub),
+            ])
+        elif 10000 < num < 99999:
+            # MJD → ISO
+            mjd_epoch = _dt(1858, 11, 17, 0, 0, 0)  # MJD 0
+            dt = mjd_epoch + _td(days=num)
+            jd = num + 2400000.5
+            return html.Span([
+                html.Span(f"MJD {s}", style=_small),
+                html.Span(_arrow, style=_small),
+                html.Span(dt.strftime("%Y-%m-%d %H:%M:%S UT"), style=_bold),
+                html.Span(f"  (JD {jd:.5f})",
+                           className="subtext", style=_sub),
+            ])
+    except ValueError:
+        pass
+
+    # --- ISO / decimal day (e.g. 2024-12-27.238 or 2024-12-27T05:42:49Z) ---
     if _re.match(r"^\d{4}", s):
         try:
-            from datetime import datetime as _dt
-            # Handle decimal day: 2024-12-27.238
-            if "." in s and not s.endswith("Z"):
+            if _re.match(r"^\d{4}[-/]\d{1,2}[-/]\d{1,2}\.\d+$", s):
+                # Decimal day
                 parts = s.replace("/", "-").split(".")
                 base = _dt.strptime(parts[0], "%Y-%m-%d")
                 frac = float("0." + parts[1])
-                from datetime import timedelta
-                full = base + timedelta(days=frac)
-                return html.Span([
-                    html.Span(s, style={"fontSize": "12px"}),
-                    html.Span("  \u2192  ", style={"fontSize": "12px"}),
-                    html.Span(full.strftime("%Y-%m-%d %H:%M:%S UT"),
-                               style={"fontWeight": "600",
-                                      "fontSize": "14px"}),
-                ])
+                dt = base + _td(days=frac)
             else:
-                dt = _dt.fromisoformat(s.replace("Z", "+00:00"))
-                return html.Span([
-                    html.Span(s, style={"fontSize": "12px"}),
-                    html.Span("  \u2192  ", style={"fontSize": "12px"}),
-                    html.Span(dt.strftime("%Y-%m-%d %H:%M:%S UT"),
-                               style={"fontWeight": "600",
-                                      "fontSize": "14px"}),
-                ])
+                dt = _dt.fromisoformat(s.replace("Z", "+00:00")
+                                        .replace("+00:00", ""))
+            # Compute JD and MJD
+            jd = (dt - _dt(2000, 1, 1, 12, 0, 0)).total_seconds() / 86400 + 2451545.0
+            mjd = jd - 2400000.5
+            return html.Span([
+                html.Span(s, style=_small),
+                html.Span(_arrow, style=_small),
+                html.Span(dt.strftime("%Y-%m-%d %H:%M:%S UT"), style=_bold),
+                html.Span(f"  (JD {jd:.5f}, MJD {mjd:.5f})",
+                           className="subtext", style=_sub),
+            ])
         except Exception:
             pass
-    return html.Span("Format not recognized. Try a packed date (e.g. K24CG)"
-                      " or ISO date (e.g. 2024-12-27.238).",
+
+    return html.Span("Accepts: MJD, JD, ISO date, decimal day "
+                      "(2024-12-27.238), MPC packed date (K24CG).",
                       className="subtext", style={"fontSize": "12px"})
 
 
