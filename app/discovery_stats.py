@@ -5125,7 +5125,12 @@ def _build_observability_section(packed_desig, designation, site="I52",
     # Build the section
     chart_div = dcc.Graph(
         figure=fig,
-        config={"displayModeBar": False},
+        config={"displayModeBar": "hover",
+                "modeBarButtonsToRemove": [
+                    "lasso2d", "select2d", "autoScale2d"],
+                "toImageButtonOptions": {
+                    "format": "png", "scale": 2},
+                "displaylogo": False},
         responsive=True,
         style={"height": f"{chart_height}px"},
     )
@@ -5998,7 +6003,9 @@ def _build_obs_timeline(ades_data, designation, chart_height=250):
                       config={"displayModeBar": "hover",
                               "modeBarButtonsToRemove": [
                                   "lasso2d", "select2d",
-                                  "toImage", "autoScale2d"],
+                                  "autoScale2d"],
+                              "toImageButtonOptions": {
+                                  "format": "png", "scale": 2},
                               "displaylogo": False,
                               "scrollZoom": True,
                               "doubleClick": "reset"},
