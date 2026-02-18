@@ -1951,6 +1951,49 @@ _OBS_SITES = ["I52", "J95", "T14", "H21", "474"]
 _OBS_SITES_DEFAULT = "I52"
 
 
+# ---------------------------------------------------------------------------
+# Tools tab helpers
+# ---------------------------------------------------------------------------
+
+def _tool_input_style():
+    """Shared input style for Tools tab calculator fields."""
+    return {
+        "backgroundColor": "var(--paper-bg, white)",
+        "color": "inherit",
+        "border": "1px solid var(--hr-color, #ccc)",
+        "borderRadius": "4px",
+        "padding": "6px 10px",
+        "fontSize": "13px",
+        "fontFamily": "sans-serif",
+        "width": "220px",
+    }
+
+
+def _tool_card(title, description, controls, output_id):
+    """Build a single calculator card for the Tools tab."""
+    return html.Div(
+        style={
+            "border": "1px solid var(--hr-color, #ccc)",
+            "borderRadius": "8px",
+            "padding": "14px 16px",
+            "backgroundColor": "var(--paper-bg, white)",
+        },
+        children=[
+            html.Div(title, style={"fontWeight": "600",
+                                    "fontSize": "14px",
+                                    "marginBottom": "2px"}),
+            html.Div(description, className="subtext",
+                      style={"fontSize": "12px",
+                             "marginBottom": "10px"}),
+            *controls,
+            html.Div(id=output_id,
+                      style={"marginTop": "8px",
+                             "fontSize": "13px",
+                             "minHeight": "20px"}),
+        ],
+    )
+
+
 app.layout = html.Div(
     id="page-container",
     style={
@@ -2967,6 +3010,272 @@ app.layout = html.Div(
                         ]),
                     ],
                 ),
+                # ── Tab 7: Tools for Planetary Defenders ──────────
+                dcc.Tab(
+                    label="Tools",
+                    value="tab-tools",
+                    className="nav-tab",
+                    selected_className="nav-tab--selected",
+                    children=[
+                        html.Div(style={"paddingTop": "15px",
+                                        "fontFamily": "sans-serif"},
+                                 children=[
+                            html.H2("Tools for Planetary Defenders",
+                                     style={"fontSize": "20px",
+                                            "fontWeight": "600",
+                                            "marginBottom": "4px"}),
+                            html.Div("Calculators and converters for "
+                                     "minor planet designations, orbits, "
+                                     "and physical properties.",
+                                     className="subtext",
+                                     style={"fontSize": "13px",
+                                            "marginBottom": "18px"}),
+                            # Card grid — responsive 2-column
+                            html.Div(
+                                id="tools-grid",
+                                style={
+                                    "display": "grid",
+                                    "gridTemplateColumns":
+                                        "repeat(auto-fill, minmax(380px, 1fr))",
+                                    "gap": "16px",
+                                },
+                                children=[
+                                    # ── 1. Pack designation ──
+                                    _tool_card(
+                                        "Pack Designation",
+                                        "Convert a human-readable designation "
+                                        "to MPC packed form.",
+                                        [dcc.Input(
+                                            id="tool-pack-input",
+                                            type="text",
+                                            placeholder="e.g. 2024 YR4, 433, "
+                                                        "C/2023 A3",
+                                            debounce=True,
+                                            style=_tool_input_style(),
+                                        )],
+                                        output_id="tool-pack-output",
+                                    ),
+                                    # ── 2. Unpack designation ──
+                                    _tool_card(
+                                        "Unpack Designation",
+                                        "Convert a packed designation to "
+                                        "human-readable form.",
+                                        [dcc.Input(
+                                            id="tool-unpack-input",
+                                            type="text",
+                                            placeholder="e.g. K24Y04R, 00433, "
+                                                        "~0fr6",
+                                            debounce=True,
+                                            style=_tool_input_style(),
+                                        )],
+                                        output_id="tool-unpack-output",
+                                    ),
+                                    # ── 3. Validate / identify designation ──
+                                    _tool_card(
+                                        "Validate Designation",
+                                        "Check format, type, and validity of "
+                                        "a designation.",
+                                        [dcc.Input(
+                                            id="tool-validate-input",
+                                            type="text",
+                                            placeholder="e.g. 2024 YR4, "
+                                                        "K24Y04R, C/2023 A3",
+                                            debounce=True,
+                                            style=_tool_input_style(),
+                                        )],
+                                        output_id="tool-validate-output",
+                                    ),
+                                    # ── 4. H mag ↔ diameter ──
+                                    _tool_card(
+                                        "H Magnitude \u2194 Diameter",
+                                        "Convert between absolute magnitude "
+                                        "and diameter using "
+                                        "D = 1329/\u221Ap \u00D7 "
+                                        "10\u207B\u1D34\u2C60\u2075.",
+                                        [html.Div(
+                                            style={"display": "flex",
+                                                   "gap": "8px",
+                                                   "flexWrap": "wrap"},
+                                            children=[
+                                                dcc.Input(
+                                                    id="tool-hmag-h",
+                                                    type="number",
+                                                    placeholder="H mag",
+                                                    debounce=True,
+                                                    style={
+                                                        **_tool_input_style(),
+                                                        "width": "90px"},
+                                                ),
+                                                dcc.Input(
+                                                    id="tool-hmag-diam",
+                                                    type="number",
+                                                    placeholder="D (km)",
+                                                    debounce=True,
+                                                    style={
+                                                        **_tool_input_style(),
+                                                        "width": "100px"},
+                                                ),
+                                                html.Div(
+                                                    style={
+                                                        "display": "flex",
+                                                        "alignItems": "center",
+                                                        "gap": "4px"},
+                                                    children=[
+                                                        html.Span(
+                                                            "p\u2092 =",
+                                                            style={
+                                                                "fontSize":
+                                                                    "12px"}),
+                                                        dcc.Input(
+                                                            id="tool-hmag-albedo",
+                                                            type="number",
+                                                            value=0.14,
+                                                            min=0.01,
+                                                            max=1.0,
+                                                            step=0.01,
+                                                            debounce=True,
+                                                            style={
+                                                                **_tool_input_style(),
+                                                                "width":
+                                                                    "70px"},
+                                                        ),
+                                                    ],
+                                                ),
+                                            ],
+                                        )],
+                                        output_id="tool-hmag-output",
+                                    ),
+                                    # ── 5. Tisserand parameter ──
+                                    _tool_card(
+                                        "Tisserand Parameter",
+                                        "Compute T\u2c7c from semi-major "
+                                        "axis, eccentricity, and "
+                                        "inclination.",
+                                        [html.Div(
+                                            style={"display": "flex",
+                                                   "gap": "8px",
+                                                   "flexWrap": "wrap"},
+                                            children=[
+                                                dcc.Input(
+                                                    id="tool-tj-a",
+                                                    type="number",
+                                                    placeholder="a (AU)",
+                                                    debounce=True,
+                                                    style={
+                                                        **_tool_input_style(),
+                                                        "width": "90px"},
+                                                ),
+                                                dcc.Input(
+                                                    id="tool-tj-e",
+                                                    type="number",
+                                                    placeholder="e",
+                                                    debounce=True,
+                                                    style={
+                                                        **_tool_input_style(),
+                                                        "width": "80px"},
+                                                ),
+                                                dcc.Input(
+                                                    id="tool-tj-i",
+                                                    type="number",
+                                                    placeholder="i (\u00b0)",
+                                                    debounce=True,
+                                                    style={
+                                                        **_tool_input_style(),
+                                                        "width": "80px"},
+                                                ),
+                                            ],
+                                        )],
+                                        output_id="tool-tj-output",
+                                    ),
+                                    # ── 6. Orbit classification ──
+                                    _tool_card(
+                                        "Orbit Classification",
+                                        "Classify an orbit from elements "
+                                        "(a, e, i, q).",
+                                        [html.Div(
+                                            style={"display": "flex",
+                                                   "gap": "8px",
+                                                   "flexWrap": "wrap"},
+                                            children=[
+                                                dcc.Input(
+                                                    id="tool-class-a",
+                                                    type="number",
+                                                    placeholder="a (AU)",
+                                                    debounce=True,
+                                                    style={
+                                                        **_tool_input_style(),
+                                                        "width": "90px"},
+                                                ),
+                                                dcc.Input(
+                                                    id="tool-class-e",
+                                                    type="number",
+                                                    placeholder="e",
+                                                    debounce=True,
+                                                    style={
+                                                        **_tool_input_style(),
+                                                        "width": "80px"},
+                                                ),
+                                                dcc.Input(
+                                                    id="tool-class-i",
+                                                    type="number",
+                                                    placeholder="i (\u00b0)",
+                                                    debounce=True,
+                                                    style={
+                                                        **_tool_input_style(),
+                                                        "width": "80px"},
+                                                ),
+                                                dcc.Input(
+                                                    id="tool-class-q",
+                                                    type="number",
+                                                    placeholder="q (AU)",
+                                                    debounce=True,
+                                                    style={
+                                                        **_tool_input_style(),
+                                                        "width": "90px"},
+                                                ),
+                                            ],
+                                        )],
+                                        output_id="tool-class-output",
+                                    ),
+                                    # ── 7. Parse obs80 line ──
+                                    _tool_card(
+                                        "Parse obs80 Line",
+                                        "Decode an MPC 80-column observation "
+                                        "record into fields.",
+                                        [dcc.Input(
+                                            id="tool-obs80-input",
+                                            type="text",
+                                            placeholder="Paste an 80-column "
+                                                        "observation line",
+                                            debounce=True,
+                                            style={
+                                                **_tool_input_style(),
+                                                "fontFamily": "monospace",
+                                                "fontSize": "11px",
+                                                "width": "100%"},
+                                        )],
+                                        output_id="tool-obs80-output",
+                                    ),
+                                    # ── 8. MPC date ↔ ISO date ──
+                                    _tool_card(
+                                        "MPC Date \u2194 ISO Date",
+                                        "Convert between MPC packed date "
+                                        "and ISO 8601 format.",
+                                        [dcc.Input(
+                                            id="tool-date-input",
+                                            type="text",
+                                            placeholder="e.g. K24CG or "
+                                                        "2024-12-27.238",
+                                            debounce=True,
+                                            style=_tool_input_style(),
+                                        )],
+                                        output_id="tool-date-output",
+                                    ),
+                                ],
+                            ),
+                        ]),
+                    ],
+                ),
             ],
         ),
     ],
@@ -3196,6 +3505,7 @@ _TAB_KEYS = {
     "tab-followup": {"fu-year-range", "fu-size-filter", "fu-max-days"},
     "tab-circumstances": {"circ-year-range", "circ-size-filter",
                           "circ-color-by"},
+    "tab-tools": set(),  # no resettable controls
 }
 _SHARED_KEYS = {"group-by", "plot-height"}
 
@@ -6334,6 +6644,339 @@ def enrich_mpec_detail(n_intervals, path, prev_data):
     }
 
     return risk_line, stop_poll, enrichment_state
+
+
+# ---------------------------------------------------------------------------
+# Tools tab callbacks
+# ---------------------------------------------------------------------------
+
+@app.callback(
+    Output("tool-pack-output", "children"),
+    Input("tool-pack-input", "value"),
+    prevent_initial_call=True,
+)
+def tool_pack(value):
+    if not value or not value.strip():
+        return ""
+    s = value.strip()
+    try:
+        packed = pack_designation(s)
+        return html.Span([
+            html.Code(packed,
+                      style={"fontSize": "14px", "fontWeight": "600",
+                             "letterSpacing": "1px"}),
+            html.Span(f"  ({len(packed)} chars)",
+                       className="subtext",
+                       style={"fontSize": "11px", "marginLeft": "8px"}),
+        ])
+    except Exception as exc:
+        return html.Span(f"Error: {exc}",
+                          style={"color": "#c0392b", "fontSize": "12px"})
+
+
+@app.callback(
+    Output("tool-unpack-output", "children"),
+    Input("tool-unpack-input", "value"),
+    prevent_initial_call=True,
+)
+def tool_unpack(value):
+    if not value or not value.strip():
+        return ""
+    s = value.strip()
+    try:
+        unpacked = unpack_designation(s)
+        return html.Code(unpacked,
+                         style={"fontSize": "14px", "fontWeight": "600"})
+    except Exception as exc:
+        return html.Span(f"Error: {exc}",
+                          style={"color": "#c0392b", "fontSize": "12px"})
+
+
+@app.callback(
+    Output("tool-validate-output", "children"),
+    Input("tool-validate-input", "value"),
+    prevent_initial_call=True,
+)
+def tool_validate(value):
+    if not value or not value.strip():
+        return ""
+    from mpc_designation import detect_format, is_valid_designation
+    s = value.strip()
+    try:
+        fmt = detect_format(s)
+    except Exception as exc:
+        return html.Span(f"Not recognized: {exc}",
+                          style={"color": "#c0392b", "fontSize": "12px"})
+    valid = is_valid_designation(s)
+    items = []
+    items.append(html.Span(
+        "\u2714 Valid" if valid else "\u2718 Invalid",
+        style={"color": "#27ae60" if valid else "#c0392b",
+               "fontWeight": "600", "marginRight": "10px"}))
+    for k in ("format", "type", "subtype"):
+        if k in fmt:
+            items.append(html.Span([
+                html.Span(f"{k}: ", className="subtext",
+                           style={"fontSize": "11px"}),
+                html.Span(fmt[k],
+                           style={"fontSize": "12px", "marginRight": "10px"}),
+            ]))
+    # Show pack/unpack conversion
+    try:
+        if fmt.get("format") == "unpacked":
+            packed = pack_designation(s)
+            items.append(html.Span([
+                html.Span(" \u2192 packed: ", className="subtext",
+                           style={"fontSize": "11px"}),
+                html.Code(packed, style={"fontSize": "12px"}),
+            ]))
+        elif fmt.get("format") == "packed":
+            unpacked = unpack_designation(s)
+            items.append(html.Span([
+                html.Span(" \u2192 unpacked: ", className="subtext",
+                           style={"fontSize": "11px"}),
+                html.Code(unpacked, style={"fontSize": "12px"}),
+            ]))
+    except Exception:
+        pass
+    return html.Div(items)
+
+
+@app.callback(
+    Output("tool-hmag-output", "children"),
+    Input("tool-hmag-h", "value"),
+    Input("tool-hmag-diam", "value"),
+    Input("tool-hmag-albedo", "value"),
+    prevent_initial_call=True,
+)
+def tool_hmag(h_val, d_val, albedo):
+    import math
+    if albedo is None or albedo <= 0:
+        albedo = 0.14
+    ctx = callback_context
+    triggered = ctx.triggered[0]["prop_id"] if ctx.triggered else ""
+    # Determine direction: if H was edited, compute D; if D was edited, compute H
+    if "tool-hmag-diam" in triggered and d_val is not None and d_val > 0:
+        # D → H
+        h_calc = 5 * math.log10(1329 / (d_val * math.sqrt(albedo)))
+        label = "H" if d_val >= 1 else "H"
+        d_str = (f"{d_val:.1f} km" if d_val >= 1
+                 else f"{d_val * 1000:.0f} m")
+        return html.Span([
+            html.Span(f"D = {d_str}  \u2192  ",
+                       style={"fontSize": "12px"}),
+            html.Span(f"H = {h_calc:.2f}",
+                       style={"fontWeight": "600", "fontSize": "14px"}),
+            html.Span(f"  (p\u2092 = {albedo})",
+                       className="subtext",
+                       style={"fontSize": "11px", "marginLeft": "6px"}),
+        ])
+    elif h_val is not None:
+        # H → D
+        d_calc = 1329 / math.sqrt(albedo) * 10 ** (-h_val / 5)
+        if d_calc >= 1:
+            d_str = f"{d_calc:.2f} km"
+        elif d_calc >= 0.01:
+            d_str = f"{d_calc * 1000:.1f} m"
+        else:
+            d_str = f"{d_calc * 1000:.2f} m"
+        return html.Span([
+            html.Span(f"H = {h_val}  \u2192  ",
+                       style={"fontSize": "12px"}),
+            html.Span(f"D \u2248 {d_str}",
+                       style={"fontWeight": "600", "fontSize": "14px"}),
+            html.Span(f"  (p\u2092 = {albedo})",
+                       className="subtext",
+                       style={"fontSize": "11px", "marginLeft": "6px"}),
+        ])
+    return ""
+
+
+@app.callback(
+    Output("tool-tj-output", "children"),
+    Input("tool-tj-a", "value"),
+    Input("tool-tj-e", "value"),
+    Input("tool-tj-i", "value"),
+    prevent_initial_call=True,
+)
+def tool_tisserand(a, e, i_deg):
+    if a is None or e is None or i_deg is None:
+        return ""
+    if a <= 0 or e < 0 or e >= 1:
+        return html.Span("Invalid elements (need a > 0, 0 \u2264 e < 1)",
+                          style={"color": "#c0392b", "fontSize": "12px"})
+    from lib.orbit_classes import tisserand_jupiter
+    tj = tisserand_jupiter(a, e, i_deg)
+    # Classify based on Tisserand
+    if tj < 2:
+        note = "Hyperbolic / interstellar"
+    elif tj < 3:
+        note = "Jupiter-family comet regime"
+    elif tj < 3.05:
+        note = "Near the JFC/asteroid boundary"
+    else:
+        note = "Asteroidal"
+    return html.Span([
+        html.Span("T", style={"fontStyle": "italic"}),
+        html.Sub("J"),
+        html.Span(f" = {tj:.3f}",
+                   style={"fontWeight": "600", "fontSize": "14px"}),
+        html.Span(f"  ({note})",
+                   className="subtext",
+                   style={"fontSize": "11px", "marginLeft": "6px"}),
+    ])
+
+
+@app.callback(
+    Output("tool-class-output", "children"),
+    Input("tool-class-a", "value"),
+    Input("tool-class-e", "value"),
+    Input("tool-class-i", "value"),
+    Input("tool-class-q", "value"),
+    prevent_initial_call=True,
+)
+def tool_orbit_class(a, e, i_deg, q):
+    if a is None or e is None:
+        return ""
+    if a <= 0 or e < 0 or e >= 1:
+        return html.Span("Invalid elements (need a > 0, 0 \u2264 e < 1)",
+                          style={"color": "#c0392b", "fontSize": "12px"})
+    if q is None:
+        q = a * (1 - e)
+    from lib.orbit_classes import classify_from_elements, long_name
+    oti = classify_from_elements(a, e, i_deg, q)
+    if oti is None:
+        return html.Span("Could not classify (ambiguous boundaries)",
+                          style={"fontSize": "12px"})
+    name = long_name(oti)
+    items = [
+        html.Span(name, style={"fontWeight": "600", "fontSize": "14px"}),
+        html.Span(f"  (orbit_type_int = {oti})",
+                   className="subtext",
+                   style={"fontSize": "11px", "marginLeft": "6px"}),
+    ]
+    # Add NEO status
+    is_neo = q <= 1.3
+    if is_neo:
+        items.append(html.Span(
+            "  NEO",
+            style={"backgroundColor": "#e74c3c", "color": "white",
+                    "padding": "1px 6px", "borderRadius": "3px",
+                    "fontSize": "11px", "fontWeight": "600",
+                    "marginLeft": "6px"}))
+    # Add PHA check
+    if is_neo and a is not None:
+        from lib.orbit_classes import tisserand_jupiter
+        # PHA: H <= 22 and MOID <= 0.05 AU (we can't compute MOID here
+        # but note if q is close to 1 AU)
+        Q = a * (1 + e)
+        if q <= 1.05 and Q >= 0.95:
+            items.append(html.Span(
+                "  Earth-crossing",
+                style={"fontSize": "11px", "marginLeft": "6px",
+                       "color": "#e67e22"}))
+    return html.Div(items)
+
+
+@app.callback(
+    Output("tool-obs80-output", "children"),
+    Input("tool-obs80-input", "value"),
+    prevent_initial_call=True,
+)
+def tool_obs80(value):
+    if not value or len(value.strip()) < 60:
+        return ""
+    from lib.mpc_convert import parse_obs80
+    try:
+        fields = parse_obs80(value)
+    except Exception as exc:
+        return html.Span(f"Parse error: {exc}",
+                          style={"color": "#c0392b", "fontSize": "12px"})
+    if not fields:
+        return html.Span("Could not parse line",
+                          style={"color": "#c0392b", "fontSize": "12px"})
+    # Format as key-value pairs
+    _kv_style = {"fontSize": "12px", "marginRight": "12px",
+                 "whiteSpace": "nowrap"}
+    _key_style = {"fontSize": "11px"}
+    items = []
+    display_order = [
+        ("provID", "Designation"), ("disc", "Discovery"),
+        ("obsTime", "Date"), ("ra", "RA (\u00b0)"), ("dec", "Dec (\u00b0)"),
+        ("mag", "Mag"), ("band", "Band"), ("mode", "Mode"),
+        ("stn", "Station"), ("astCat", "Catalog"),
+    ]
+    for key, label in display_order:
+        val = fields.get(key)
+        if val is None or val == "":
+            continue
+        if isinstance(val, float):
+            val = f"{val:.5f}"
+        items.append(html.Span([
+            html.Span(f"{label}: ", className="subtext", style=_key_style),
+            html.Span(str(val), style={"fontWeight": "500"}),
+        ], style=_kv_style))
+    return html.Div(items, style={"display": "flex", "flexWrap": "wrap",
+                                   "gap": "4px 0"})
+
+
+@app.callback(
+    Output("tool-date-output", "children"),
+    Input("tool-date-input", "value"),
+    prevent_initial_call=True,
+)
+def tool_date(value):
+    if not value or not value.strip():
+        return ""
+    s = value.strip()
+    # Try MPC packed date → ISO
+    from lib.mpc_convert import mpc_date_to_iso8601
+    import re as _re
+    # Detect MPC packed date: letter + 2 digits + optional hex-ish chars
+    if _re.match(r"^[A-Za-z]\d{2}", s) and len(s) <= 5:
+        try:
+            iso = mpc_date_to_iso8601(s)
+            return html.Span([
+                html.Code(s, style={"fontSize": "13px"}),
+                html.Span("  \u2192  ", style={"fontSize": "12px"}),
+                html.Span(iso, style={"fontWeight": "600",
+                                       "fontSize": "14px"}),
+            ])
+        except Exception as exc:
+            return html.Span(f"Error: {exc}",
+                              style={"color": "#c0392b", "fontSize": "12px"})
+    # Try ISO/decimal date → parse and display
+    if _re.match(r"^\d{4}", s):
+        try:
+            from datetime import datetime as _dt
+            # Handle decimal day: 2024-12-27.238
+            if "." in s and not s.endswith("Z"):
+                parts = s.replace("/", "-").split(".")
+                base = _dt.strptime(parts[0], "%Y-%m-%d")
+                frac = float("0." + parts[1])
+                from datetime import timedelta
+                full = base + timedelta(days=frac)
+                return html.Span([
+                    html.Span(s, style={"fontSize": "12px"}),
+                    html.Span("  \u2192  ", style={"fontSize": "12px"}),
+                    html.Span(full.strftime("%Y-%m-%d %H:%M:%S UT"),
+                               style={"fontWeight": "600",
+                                      "fontSize": "14px"}),
+                ])
+            else:
+                dt = _dt.fromisoformat(s.replace("Z", "+00:00"))
+                return html.Span([
+                    html.Span(s, style={"fontSize": "12px"}),
+                    html.Span("  \u2192  ", style={"fontSize": "12px"}),
+                    html.Span(dt.strftime("%Y-%m-%d %H:%M:%S UT"),
+                               style={"fontWeight": "600",
+                                      "fontSize": "14px"}),
+                ])
+        except Exception:
+            pass
+    return html.Span("Format not recognized. Try a packed date (e.g. K24CG)"
+                      " or ISO date (e.g. 2024-12-27.238).",
+                      className="subtext", style={"fontSize": "12px"})
 
 
 # ---------------------------------------------------------------------------
