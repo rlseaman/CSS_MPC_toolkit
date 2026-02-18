@@ -7047,6 +7047,9 @@ def tool_tisserand(a, e, i_deg):
 
 @app.callback(
     Output("tool-class-output", "children"),
+    Output("tool-class-a", "value", allow_duplicate=True),
+    Output("tool-class-e", "value", allow_duplicate=True),
+    Output("tool-class-q", "value", allow_duplicate=True),
     Input("tool-class-a", "value"),
     Input("tool-class-e", "value"),
     Input("tool-class-i", "value"),
@@ -7054,18 +7057,58 @@ def tool_tisserand(a, e, i_deg):
     prevent_initial_call=True,
 )
 def tool_orbit_class(a, e, i_deg, q):
-    if a is None or e is None:
-        return ""
-    if a <= 0 or e < 0 or e >= 1:
-        return html.Span("Invalid elements (need a > 0, 0 \u2264 e < 1)",
-                          style={"color": "#c0392b", "fontSize": "12px"})
-    if q is None:
+    triggered = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
+    clear_a, clear_e, clear_q = no_update, no_update, no_update
+
+    # a, e, q are linked: q = a(1-e).  When any two of the three are
+    # present and the user just entered one, clear the odd one out.
+    if "tool-class-a" in triggered and a is not None:
+        if e is not None:
+            clear_q = None  # a+e entered → clear q
+        elif q is not None:
+            clear_e = None  # a+q entered → clear e
+    elif "tool-class-e" in triggered and e is not None:
+        if a is not None:
+            clear_q = None  # e+a entered → clear q
+        elif q is not None:
+            clear_a = None  # e+q entered → clear a
+    elif "tool-class-q" in triggered and q is not None:
+        if a is not None:
+            clear_e = None  # q+a entered → clear e
+        elif e is not None:
+            clear_a = None  # q+e entered → clear a
+
+    # Apply clears for classification logic
+    if clear_a is None:
+        a = None
+    if clear_e is None:
+        e = None
+    if clear_q is None:
+        q = None
+
+    # Derive missing element from the other two
+    if a is not None and e is not None and q is None:
         q = a * (1 - e)
+    elif a is not None and q is not None and e is None:
+        e = 1 - q / a if a > 0 else None
+    elif e is not None and q is not None and a is None:
+        a = q / (1 - e) if e < 1 else None
+
+    if a is None or e is None:
+        return "", clear_a, clear_e, clear_q
+    if a <= 0 or e < 0 or e >= 1:
+        return html.Span(
+            "Invalid elements (need a > 0, 0 \u2264 e < 1)",
+            style={"color": "#c0392b", "fontSize": "12px"},
+        ), clear_a, clear_e, clear_q
+
     from lib.orbit_classes import classify_from_elements, long_name
     oti = classify_from_elements(a, e, i_deg, q)
     if oti is None:
-        return html.Span("Could not classify (ambiguous boundaries)",
-                          style={"fontSize": "12px"})
+        return html.Span(
+            "Could not classify (ambiguous boundaries)",
+            style={"fontSize": "12px"},
+        ), clear_a, clear_e, clear_q
     name = long_name(oti)
     items = [
         html.Span(name, style={"fontWeight": "600", "fontSize": "14px"}),
@@ -7073,7 +7116,6 @@ def tool_orbit_class(a, e, i_deg, q):
                    className="subtext",
                    style={"fontSize": "11px", "marginLeft": "6px"}),
     ]
-    # Add NEO status
     is_neo = q <= 1.3
     if is_neo:
         items.append(html.Span(
@@ -7082,18 +7124,14 @@ def tool_orbit_class(a, e, i_deg, q):
                     "padding": "1px 6px", "borderRadius": "3px",
                     "fontSize": "11px", "fontWeight": "600",
                     "marginLeft": "6px"}))
-    # Add PHA check
-    if is_neo and a is not None:
-        from lib.orbit_classes import tisserand_jupiter
-        # PHA: H <= 22 and MOID <= 0.05 AU (we can't compute MOID here
-        # but note if q is close to 1 AU)
+    if is_neo:
         Q = a * (1 + e)
         if q <= 1.05 and Q >= 0.95:
             items.append(html.Span(
                 "  Earth-crossing",
                 style={"fontSize": "11px", "marginLeft": "6px",
                        "color": "#e67e22"}))
-    return html.Div(items)
+    return html.Div(items), clear_a, clear_e, clear_q
 
 
 @app.callback(
