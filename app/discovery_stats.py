@@ -1969,8 +1969,21 @@ def _tool_input_style():
     }
 
 
-def _tool_card(title, description, controls, output_id):
-    """Build a single calculator card for the Tools tab."""
+def _tool_card(title, description, controls, output_id, info=None):
+    """Build a single calculator card for the Tools tab.
+
+    Args:
+        info: Optional tooltip text shown on hover over an (i) icon.
+    """
+    title_row = [html.Span(title, style={"fontWeight": "600",
+                                          "fontSize": "14px"})]
+    if info:
+        title_row.append(html.Span(
+            " \u24d8",
+            title=info,
+            style={"cursor": "help", "fontSize": "13px",
+                    "opacity": "0.45", "marginLeft": "4px"},
+        ))
     return html.Div(
         style={
             "border": "1px solid var(--hr-color, #ccc)",
@@ -1979,9 +1992,7 @@ def _tool_card(title, description, controls, output_id):
             "backgroundColor": "var(--paper-bg, white)",
         },
         children=[
-            html.Div(title, style={"fontWeight": "600",
-                                    "fontSize": "14px",
-                                    "marginBottom": "2px"}),
+            html.Div(title_row, style={"marginBottom": "2px"}),
             html.Div(description, className="subtext",
                       style={"fontSize": "12px",
                              "marginBottom": "10px"}),
@@ -3043,8 +3054,7 @@ app.layout = html.Div(
                                     # ── 1. Pack designation ──
                                     _tool_card(
                                         "Pack Designation",
-                                        "Convert a human-readable designation "
-                                        "to MPC packed form.",
+                                        "Human-readable to MPC packed form.",
                                         [dcc.Input(
                                             id="tool-pack-input",
                                             type="text",
@@ -3054,12 +3064,20 @@ app.layout = html.Div(
                                             style=_tool_input_style(),
                                         )],
                                         output_id="tool-pack-output",
+                                        info="MPC packed designations encode "
+                                             "provisional designations into "
+                                             "7 characters (e.g. 2024 YR4 "
+                                             "\u2192 K24Y04R) and permanent "
+                                             "numbers into 5 characters "
+                                             "(e.g. 433 \u2192 00433, "
+                                             "780896 \u2192 ~0fr6). "
+                                             "Supports asteroids, comets, "
+                                             "and natural satellites.",
                                     ),
                                     # ── 2. Unpack designation ──
                                     _tool_card(
                                         "Unpack Designation",
-                                        "Convert a packed designation to "
-                                        "human-readable form.",
+                                        "MPC packed form to human-readable.",
                                         [dcc.Input(
                                             id="tool-unpack-input",
                                             type="text",
@@ -3069,12 +3087,18 @@ app.layout = html.Div(
                                             style=_tool_input_style(),
                                         )],
                                         output_id="tool-unpack-output",
+                                        info="Decodes packed designations: "
+                                             "K24Y04R \u2192 2024 YR4, "
+                                             "00433 \u2192 433, "
+                                             "~0fr6 \u2192 780896. "
+                                             "Tilde format (~xxxx) encodes "
+                                             "permanent numbers \u2265 620000 "
+                                             "in base-62.",
                                     ),
                                     # ── 3. Validate / identify designation ──
                                     _tool_card(
                                         "Validate Designation",
-                                        "Check format, type, and validity of "
-                                        "a designation.",
+                                        "Check format, type, and validity.",
                                         [dcc.Input(
                                             id="tool-validate-input",
                                             type="text",
@@ -3084,18 +3108,22 @@ app.layout = html.Div(
                                             style=_tool_input_style(),
                                         )],
                                         output_id="tool-validate-output",
+                                        info="Detects whether a designation "
+                                             "is packed or unpacked, "
+                                             "provisional or permanent, "
+                                             "asteroid or comet. Shows the "
+                                             "complementary conversion.",
                                     ),
                                     # ── 4. H mag ↔ diameter ──
                                     _tool_card(
                                         "H Magnitude \u2194 Diameter",
                                         "Convert between absolute magnitude "
-                                        "and diameter using "
-                                        "D = 1329/\u221Ap \u00D7 "
-                                        "10\u207B\u1D34\u2C60\u2075.",
+                                             "and diameter.",
                                         [html.Div(
                                             style={"display": "flex",
                                                    "gap": "8px",
-                                                   "flexWrap": "wrap"},
+                                                   "flexWrap": "wrap",
+                                                   "alignItems": "center"},
                                             children=[
                                                 dcc.Input(
                                                     id="tool-hmag-h",
@@ -3122,10 +3150,38 @@ app.layout = html.Div(
                                                         "gap": "4px"},
                                                     children=[
                                                         html.Span(
-                                                            "p\u2092 =",
+                                                            "p\u2092",
                                                             style={
                                                                 "fontSize":
                                                                     "12px"}),
+                                                        dcc.RadioItems(
+                                                            id="tool-hmag-albedo-mode",
+                                                            options=[
+                                                                {"label":
+                                                                    " 0.14",
+                                                                 "value":
+                                                                    "fixed"},
+                                                                {"label":
+                                                                    " NEOMOD3",
+                                                                 "value":
+                                                                    "neomod3"},
+                                                                {"label":
+                                                                    " custom",
+                                                                 "value":
+                                                                    "custom"},
+                                                            ],
+                                                            value="fixed",
+                                                            inline=True,
+                                                            style={
+                                                                "fontSize":
+                                                                    "11px",
+                                                                "display":
+                                                                    "inline-flex",
+                                                                "gap": "6px"},
+                                                            labelStyle={
+                                                                "fontSize":
+                                                                    "11px"},
+                                                        ),
                                                         dcc.Input(
                                                             id="tool-hmag-albedo",
                                                             type="number",
@@ -3137,20 +3193,30 @@ app.layout = html.Div(
                                                             style={
                                                                 **_tool_input_style(),
                                                                 "width":
-                                                                    "70px"},
+                                                                    "70px",
+                                                                "display":
+                                                                    "none"},
                                                         ),
                                                     ],
                                                 ),
                                             ],
                                         )],
                                         output_id="tool-hmag-output",
+                                        info="D = 1329 / \u221A(p\u2092) "
+                                             "\u00D7 10^(\u2212H/5) km.\n"
+                                             "Standard albedo p\u2092 = 0.14 "
+                                             "(Harris & Chodas 2021).\n"
+                                             "NEOMOD3 uses size-dependent "
+                                             "debiased albedos (Nesvorn\u00fd "
+                                             "et al. 2024): ~0.15 for H<18, "
+                                             "~0.16 for 18\u201422, "
+                                             "~0.18 for H>22.",
                                     ),
                                     # ── 5. Tisserand parameter ──
                                     _tool_card(
                                         "Tisserand Parameter",
-                                        "Compute T\u2c7c from semi-major "
-                                        "axis, eccentricity, and "
-                                        "inclination.",
+                                        "Compute T\u2c7c from orbital "
+                                        "elements.",
                                         [html.Div(
                                             style={"display": "flex",
                                                    "gap": "8px",
@@ -3186,12 +3252,18 @@ app.layout = html.Div(
                                             ],
                                         )],
                                         output_id="tool-tj-output",
+                                        info="T\u2c7c = a\u2c7c/a + 2\u00b7"
+                                             "cos(i)\u00b7\u221A[(a/a\u2c7c)"
+                                             "\u00b7(1\u2212e\u00b2)]  where "
+                                             "a\u2c7c = 5.2 AU.\n"
+                                             "T\u2c7c < 2: hyperbolic, "
+                                             "2\u20133: Jupiter-family comet, "
+                                             "> 3: asteroidal.",
                                     ),
                                     # ── 6. Orbit classification ──
                                     _tool_card(
                                         "Orbit Classification",
-                                        "Classify an orbit from elements "
-                                        "(a, e, i, q).",
+                                        "Classify from orbital elements.",
                                         [html.Div(
                                             style={"display": "flex",
                                                    "gap": "8px",
@@ -3236,12 +3308,21 @@ app.layout = html.Div(
                                             ],
                                         )],
                                         output_id="tool-class-output",
+                                        info="Uses MPC dynamical boundaries "
+                                             "to classify orbits: Atira "
+                                             "(Q<0.983), Aten (a<1, Q>0.983),"
+                                             " Apollo (a\u22651, q\u22641.017)"
+                                             ", Amor (1.017<q\u22641.3), "
+                                             "Mars-crossing, Hungaria, MBA, "
+                                             "Hilda, Jupiter Trojan, Centaur,"
+                                             " TNO. q is derived from a,e "
+                                             "if not entered.",
                                     ),
                                     # ── 7. Parse obs80 line ──
                                     _tool_card(
                                         "Parse obs80 Line",
-                                        "Decode an MPC 80-column observation "
-                                        "record into fields.",
+                                        "Decode an 80-column observation "
+                                        "record.",
                                         [dcc.Input(
                                             id="tool-obs80-input",
                                             type="text",
@@ -3255,12 +3336,18 @@ app.layout = html.Div(
                                                 "width": "100%"},
                                         )],
                                         output_id="tool-obs80-output",
+                                        info="The MPC 80-column format "
+                                             "encodes designation (cols 1-12)"
+                                             ", discovery flag, observation "
+                                             "type, date, RA, Dec, magnitude,"
+                                             " band, catalog, and station "
+                                             "code in fixed-width fields. "
+                                             "Being replaced by ADES format.",
                                     ),
                                     # ── 8. MPC date ↔ ISO date ──
                                     _tool_card(
                                         "MPC Date \u2194 ISO Date",
-                                        "Convert between MPC packed date "
-                                        "and ISO 8601 format.",
+                                        "Convert packed or decimal dates.",
                                         [dcc.Input(
                                             id="tool-date-input",
                                             type="text",
@@ -3270,6 +3357,12 @@ app.layout = html.Div(
                                             style=_tool_input_style(),
                                         )],
                                         output_id="tool-date-output",
+                                        info="MPC packed dates encode "
+                                             "year+month+day in 5 characters "
+                                             "(e.g. K24CG = 2024-12-16). "
+                                             "Decimal days like 2024-12-27"
+                                             ".238 are expanded to "
+                                             "hours:minutes:seconds UT.",
                                     ),
                                 ],
                             ),
@@ -3497,6 +3590,7 @@ def _get_defaults():
         "tool-hmag-h": None,
         "tool-hmag-diam": None,
         "tool-hmag-albedo": 0.14,
+        "tool-hmag-albedo-mode": "fixed",
         "tool-tj-a": None,
         "tool-tj-e": None,
         "tool-tj-i": None,
@@ -3523,7 +3617,8 @@ _TAB_KEYS = {
                           "circ-color-by"},
     "tab-tools": {"tool-pack-input", "tool-unpack-input",
                    "tool-validate-input", "tool-hmag-h", "tool-hmag-diam",
-                   "tool-hmag-albedo", "tool-tj-a", "tool-tj-e", "tool-tj-i",
+                   "tool-hmag-albedo", "tool-hmag-albedo-mode",
+                   "tool-tj-a", "tool-tj-e", "tool-tj-i",
                    "tool-class-a", "tool-class-e", "tool-class-i",
                    "tool-class-q", "tool-obs80-input", "tool-date-input"},
 }
@@ -3540,6 +3635,7 @@ _RESET_ORDER = [
     "circ-year-range", "circ-size-filter", "circ-color-by",
     "tool-pack-input", "tool-unpack-input", "tool-validate-input",
     "tool-hmag-h", "tool-hmag-diam", "tool-hmag-albedo",
+    "tool-hmag-albedo-mode",
     "tool-tj-a", "tool-tj-e", "tool-tj-i",
     "tool-class-a", "tool-class-e", "tool-class-i", "tool-class-q",
     "tool-obs80-input", "tool-date-input",
@@ -6767,6 +6863,54 @@ def tool_validate(value):
     return html.Div(items)
 
 
+def _neomod3_albedo(h):
+    """Size-dependent debiased albedo from NEOMOD3 (Nesvorny et al. 2024)."""
+    if h < 18:
+        return 0.15
+    elif h <= 22:
+        return 0.16
+    else:
+        return 0.18
+
+
+def _hmag_to_diam_m(h, albedo):
+    """H magnitude → diameter in meters."""
+    import math
+    d_km = 1329 / math.sqrt(albedo) * 10 ** (-h / 5)
+    return d_km * 1000
+
+
+def _diam_m_to_hmag(d_m, albedo):
+    """Diameter in meters → H magnitude."""
+    import math
+    d_km = d_m / 1000
+    return 5 * math.log10(1329 / (d_km * math.sqrt(albedo)))
+
+
+def _format_diam(d_m):
+    """Format diameter in meters with km shown for large values."""
+    if d_m >= 1000:
+        return f"{d_m / 1000:.2f} km ({d_m:,.0f} m)"
+    elif d_m >= 1:
+        return f"{d_m:,.1f} m"
+    else:
+        return f"{d_m:.2f} m"
+
+
+# Show/hide custom albedo input based on mode selection
+@app.callback(
+    Output("tool-hmag-albedo", "style"),
+    Input("tool-hmag-albedo-mode", "value"),
+)
+def toggle_albedo_input(mode):
+    base = {**_tool_input_style(), "width": "70px"}
+    if mode == "custom":
+        base["display"] = "inline-block"
+    else:
+        base["display"] = "none"
+    return base
+
+
 @app.callback(
     Output("tool-hmag-output", "children"),
     Output("tool-hmag-h", "value", allow_duplicate=True),
@@ -6774,82 +6918,90 @@ def tool_validate(value):
     Input("tool-hmag-h", "value"),
     Input("tool-hmag-diam", "value"),
     Input("tool-hmag-albedo", "value"),
+    Input("tool-hmag-albedo-mode", "value"),
     prevent_initial_call=True,
 )
-def tool_hmag(h_val, d_m, albedo):
-    import math
-    if albedo is None or albedo <= 0:
-        albedo = 0.14
+def tool_hmag(h_val, d_m, custom_albedo, albedo_mode):
     triggered = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
-    # D input is in meters; formula uses km internally
+    _sub = {"fontSize": "11px", "marginLeft": "6px"}
+
+    def _get_albedo(h=None):
+        if albedo_mode == "neomod3" and h is not None:
+            return _neomod3_albedo(h), "NEOMOD3"
+        elif albedo_mode == "custom":
+            p = custom_albedo if custom_albedo and custom_albedo > 0 else 0.14
+            return p, f"{p}"
+        else:
+            return 0.14, "0.14"
+
+    # D (m) → H
     if "tool-hmag-diam" in triggered and d_m is not None and d_m > 0:
-        # D (m) → H
-        d_km = d_m / 1000
-        h_calc = 5 * math.log10(1329 / (d_km * math.sqrt(albedo)))
+        # For D→H with NEOMOD3, we need to iterate since albedo depends on H
+        if albedo_mode == "neomod3":
+            # Initial guess with p=0.16, then refine
+            h_est = _diam_m_to_hmag(d_m, 0.16)
+            for _ in range(3):
+                p = _neomod3_albedo(h_est)
+                h_est = _diam_m_to_hmag(d_m, p)
+            albedo, label = p, "NEOMOD3"
+        else:
+            albedo, label = _get_albedo()
+        h_calc = _diam_m_to_hmag(d_m, albedo)
         d_str = f"{d_m:g} m" if d_m >= 1 else f"{d_m:.2f} m"
-        result = html.Span([
+        return html.Span([
             html.Span(f"D = {d_str}  \u2192  ",
                        style={"fontSize": "12px"}),
             html.Span(f"H = {h_calc:.2f}",
                        style={"fontWeight": "600", "fontSize": "14px"}),
-            html.Span(f"  (p\u2092 = {albedo})",
-                       className="subtext",
-                       style={"fontSize": "11px", "marginLeft": "6px"}),
-        ])
-        return result, None, no_update
-    elif "tool-hmag-h" in triggered and h_val is not None:
-        # H → D (m)
-        d_km = 1329 / math.sqrt(albedo) * 10 ** (-h_val / 5)
-        d_m_calc = d_km * 1000
-        if d_m_calc >= 1000:
-            d_str = f"{d_m_calc / 1000:.2f} km ({d_m_calc:,.0f} m)"
-        elif d_m_calc >= 1:
-            d_str = f"{d_m_calc:,.1f} m"
-        else:
-            d_str = f"{d_m_calc:.2f} m"
-        result = html.Span([
+            html.Span(f"  (p\u2092 = {label})",
+                       className="subtext", style=_sub),
+        ]), None, no_update
+
+    # H → D (m)
+    if "tool-hmag-h" in triggered and h_val is not None:
+        albedo, label = _get_albedo(h_val)
+        d_m_calc = _hmag_to_diam_m(h_val, albedo)
+        return html.Span([
             html.Span(f"H = {h_val}  \u2192  ",
                        style={"fontSize": "12px"}),
-            html.Span(f"D \u2248 {d_str}",
+            html.Span(f"D \u2248 {_format_diam(d_m_calc)}",
                        style={"fontWeight": "600", "fontSize": "14px"}),
-            html.Span(f"  (p\u2092 = {albedo})",
-                       className="subtext",
-                       style={"fontSize": "11px", "marginLeft": "6px"}),
-        ])
-        return result, no_update, None
-    elif "tool-hmag-albedo" in triggered:
-        # Albedo changed — recompute from whichever field has a value
-        if h_val is not None:
-            d_km = 1329 / math.sqrt(albedo) * 10 ** (-h_val / 5)
-            d_m_calc = d_km * 1000
-            if d_m_calc >= 1000:
-                d_str = f"{d_m_calc / 1000:.2f} km ({d_m_calc:,.0f} m)"
-            elif d_m_calc >= 1:
-                d_str = f"{d_m_calc:,.1f} m"
-            else:
-                d_str = f"{d_m_calc:.2f} m"
-            return html.Span([
-                html.Span(f"H = {h_val}  \u2192  ",
-                           style={"fontSize": "12px"}),
-                html.Span(f"D \u2248 {d_str}",
-                           style={"fontWeight": "600", "fontSize": "14px"}),
-                html.Span(f"  (p\u2092 = {albedo})",
-                           className="subtext",
-                           style={"fontSize": "11px", "marginLeft": "6px"}),
-            ]), no_update, no_update
-        elif d_m is not None and d_m > 0:
-            d_km = d_m / 1000
-            h_calc = 5 * math.log10(1329 / (d_km * math.sqrt(albedo)))
-            d_str = f"{d_m:g} m" if d_m >= 1 else f"{d_m:.2f} m"
-            return html.Span([
-                html.Span(f"D = {d_str}  \u2192  ",
-                           style={"fontSize": "12px"}),
-                html.Span(f"H = {h_calc:.2f}",
-                           style={"fontWeight": "600", "fontSize": "14px"}),
-                html.Span(f"  (p\u2092 = {albedo})",
-                           className="subtext",
-                           style={"fontSize": "11px", "marginLeft": "6px"}),
-            ]), no_update, no_update
+            html.Span(f"  (p\u2092 = {label})",
+                       className="subtext", style=_sub),
+        ]), no_update, None
+
+    # Albedo mode/value changed — recompute from whichever field has data
+    if h_val is not None:
+        albedo, label = _get_albedo(h_val)
+        d_m_calc = _hmag_to_diam_m(h_val, albedo)
+        return html.Span([
+            html.Span(f"H = {h_val}  \u2192  ",
+                       style={"fontSize": "12px"}),
+            html.Span(f"D \u2248 {_format_diam(d_m_calc)}",
+                       style={"fontWeight": "600", "fontSize": "14px"}),
+            html.Span(f"  (p\u2092 = {label})",
+                       className="subtext", style=_sub),
+        ]), no_update, no_update
+    elif d_m is not None and d_m > 0:
+        if albedo_mode == "neomod3":
+            h_est = _diam_m_to_hmag(d_m, 0.16)
+            for _ in range(3):
+                p = _neomod3_albedo(h_est)
+                h_est = _diam_m_to_hmag(d_m, p)
+            albedo, label = p, "NEOMOD3"
+        else:
+            albedo, label = _get_albedo()
+        h_calc = _diam_m_to_hmag(d_m, albedo)
+        d_str = f"{d_m:g} m" if d_m >= 1 else f"{d_m:.2f} m"
+        return html.Span([
+            html.Span(f"D = {d_str}  \u2192  ",
+                       style={"fontSize": "12px"}),
+            html.Span(f"H = {h_calc:.2f}",
+                       style={"fontWeight": "600", "fontSize": "14px"}),
+            html.Span(f"  (p\u2092 = {label})",
+                       className="subtext", style=_sub),
+        ]), no_update, no_update
+
     return "", no_update, no_update
 
 
