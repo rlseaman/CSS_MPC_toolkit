@@ -359,12 +359,14 @@ def parse_mpec_content(pre_text, mpec_id="", title="", path=""):
     # Extract MPEC date from header
     date = ""
     header = sections.get("header", "")
-    m = re.search(r"Issued\s+(\d{4}\s+\w+\s+\d{1,2}),?\s*(\d{2}:\d{2})?\s*UT",
-                  header)
+    m = re.search(
+        r"Issued\s+(\d{4})\s+(\w+)\.?\s+(\d{1,2}),?\s*(\d{2}:\d{2})?\s*UT",
+        header)
     if m:
-        date = m.group(1)
-        if m.group(2):
-            date += f", {m.group(2)} UT"
+        year, month_str, day = m.group(1), m.group(2)[:3], m.group(3)
+        date = f"{year} {month_str} {day}"
+        if m.group(4):
+            date += f", {m.group(4)} UT"
 
     mpec_url = f"{_MPC_BASE}{path}" if path else ""
 
@@ -564,17 +566,25 @@ def fetch_mpec_detail(mpec_path, cache_dir=None):
             mpec_id = mpec_m.group(1) if mpec_m else ""
             result = parse_mpec_content(
                 pre_text, mpec_id=mpec_id, title=title_line, path=mpec_path)
-            # Load cached nav links; backfill from web if missing
+            # Load cached nav links; backfill from web if missing.
+            # If the cached nav has no next_path, re-fetch: a newer
+            # MPEC may have been published since the cache was written.
+            _nav_cached_prev = ""
+            _nav_cached_next = ""
             if os.path.exists(nav_path):
                 try:
                     with open(nav_path, "r") as f:
                         lines = f.read().split("\n")
-                    result["prev_path"] = lines[0] if len(lines) > 0 else ""
-                    result["next_path"] = lines[1] if len(lines) > 1 else ""
+                    _nav_cached_prev = lines[0] if len(lines) > 0 else ""
+                    _nav_cached_next = lines[1] if len(lines) > 1 else ""
                 except OSError:
                     pass
+            if _nav_cached_next:
+                # Cache is complete (has both prev and next)
+                result["prev_path"] = _nav_cached_prev
+                result["next_path"] = _nav_cached_next
             else:
-                # Backfill: fetch HTML just for nav links
+                # No next_path cached — re-fetch to check for newer MPEC
                 try:
                     html_text = _fetch_url(f"{_MPC_BASE}{mpec_path}")
                     nav_parser = _MPECPageParser()
@@ -586,7 +596,9 @@ def fetch_mpec_detail(mpec_path, cache_dir=None):
                             f.write(f"{nav_parser.prev_path}\n"
                                     f"{nav_parser.next_path}\n")
                 except Exception:
-                    pass
+                    # Fall back to whatever was cached
+                    result["prev_path"] = _nav_cached_prev
+                    result["next_path"] = _nav_cached_next
             return result
 
     url = f"{_MPC_BASE}{mpec_path}"

@@ -557,11 +557,54 @@
             }
             return;
         }
+        // Random — generate a random MPEC path from entire history
+        if (e.target.closest("#mpec-nav-random")) {
+            // MPEC range: 1993-S01 through current date
+            var now = new Date();
+            var curYear = now.getFullYear();
+            // Half-month letters: A(Jan 1-15)..Y(Dec 16-31), skip I
+            var letters = "ABCDEFGHJKLMNOPQRSTUVWXY";
+            // Current half-month index (0-based)
+            var curMonth = now.getMonth();  // 0-11
+            var curHalf = curMonth * 2 + (now.getDate() > 15 ? 1 : 0);
+            // Total half-months since 1993-S (Sep 16-30 = index 17)
+            var startHM = (1993 - 1993) * 24 + 17;  // = 17
+            var endHM = (curYear - 1993) * 24 + curHalf;
+            var randHM = startHM + Math.floor(Math.random() * (endHM - startHM + 1));
+            var year = 1993 + Math.floor(randHM / 24);
+            var hmIdx = randHM % 24;
+            var halfMonth = letters[hmIdx];
+            // Random number: 1-60 covers most half-months
+            var num = 1 + Math.floor(Math.random() * 60);
+            var id = year + "-" + halfMonth + num;
+            var path = mpecIdToPath(id);
+            if (path) navigateToPath(path);
+            return;
+        }
         // Prev, Next, Earliest — navigate by path
         var navBtn = e.target.closest(
             "#mpec-nav-prev, #mpec-nav-next, #mpec-nav-earliest");
         if (!navBtn) return;
         var path = navBtn.getAttribute("data-path");
+        if (path) navigateToPath(path);
+    });
+
+    // Date picker: navigate to first MPEC of the selected date.
+    // Uses event delegation on the detail panel since the date input
+    // is recreated on each MPEC navigation.
+    document.addEventListener("change", function(e) {
+        if (!e.target || e.target.id !== "mpec-nav-date") return;
+        var date = e.target.value;
+        if (!date) return;
+        var parts = date.split("-");
+        var year = parseInt(parts[0], 10);
+        var month = parseInt(parts[1], 10);
+        var day = parseInt(parts[2], 10);
+        var letters = "ABCDEFGHJKLMNOPQRSTUVWXY";
+        var hmIdx = (month - 1) * 2 + (day > 15 ? 1 : 0);
+        var halfMonth = letters[hmIdx];
+        var id = year + "-" + halfMonth + "1";
+        var path = mpecIdToPath(id);
         if (path) navigateToPath(path);
     });
 })();

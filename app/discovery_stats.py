@@ -38,7 +38,8 @@ from lib.nea_catalog import load_nea_h_lookup
 from lib.identifications import resolve_designation
 from lib.api_clients import (
     fetch_sbdb, fetch_sentry, fetch_neofixer_orbit, fetch_neocc_risk,
-    fetch_neofixer_ephem,
+    fetch_neofixer_ephem, fetch_neofixer_ades, resolve_mps_url,
+    _load_mps_bundles,
 )
 try:
     from lib.api_clients import check_service_health
@@ -144,7 +145,7 @@ PROJECT_COLORS = {
     "Bok NEO Survey": "#dcbeff",
     "Rubin/LSST": "#800000",
     "Other-US": "#9A6324",
-    "Others": "#a9a9a9",
+    "Others": "#d4bc9a",
 }
 
 # H magnitude size classes (standard p_v = 0.14 boundaries)
@@ -1926,6 +1927,8 @@ def _load_all_data():
 
 _loader_thread = threading.Thread(target=_load_all_data, daemon=True)
 _loader_thread.start()
+# Pre-load MPS archive bundle index so first timeline render isn't delayed
+threading.Thread(target=_load_mps_bundles, daemon=True).start()
 
 # Label style helper
 LABEL_STYLE = {"fontFamily": "sans-serif", "fontSize": "13px"}
@@ -2258,6 +2261,12 @@ app.layout = html.Div(
                                                 ),
                                             ],
                                         ),
+                                        dcc.Loading(
+                                            html.Div(id="mpec-obs-timeline"),
+                                            type="circle",
+                                            color="#5b8def",
+                                        ),
+                                        dcc.Store(id="obs-timeline-click-sink"),
                                         dcc.Store(
                                             id="obs-site-selected",
                                             data=_OBS_SITES_DEFAULT,
@@ -4492,7 +4501,9 @@ def _build_mpec_detail(detail, section_state=None, in_recent=True):
     header = detail.get("header", "")
 
     if is_editorial:
-        # Single section with full content, labeled by type
+        # Single section with full content, labeled by type.
+        # Use a distinct id so toggle events don't overwrite section-0
+        # state (which is the Preamble for discovery/recovery MPECs).
         _section_labels = {"dou": "Daily Orbit Update",
                            "retraction": "Retraction",
                            "editorial": "Editorial"}
@@ -4500,7 +4511,7 @@ def _build_mpec_detail(detail, section_state=None, in_recent=True):
         content = header or "(no content)"
         sections.append(_mpec_section(
             section_label, _linkify_preamble(content) if header else content,
-            open_default=True, mono=True, section_id="mpec-section-0",
+            open_default=True, mono=True, section_id="mpec-section-editorial",
             max_height=None))
     else:
         if header:
@@ -4602,7 +4613,7 @@ def _build_mpec_detail(detail, section_state=None, in_recent=True):
     _type_label, _type_badge_style = _MPEC_TYPE_LABELS.get(
         mpec_type, ("Editorial", _EDITORIAL_BADGE))
     line1_children.append(html.Span(
-        _type_label, style={**_SUMMARY_BADGE,
+        _type_label, className="mpec-badge", style={**_SUMMARY_BADGE,
                             "backgroundColor": _type_badge_style["backgroundColor"],
                             "color": _type_badge_style["color"]}))
     if orbit_class:
@@ -4613,7 +4624,7 @@ def _build_mpec_detail(detail, section_state=None, in_recent=True):
                    "verticalAlign": "middle"}))
     if is_pha:
         line1_children.append(html.Span(
-            "PHA", style={**_SUMMARY_BADGE,
+            "PHA", className="mpec-badge", style={**_SUMMARY_BADGE,
                           "backgroundColor": "#c62828",
                           "color": "white"}))
     # Size badges based on H magnitude (NEOs only)
@@ -4623,12 +4634,12 @@ def _build_mpec_detail(detail, section_state=None, in_recent=True):
     h_for_badge = oe.get("H")
     if is_neo and h_for_badge is not None and h_for_badge <= 17.75:
         line1_children.append(html.Span(
-            "1km", style={**_SUMMARY_BADGE,
+            "1km", className="mpec-badge", style={**_SUMMARY_BADGE,
                           "backgroundColor": "#b71c1c",
                           "color": "white"}))
     elif is_neo and h_for_badge is not None and h_for_badge <= 22.0 and not is_pha:
         line1_children.append(html.Span(
-            "140m", style={**_SUMMARY_BADGE,
+            "140m", className="mpec-badge", style={**_SUMMARY_BADGE,
                           "backgroundColor": "#e65100",
                           "color": "white"}))
 
@@ -4652,7 +4663,10 @@ def _build_mpec_detail(detail, section_state=None, in_recent=True):
                        "marginLeft": "auto", "whiteSpace": "nowrap"}))
 
     # Line 2: linked MPEC ID + date + prev/next nav
-    mpec_display = f"MPEC {mpec_id}" if mpec_id else ""
+    # mpec_id may already contain "MPEC " prefix (from web fetch / API)
+    # or may be bare "2026-C105" (from cache). Normalize for display.
+    _bare_id = mpec_id.replace("MPEC ", "", 1).strip() if mpec_id else ""
+    mpec_display = f"MPEC {_bare_id}" if _bare_id else ""
     if mpec_display and mpec_url:
         mpec_id_el = html.A(
             mpec_display, href=mpec_url, target="_blank",
@@ -4664,7 +4678,27 @@ def _build_mpec_detail(detail, section_state=None, in_recent=True):
             style={"fontFamily": "sans-serif", "fontSize": "16px",
                    "color": "var(--subtext-color, #888)"})
 
-    # MPEC navigation row: Prev / jump buttons / Next
+    # Compute ISO date for the date picker display
+    _nav_date_iso = ""
+    if date:
+        try:
+            from datetime import datetime as _dt
+            _nav_date_iso = _dt.strptime(
+                date.split(",")[0].strip(), "%Y %b %d").strftime("%Y-%m-%d")
+        except Exception:
+            pass
+    if not _nav_date_iso and mpec_id:
+        import re as _re2
+        _m = _re2.search(r"(\d{4})-([A-Z])", mpec_id)
+        if _m:
+            _letters = "ABCDEFGHJKLMNOPQRSTUVWXY"
+            _idx = _letters.find(_m.group(2))
+            if _idx >= 0:
+                _mo = _idx // 2 + 1
+                _dy = 1 if _idx % 2 == 0 else 16
+                _nav_date_iso = f"{int(_m.group(1)):04d}-{_mo:02d}-{_dy:02d}"
+
+    # MPEC navigation row: Earliest / Prev / Next / Most Recent … Random
     _EARLIEST_MPEC_PATH = "/mpec/J93/J93S01.html"
     prev_path = detail.get("prev_path", "")
     next_path = detail.get("next_path", "")
@@ -4677,34 +4711,51 @@ def _build_mpec_detail(detail, section_state=None, in_recent=True):
                 "cursor": "pointer"}
     _nav_btn_subtle = {**_nav_btn, "fontSize": "12px", "padding": "3px 10px",
                        "color": "var(--subtext-color, #888)"}
-    _nav_hidden = {**_nav_btn, "visibility": "hidden"}
+    _nav_disabled = {**_nav_btn, "visibility": "hidden",
+                     "padding": "4px 12px"}
     nav_children = [
-        html.Button(
-            "\u2190 Prev", id="mpec-nav-prev",
-            **{"data-path": prev_path or ""},
-            style=_nav_btn if prev_path else _nav_hidden),
+        html.Div(style={"flex": "1"}),
         html.Div(
-            style={"flex": "1", "display": "flex",
-                   "justifyContent": "center", "gap": "6px"},
+            style={"display": "flex", "gap": "2px", "alignItems": "center"},
             children=[
                 html.Button(
                     "\u21e4 Earliest", id="mpec-nav-earliest",
                     **{"data-path": _EARLIEST_MPEC_PATH},
                     style=_nav_btn_subtle),
                 html.Button(
+                    "\u2190 Prev", id="mpec-nav-prev",
+                    **{"data-path": prev_path or ""},
+                    style=_nav_btn if prev_path else _nav_disabled),
+                dcc.Input(
+                    id="mpec-nav-date", type="date",
+                    value=_nav_date_iso,
+                    min="1993-09-16",
+                    style={**_nav_btn, "width": "130px",
+                           "padding": "3px 6px", "fontSize": "12px"},
+                ),
+                html.Button(
+                    "Next \u2192", id="mpec-nav-next",
+                    **{"data-path": next_path or ""},
+                    style=_nav_btn if next_path else _nav_disabled),
+                html.Button(
                     "Most Recent \u21e5", id="mpec-nav-latest",
                     style=_nav_btn_subtle),
             ],
         ),
+        html.Div(style={"flex": "1", "display": "flex",
+                         "justifyContent": "flex-end"}),
         html.Button(
-            "Next \u2192", id="mpec-nav-next",
-            **{"data-path": next_path or ""},
-            style=_nav_btn if next_path else _nav_hidden),
+            "Random", id="mpec-nav-random",
+            style=_nav_btn_subtle),
     ]
     nav_row = html.Div(
         nav_children,
         style={"display": "flex", "alignItems": "center",
-               "marginBottom": "8px"})
+               "marginBottom": "8px",
+               "position": "sticky", "top": "0",
+               "zIndex": "10",
+               "backgroundColor": "var(--paper-bg, white)",
+               "paddingTop": "4px", "paddingBottom": "4px"})
 
     _SUMMARY_HEIGHT = "150px"  # fixed height so all MPECs align
 
@@ -5079,16 +5130,17 @@ def _build_observability_section(packed_desig, designation, site="I52",
         style={"height": f"{chart_height}px"},
     )
 
-    _stats_style = {"fontFamily": "monospace", "fontSize": "12px",
+    _stats_style = {"fontFamily": "sans-serif", "fontSize": "11px",
                     "color": "var(--subtext-color, #888)"}
     stats_line = html.Div(
         style={"display": "flex", "justifyContent": "space-between",
-               "padding": "6px 10px"},
+               "padding": "0 10px 6px"},
         children=[
             html.Span(
                 " \u2502 ".join(stats_parts) if stats_parts else "Below horizon",
                 style=_stats_style),
-            html.Span("from NEOfixer", style=_stats_style),
+            html.Span("powered by NEOfixer",
+                       style={**_stats_style, "fontStyle": "italic"}),
         ],
     )
 
@@ -5720,6 +5772,342 @@ def sync_section_state(json_val, current_state):
 
 
 # ---------------------------------------------------------------------------
+# Observation timeline
+# ---------------------------------------------------------------------------
+
+def _build_obs_timeline(ades_data, designation, chart_height=250):
+    """Build observation history timeline from ADES data.
+
+    Returns html.Details wrapping a Plotly figure + stats line.
+
+    Marker shapes:
+        star     — discovery tracklet
+        diamond  — tracklet published in an MPEC
+        circle   — tracklet published in another document (MPS, etc.)
+        circle-open — tracklet with no resolved publication link
+    """
+    import re as _re
+    tracklets = ades_data.get("tracklets", [])
+
+    if not tracklets:
+        return html.Details(
+            open=False,
+            style={"marginBottom": "12px",
+                   "border": "1px solid var(--hr-color, #ccc)",
+                   "borderRadius": "6px"},
+            children=[
+                html.Summary(
+                    f"Observation history — {designation}",
+                    style={"padding": "10px 14px", "cursor": "pointer",
+                           "fontFamily": "sans-serif", "fontWeight": "600",
+                           "fontSize": "14px",
+                           "backgroundColor": "var(--paper-bg, white)",
+                           "borderRadius": "6px"},
+                ),
+                html.Div("No observation data available.",
+                         style={"padding": "10px", "fontFamily": "sans-serif",
+                                "fontSize": "12px",
+                                "color": "var(--subtext-color, #888)"}),
+            ],
+        )
+
+    # Pre-resolve all unique refs to URLs in one pass
+    all_refs = set()
+    for t in tracklets:
+        all_refs.update(t["refs"])
+    ref_url_cache = {}
+    for ref in all_refs:
+        m = _re.match(r"MPEC (\d{4}-\w+)", ref)
+        if m:
+            ref_url_cache[ref] = mpec_id_to_url(m.group(1))
+            continue
+        m = _re.match(r"MPS\s+(\d+)", ref)
+        if m:
+            ref_url_cache[ref] = resolve_mps_url(m.group(1))
+            continue
+        ref_url_cache[ref] = ""
+
+    def _ref_url(ref):
+        return ref_url_cache.get(ref, "")
+
+    def _is_mpec_ref(ref):
+        return bool(_re.match(r"MPEC \d{4}-\w+", ref))
+
+    # Ensure chart is tall enough for all project lines
+    n_projects = len({t["project"] for t in tracklets})
+    min_height = max(n_projects * 28 + 80, 180)
+    chart_height = max(chart_height, min_height)
+
+    fig = go.Figure()
+    fig.update_layout(
+        height=chart_height,
+        margin=dict(l=10, r=10, t=10, b=30),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="sans-serif", size=11, color="#aaa"),
+        xaxis=dict(
+            type="date",
+            gridcolor="rgba(128,128,128,0.15)",
+            zeroline=False,
+            rangeslider=dict(visible=True, thickness=0.08),
+        ),
+        yaxis=dict(
+            type="category",
+            gridcolor="rgba(128,128,128,0.15)",
+            zeroline=False,
+            autorange="reversed",
+            fixedrange=True,
+        ),
+        showlegend=True,
+        legend=dict(
+            orientation="h", yanchor="bottom", y=1.02,
+            xanchor="left", x=0, font=dict(size=10),
+            itemdoubleclick=False,
+        ),
+        hovermode="closest",
+    )
+
+    # Build traces by project, separating discovery tracklets
+    by_project = {}
+    for t in tracklets:
+        by_project.setdefault(t["project"], []).append(t)
+
+    for proj, trk_list in by_project.items():
+        regular = [t for t in trk_list if not t["is_discovery"]]
+        disc = [t for t in trk_list if t["is_discovery"]]
+        color = PROJECT_COLORS.get(proj, "#d4bc9a")
+
+        for subset, is_disc in [(regular, False), (disc, True)]:
+            if not subset:
+                continue
+            times = [t["first_obs"] for t in subset]
+            projects = [proj] * len(subset)
+            hovers = []
+            urls = []
+            for t in subset:
+                parts = [f"{t['stn']} · {t['first_obs'][:10]}",
+                         f"{t['n_obs']} obs"]
+                if t["mag_median"] is not None:
+                    parts.append(f"mag {t['mag_median']} {t['band']}")
+                if t["refs"]:
+                    parts.append("<br>".join(sorted(t["refs"])))
+                hovers.append("<br>".join(parts))
+                # Link to first MPEC ref, else first MPS ref
+                mpec_refs = [r for r in t["refs"]
+                             if _is_mpec_ref(r)]
+                mps_refs = [r for r in t["refs"]
+                            if _re.match(r"MPS\s", r)]
+                url = ""
+                if mpec_refs:
+                    url = _ref_url(sorted(mpec_refs)[0])
+                elif mps_refs:
+                    url = _ref_url(sorted(mps_refs)[0])
+                urls.append(url)
+
+            # Symbols: star=discovery, diamond=MPEC, circle=other pub,
+            # circle-open=no link
+            if is_disc:
+                symbols = "star"
+            else:
+                symbols = ["diamond" if any(_is_mpec_ref(r)
+                            for r in t["refs"]) else "circle"
+                           for t in subset]
+
+            fig.add_trace(go.Scattergl(
+                x=times, y=projects,
+                mode="markers",
+                marker=dict(
+                    size=12 if is_disc else 9,
+                    symbol=symbols,
+                    color=color,
+                    opacity=0.85,
+                    line=dict(width=1, color="white") if is_disc else {},
+                ),
+                name=proj,
+                text=hovers,
+                hoverinfo="text",
+                customdata=urls,
+                legendgroup=proj,
+                showlegend=(not is_disc),
+            ))
+
+    # Discovery vertical dashed line
+    disc_tracklets = [t for t in tracklets if t["is_discovery"]]
+    if disc_tracklets:
+        disc_time = disc_tracklets[0]["first_obs"]
+        fig.add_vline(
+            x=disc_time, line_dash="dash",
+            line_color="rgba(128,128,128,0.5)", line_width=1,
+        )
+
+    # Deduplicate legend entries (multiple traces per project)
+    seen_legend = set()
+    for trace in fig.data:
+        lg = trace.legendgroup
+        if lg in seen_legend:
+            trace.showlegend = False
+        else:
+            seen_legend.add(lg)
+
+    # Stats line
+    n_tracklets = len(tracklets)
+    stations = {t["stn"] for t in tracklets}
+    first_date = tracklets[0]["first_obs"][:10] if tracklets else ""
+    last_date = tracklets[-1]["first_obs"][:10] if tracklets else ""
+    disc_t = [t for t in tracklets if t["is_discovery"]]
+    disc_info = ""
+    if disc_t:
+        d = disc_t[0]
+        disc_info = f" · disc: {d['first_obs'][:10]} ({d['stn']})"
+
+    stats_text = (f"{n_tracklets} tracklets · {len(stations)} stations · "
+                  f"{first_date} – {last_date}{disc_info}")
+
+    stats_line = html.Div(
+        style={"display": "flex", "justifyContent": "space-between",
+               "fontFamily": "sans-serif", "fontSize": "11px",
+               "color": "var(--subtext-color, #888)", "padding": "0 10px 6px"},
+        children=[
+            html.Span(stats_text),
+            html.Span("powered by NEOfixer",
+                       style={"fontStyle": "italic"}),
+        ],
+    )
+
+    return html.Details(
+        open=True,
+        style={"marginBottom": "12px",
+               "border": "1px solid var(--hr-color, #ccc)",
+               "borderRadius": "6px"},
+        children=[
+            html.Summary(
+                f"Observation history — {designation}",
+                style={"padding": "10px 14px", "cursor": "pointer",
+                       "fontFamily": "sans-serif", "fontWeight": "600",
+                       "fontSize": "14px",
+                       "backgroundColor": "var(--paper-bg, white)",
+                       "borderRadius": "6px"},
+            ),
+            dcc.Graph(id="obs-timeline-graph", figure=fig,
+                      config={"displayModeBar": "hover",
+                              "modeBarButtonsToRemove": [
+                                  "lasso2d", "select2d",
+                                  "toImage", "autoScale2d"],
+                              "displaylogo": False,
+                              "scrollZoom": True,
+                              "doubleClick": "reset"},
+                      style={"padding": "0 4px"}),
+            stats_line,
+        ],
+    )
+
+
+# Clientside callback: click a tracklet marker to open its MPC ref URL
+app.clientside_callback(
+    """
+    function(clickData) {
+        if (clickData && clickData.points && clickData.points.length) {
+            var url = clickData.points[0].customdata;
+            if (url) { window.open(url, "mpc_pub"); }
+        }
+        return null;
+    }
+    """,
+    Output("obs-timeline-click-sink", "data"),
+    Input("obs-timeline-graph", "clickData"),
+    prevent_initial_call=True,
+)
+
+
+@app.callback(
+    Output("mpec-obs-timeline", "children"),
+    Input("mpec-selected-path", "data"),
+    Input("plot-height", "value"),
+)
+def update_obs_timeline(path, plot_height):
+    """Fetch ADES data and render observation timeline."""
+    if not path:
+        return html.Div()
+
+    detail = fetch_mpec_detail(path, cache_dir=_MPEC_CACHE_DIR)
+    if not detail:
+        return html.Div()
+
+    mpec_type = detail.get("type", "discovery")
+    if mpec_type not in ("discovery", "recovery"):
+        return html.Div()
+
+    designation = detail.get("designation", "")
+    if not designation:
+        return html.Div()
+
+    # Handle identification MPECs — extract subject from obs80
+    if " = " in designation:
+        obs_text = detail.get("observations", "")
+        if obs_text:
+            packed_obs = obs_text.strip().split("\n")[0][:12].strip()
+            if packed_obs:
+                try:
+                    designation = unpack_designation(packed_obs)
+                except Exception:
+                    pass
+
+    # Resolve to current identity (permanent number if available)
+    # — mirrors the download-button logic in _build_mpec_detail
+    link_desig = designation
+    try:
+        resolved = resolve_designation(designation)
+        if resolved and resolved["permid"]:
+            link_desig = resolved["permid"]
+        elif resolved and resolved["is_secondary"] and resolved["primary_desig"]:
+            link_desig = resolved["primary_desig"]
+    except Exception:
+        pass
+
+    try:
+        packed = pack_designation(link_desig).strip()
+    except Exception:
+        packed = ""
+    if not packed:
+        try:
+            packed = pack_designation(designation).strip()
+        except Exception:
+            return html.Div()
+    if not packed:
+        return html.Div()
+
+    ades_data = fetch_neofixer_ades(packed, STATION_TO_PROJECT)
+    if not ades_data:
+        # Non-NEO or fetch failed — collapsed section
+        return html.Details(
+            open=False,
+            style={"marginBottom": "12px",
+                   "border": "1px solid var(--hr-color, #ccc)",
+                   "borderRadius": "6px"},
+            children=[
+                html.Summary(
+                    f"Observation history — {designation}",
+                    style={"padding": "10px 14px", "cursor": "pointer",
+                           "fontFamily": "sans-serif", "fontWeight": "600",
+                           "fontSize": "14px",
+                           "backgroundColor": "var(--paper-bg, white)",
+                           "borderRadius": "6px"},
+                ),
+                html.Div("Not available (NEOs only, via NEOfixer).",
+                         style={"padding": "10px", "fontFamily": "sans-serif",
+                                "fontSize": "12px",
+                                "color": "var(--subtext-color, #888)"}),
+            ],
+        )
+
+    chart_h = max(int(plot_height) // 2, 220) if plot_height else 250
+
+    return _build_obs_timeline(
+        ades_data, designation, chart_height=chart_h,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Observability chart callback
 # ---------------------------------------------------------------------------
 
@@ -5732,7 +6120,7 @@ def _obs_details_wrapper(site, designation, content, open_default=True):
                "borderRadius": "6px"},
         children=[
             html.Summary(
-                f"Short term observability \u2014 {site} ({designation})",
+                f"Current observability \u2014 {site} ({designation})",
                 style={"padding": "10px 14px", "cursor": "pointer",
                        "fontFamily": "sans-serif", "fontWeight": "600",
                        "fontSize": "14px",
