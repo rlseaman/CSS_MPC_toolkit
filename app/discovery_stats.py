@@ -3313,14 +3313,14 @@ app.layout = html.Div(
                                             ],
                                         )],
                                         output_id="tool-class-output",
-                                        info="JPL/CNEOS dynamical boundaries: "
+                                        info="MPC orbit types: "
                                              "Atira (a<1, Q<0.983), "
                                              "Aten (a<1, Q\u22650.983), "
-                                             "Apollo (a\u22651, q\u22641.017)"
-                                             ", Amor (a\u22651, 1.017<q\u22641.3)"
-                                             ", Mars-crossing, Hungaria, MBA"
-                                             ", Hilda, Jupiter Trojan, "
-                                             "Centaur, TNO. "
+                                             "Apollo (a\u22651, q<1.017)"
+                                             ", Amor (a\u22651, 1.017\u2264q<1.3)"
+                                             ", Mars Crosser, Main Belt"
+                                             ", Jupiter Trojan, Jupiter "
+                                             "Coupled (T\u2c7c), Centaur, TNO. "
                                              "q is derived from a,e "
                                              "if not entered.",
                                     ),

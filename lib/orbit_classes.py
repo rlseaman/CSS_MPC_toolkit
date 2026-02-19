@@ -12,23 +12,38 @@ Element set notes:
     are populated for only ~43% of objects.  Use q_e_to_a() or the DERIVED_COLUMNS
     in lib/orbits.py to compute Keplerian elements when needed.
 
-Reference boundaries (JPL/CNEOS, confirmed against mpc_orbits data):
-    Atira (IEO): a < 1.0 AU, Q < 0.983 AU  (aphelion inside Earth perihelion)
-    Aten:        a < 1.0 AU, Q >= 0.983 AU  (Earth-crossing, a < 1)
-    Apollo:      a >= 1.0 AU, q <= 1.017 AU (Earth-crossing, a >= 1)
-    Amor:        a >= 1.0 AU, 1.017 < q <= 1.3 AU
-    Mars-crossing: 1.3 <= q < 1.666 AU (approximate)
-    Main Belt: 2.0 < a < 3.3 AU (approximate)
+MPC orbit_type_int mapping
+(source: https://www.minorplanetcenter.net/mpcops/documentation/orbit-types/
+ verified against mpc_orbits element distributions, Feb 2026):
 
-MPC orbit_type_int mapping (verified Feb 2026):
-    0=Atira/IEO, 1=Aten, 2=Apollo, 3=Amor, 10=Mars-X, 11=MB,
-    12=Hungaria, 19=JT, 20=Dual, 21=Centaur, 22=TNO, 23=SDO, 30=Comet
+    Code  Name              Criteria
+    ----  ----------------  --------------------------------------------------
+    0     Atira (IEO)       a < 1.0, Q < 0.983
+    1     Aten              a < 1.0, Q >= 0.983
+    2     Apollo            a >= 1.0, q < 1.017
+    3     Amor              a >= 1.0, 1.017 <= q < 1.3
+    9     Inner Other       catch-all inner region (none currently in DB)
+    10    Mars Crosser      1 <= a < 3.2, 1.3 < q < 1.666
+    11    Main Belt         1 <= a < 3.27831, i < 75
+    12    Jupiter Trojan    4.8 < a < 5.4, e < 0.3
+    19    Middle Other      a < a_Jupiter, not fitting other middle types
+    20    Jupiter Coupled   a >= 1, 2 < T_J < 3
+    21    Neptune Trojan    29.8 < a < 30.4
+    22    Centaur           a_Jupiter <= a < a_Neptune
+    23    TNO               a >= a_Neptune
+    30    Hyperbolic        e > 1
+    31    Parabolic         e = 1
+    99    Other (Unusual)   classification failure
 """
 
 import math
 
-# Jupiter's semi-major axis (AU) for Tisserand parameter
+# Planetary semi-major axes (AU)
 A_JUPITER = 5.2026
+A_NEPTUNE = 30.0690
+
+# Main Belt outer boundary: 2:1 mean-motion resonance with Jupiter
+A_MB_OUTER = 3.27831
 
 
 # ---------------------------------------------------------------------------
@@ -36,22 +51,23 @@ A_JUPITER = 5.2026
 # ---------------------------------------------------------------------------
 
 ORBIT_TYPES = {
-    0:    ("Atira",   "Atira",                    "#e6194b"),
-    1:    ("Aten",    "Aten",                     "#d62728"),
-    2:    ("Apollo",  "Apollo",                   "#f58231"),
-    3:    ("Amor",    "Amor",                     "#ffe119"),
-    10:   ("Mars-X",  "Mars-crossing",            "#3cb44b"),
-    11:   ("MB",      "Main Belt",                "#4363d8"),
-    12:   ("Hungaria","Hungaria",                 "#42d4f4"),
-    13:   ("Phocaea", "Phocaea",                  "#469990"),
-    14:   ("Hilda",   "Hilda",                    "#aaffc3"),
-    19:   ("JT",      "Jupiter Trojan",           "#9A6324"),
-    20:   ("Dual",    "Dual-status (NEO/comet)",  "#800000"),
-    21:   ("Centaur", "Centaur",                  "#808000"),
-    22:   ("TNO",     "Trans-Neptunian Object",   "#000075"),
-    23:   ("SDO",     "Scattered Disk Object",    "#a9a9a9"),
-    30:   ("Comet",   "Comet-like",               "#f032e6"),
-    None: ("Unclass", "Unclassified",             "#bfbfbf"),
+    0:    ("Atira",    "Atira",                    "#e6194b"),
+    1:    ("Aten",     "Aten",                     "#d62728"),
+    2:    ("Apollo",   "Apollo",                   "#f58231"),
+    3:    ("Amor",     "Amor",                     "#ffe119"),
+    9:    ("InOther",  "Inner Other",              "#bcbd22"),
+    10:   ("Mars-X",   "Mars Crosser",             "#3cb44b"),
+    11:   ("MB",       "Main Belt",                "#4363d8"),
+    12:   ("JT",       "Jupiter Trojan",           "#9A6324"),
+    19:   ("MidOther", "Middle Other",             "#469990"),
+    20:   ("JupCoup",  "Jupiter Coupled",          "#800000"),
+    21:   ("NepTr",    "Neptune Trojan",           "#17becf"),
+    22:   ("Centaur",  "Centaur",                  "#808000"),
+    23:   ("TNO",      "TNO",                      "#000075"),
+    30:   ("Hyper",    "Hyperbolic",               "#f032e6"),
+    31:   ("Para",     "Parabolic",                "#e377c2"),
+    99:   ("Other",    "Other (Unusual)",          "#a9a9a9"),
+    None: ("Unclass",  "Unclassified",             "#bfbfbf"),
 }
 
 
@@ -80,7 +96,7 @@ def color_map():
 
 def category_order():
     """Return list of long_name values in canonical display order."""
-    order = [0, 1, 2, 3, 10, 11, 12, 13, 14, 19, 20, 21, 22, 23, 30, None]
+    order = [0, 1, 2, 3, 9, 10, 11, 12, 19, 20, 21, 22, 23, 30, 31, 99, None]
     return [ORBIT_TYPES[k][1] for k in order if k in ORBIT_TYPES]
 
 
@@ -171,11 +187,23 @@ def tisserand_jupiter(a, e, i_deg):
 
 def classify_from_elements(a, e, i_deg, q):
     """
-    Recover orbit classification from orbital elements.
+    Classify an orbit from orbital elements using MPC orbit type definitions.
 
-    Uses standard dynamical boundaries to assign an orbit_type_int for
-    objects where the database value is NULL.  Returns the orbit_type_int
-    that would be assigned, or None if classification is ambiguous.
+    Implements the full MPC classification scheme documented at:
+    https://www.minorplanetcenter.net/mpcops/documentation/orbit-types/
+
+    Classification priority order (geometric types before Tisserand):
+        1. Hyperbolic / Parabolic (e >= 1)
+        2. NEO subtypes: Atira, Aten, Apollo, Amor
+        3. Mars Crosser
+        4. Main Belt (geometric)
+        5. Jupiter Trojan (geometric)
+        6. Neptune Trojan (geometric)
+        7. Jupiter Coupled (Tisserand: 2 < T_J < 3, catch-all)
+        8. Centaur
+        9. TNO
+        10. Middle Other (a < a_Jupiter catch-all)
+        11. Inner Other (inner region catch-all)
 
     Parameters
     ----------
@@ -183,64 +211,83 @@ def classify_from_elements(a, e, i_deg, q):
         Semi-major axis in AU.
     e : float
         Eccentricity.
-    i_deg : float
-        Inclination in degrees.
+    i_deg : float or None
+        Inclination in degrees.  Required for Jupiter Coupled (type 20)
+        and Main Belt (type 11) classification.
     q : float
         Perihelion distance in AU.
 
     Returns
     -------
     int or None
-        The inferred orbit_type_int.
+        The inferred orbit_type_int, or None if inputs are insufficient.
     """
-    if a is None or e is None or q is None:
+    if e is None or q is None:
         return None
+
+    # --- Hyperbolic / Parabolic ---
+    if e > 1.0:
+        return 30  # Hyperbolic
+    if e == 1.0:
+        return 31  # Parabolic
+
+    # Need a for all remaining classifications
+    if a is None:
+        if e < 1.0:
+            a = q / (1.0 - e)
+        else:
+            return None
 
     # Aphelion
     Q = a * (1.0 + e)
 
-    # NEO subtypes (q < 1.3 AU or Q < 0.983)
+    # --- NEO subtypes (q < 1.3 AU or Q < 0.983) ---
     if a < 1.0 and Q < 0.983:
         return 0   # Atira (IEO)
     if a < 1.0 and Q >= 0.983:
         return 1   # Aten
-    if a >= 1.0 and q <= 1.017:
+    if a >= 1.0 and q < 1.017:
         return 2   # Apollo
-    if 1.017 < q < 1.3:
+    if a >= 1.0 and 1.017 <= q < 1.3:
         return 3   # Amor
 
-    # Mars-crossing (approximate)
-    if 1.3 <= q < 1.666:
-        return 10  # Mars-crossing
+    # --- Mars Crosser: 1 <= a < 3.2, 1.3 < q < 1.666 ---
+    if 1.0 <= a < 3.2 and 1.3 < q < 1.666:
+        return 10  # Mars Crosser
 
-    # Compute Tisserand for comet discrimination
-    if i_deg is not None:
-        tj = tisserand_jupiter(a, e, i_deg)
-    else:
-        tj = None
-
-    # Main Belt and neighbors
-    if 1.78 <= a <= 2.0 and e < 0.18 and (i_deg is not None and 16 <= i_deg <= 34):
-        return 12  # Hungaria
-    if 2.0 < a < 3.3 and e < 0.4:
+    # --- Main Belt: 1 <= a < 3.27831, i < 75 ---
+    # Checked before Jupiter Coupled: ~5K MBAs have 2 < T_J < 3
+    if 1.0 <= a < A_MB_OUTER and (i_deg is not None and i_deg < 75.0):
         return 11  # Main Belt
-    if 3.7 < a < 4.1 and e < 0.3:
-        return 14  # Hilda
 
-    # Jupiter Trojans (near 5.2 AU, moderate e)
-    if 4.6 < a < 5.5 and e < 0.3:
-        return 19  # Jupiter Trojan
+    # --- Jupiter Trojan: 4.8 < a < 5.4, e < 0.3 ---
+    # Checked before Jupiter Coupled: all JTs have 2 < T_J < 3
+    if 4.8 < a < 5.4 and e < 0.3:
+        return 12  # Jupiter Trojan
 
-    # Distant objects
-    if a > 30:
-        if e > 0.2:
-            return 23  # SDO
-        return 22  # TNO
-    if 5.5 < a <= 30:
-        return 21  # Centaur
+    # --- Neptune Trojan: 29.8 < a < 30.4 ---
+    # Checked before Centaur/TNO: straddles a_Neptune boundary
+    if 29.8 < a < 30.4:
+        return 21  # Neptune Trojan
 
-    # Comet-like (high eccentricity, low Tisserand)
-    if tj is not None and tj < 2.0 and e > 0.9:
-        return 30  # Comet-like
+    # --- Jupiter Coupled: a >= 1, 2 < T_J < 3 (requires inclination) ---
+    # Checked after geometric types (MB, JT, NepTr all have overlapping T_J)
+    if i_deg is not None and a > 0:
+        tj = tisserand_jupiter(a, e, i_deg)
+        if a >= 1.0 and 2.0 < tj < 3.0:
+            return 20  # Jupiter Coupled
 
-    return None
+    # --- Centaur: a_Jupiter <= a < a_Neptune ---
+    if A_JUPITER <= a < A_NEPTUNE:
+        return 22  # Centaur
+
+    # --- TNO: a >= a_Neptune ---
+    if a >= A_NEPTUNE:
+        return 23  # TNO
+
+    # --- Middle Other: a < a_Jupiter, doesn't fit above ---
+    if a < A_JUPITER:
+        return 19  # Middle Other
+
+    # --- Inner Other: catch-all ---
+    return 9   # Inner Other

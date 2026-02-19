@@ -440,96 +440,17 @@ COMMENT ON FUNCTION css_utilities.parse_obs80(text) IS
 
 
 -- ===========================================================================
--- Orbit classification from elements (JPL/CNEOS boundaries)
+-- Orbit classification from elements
 -- ===========================================================================
 --
--- Classifies an orbit into MPC orbit_type_int codes using the JPL/CNEOS
--- dynamical boundaries.  Confirmed to match mpc_orbits.orbit_type_int
--- values (validated Feb 2026).
+-- Full MPC orbit classification scheme.
+-- Source: https://www.minorplanetcenter.net/mpcops/documentation/orbit-types/
+-- Validated against mpc_orbits element distributions, Feb 2026.
 --
--- NEO boundaries (from https://cneos.jpl.nasa.gov/about/neo_groups.html):
---   Atira (IEO):  a < 1.0 AU, Q < 0.983 AU   (Earth perihelion)
---   Aten:         a < 1.0 AU, Q >= 0.983 AU
---   Apollo:       a >= 1.0 AU, q <= 1.017 AU   (Earth aphelion)
---   Amor:         a >= 1.0 AU, 1.017 < q <= 1.3 AU
---
--- Returns orbit_type_int:
---   0=Atira, 1=Aten, 2=Apollo, 3=Amor, 10=Mars-crossing,
---   NULL if unclassifiable or input is NULL/non-elliptical.
---
--- Usage:
---   SELECT css_utilities.classify_orbit(q, e, i);
---   -- Uses q and e to derive a = q/(1-e) and Q = q(1+e)/(1-e)
+-- See sql/install_classify_orbit.sql for standalone install script.
+-- The functions below are identical to those in the install script.
 -- ===========================================================================
 
-CREATE OR REPLACE FUNCTION css_utilities.classify_orbit(
-    p_q double precision,
-    p_e double precision,
-    p_i double precision DEFAULT NULL
-)
-RETURNS integer
-LANGUAGE sql IMMUTABLE PARALLEL SAFE
-AS $$
-    SELECT CASE
-        -- NULL or non-elliptical: cannot classify
-        WHEN p_q IS NULL OR p_e IS NULL OR p_e >= 1.0 THEN NULL
-
-        -- Derive: a = q/(1-e), Q = a*(1+e) = q*(1+e)/(1-e)
-        -- NEO subtypes
-        WHEN p_q / (1.0 - p_e) < 1.0
-             AND p_q * (1.0 + p_e) / (1.0 - p_e) < 0.983
-            THEN 0   -- Atira (IEO)
-
-        WHEN p_q / (1.0 - p_e) < 1.0
-            THEN 1   -- Aten
-
-        WHEN p_q <= 1.017
-            THEN 2   -- Apollo
-
-        WHEN p_q <= 1.3
-            THEN 3   -- Amor
-
-        -- Mars-crossing (approximate)
-        WHEN p_q < 1.666
-            THEN 10  -- Mars-crossing
-
-        ELSE NULL    -- outer solar system; extend as needed
-    END
-$$;
-
-COMMENT ON FUNCTION css_utilities.classify_orbit(double precision, double precision, double precision) IS
-    'Classify orbit from elements (q, e, i) into MPC orbit_type_int codes using JPL/CNEOS boundaries. Returns 0=Atira, 1=Aten, 2=Apollo, 3=Amor, 10=Mars-X, NULL=unclassifiable.';
-
-
--- ---------------------------------------------------------------------------
--- Convenience: classify and return text label
--- ---------------------------------------------------------------------------
-
-CREATE OR REPLACE FUNCTION css_utilities.classify_orbit_label(
-    p_q double precision,
-    p_e double precision,
-    p_i double precision DEFAULT NULL
-)
-RETURNS text
-LANGUAGE sql IMMUTABLE PARALLEL SAFE
-AS $$
-    SELECT CASE css_utilities.classify_orbit(p_q, p_e, p_i)
-        WHEN 0  THEN 'Atira'
-        WHEN 1  THEN 'Aten'
-        WHEN 2  THEN 'Apollo'
-        WHEN 3  THEN 'Amor'
-        WHEN 10 THEN 'Mars-crossing'
-        ELSE NULL
-    END
-$$;
-
-COMMENT ON FUNCTION css_utilities.classify_orbit_label(double precision, double precision, double precision) IS
-    'Classify orbit from elements (q, e, i) and return text label (Atira/Aten/Apollo/Amor/Mars-crossing).';
-
-
--- Test orbit classification
--- SELECT css_utilities.classify_orbit(0.502, 0.322, NULL);  -- -> 0 (Atira)
--- SELECT css_utilities.classify_orbit(0.464, 0.450, NULL);  -- -> 1 (Aten)
--- SELECT css_utilities.classify_orbit(1.017, 0.651, NULL);  -- -> 2 (Apollo)
--- SELECT css_utilities.classify_orbit(1.018, 0.491, NULL);  -- -> 3 (Amor)
--- SELECT css_utilities.classify_orbit_label(0.949, 0.026, NULL);  -- -> 'Aten' (Q=0.999, borderline)
+-- (classify_orbit and classify_orbit_label are installed via
+--  sql/install_classify_orbit.sql — see that file for full source.
+--  Run:  psql -h $PGHOST -U postgres mpc_sbn -f sql/install_classify_orbit.sql)

@@ -82,7 +82,8 @@ encode the same information.  Consistency between them has not been verified.
 ### 5. No Reference Tables for Integer Codes
 
 `orbit_type_int` in mpc_orbits and `object_type` in primary_objects are bare
-integers with no lookup table.  Known mappings (from external documentation):
+integers with no lookup table.  Official MPC mapping confirmed Feb 2026:
+(source: https://www.minorplanetcenter.net/mpcops/documentation/orbit-types/)
 
 **mpc_orbits.orbit_type_int:**
 
@@ -92,14 +93,19 @@ integers with no lookup table.  Known mappings (from external documentation):
 | 1 | Aten | 766 |
 | 2 | Apollo | 4,690 |
 | 3 | Amor | 3,268 |
-| 10 | Mars-crossing | 12,457 |
-| 11 | Main Belt | 949,076 |
-| 12 | Hungaria | 12,845 |
-| 19 | Jupiter Trojan | 7,965 |
-| 20 | Dual-status (NEO/comet) | 2,454 |
-| 21-23 | Centaur / TNO / SDO | 2,115 |
-| 30 | Comet-like | 37 |
-| NULL | **No classification** | **529,661 (35%)** |
+| 9 | Inner Other | 0 |
+| 10 | Mars Crosser | 12,459 |
+| 11 | Main Belt | 949,427 |
+| 12 | Jupiter Trojan | 12,845 |
+| 19 | Middle Other | 7,968 |
+| 20 | Jupiter Coupled (2 < T_J < 3) | 2,455 |
+| 21 | Neptune Trojan | 18 |
+| 22 | Centaur | 264 |
+| 23 | TNO | 1,833 |
+| 30 | Hyperbolic (e > 1) | 37 |
+| 31 | Parabolic (e = 1) | 0 |
+| 99 | Other (Unusual) | 0 |
+| NULL | **No classification** | **~521K (35%)** |
 
 **primary_objects.object_type:**
 
