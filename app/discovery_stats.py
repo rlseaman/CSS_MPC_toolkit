@@ -5019,6 +5019,7 @@ def _build_mpec_detail(detail, section_state=None, in_recent=True):
 
     # External links — use resolved designation for better lookup on
     # external services (permanent number or current primary designation)
+    from urllib.parse import quote as _urlquote
     links = []
     link_desig = designation  # default to MPEC designation
     if resolved and resolved["permid"]:
@@ -5033,28 +5034,39 @@ def _build_mpec_detail(detail, section_state=None, in_recent=True):
             link_packed = packed  # fall back to original
     if not link_packed:
         link_packed = packed
-    link_nospace = link_desig.replace(" ", "") if link_desig else ""
-    if link_packed:
+    # For interstellar/comet designations, strip name after "/" for MPC
+    # lookups (e.g. "3I/ATLAS" -> "3I", "C/2025 A1 (MAPS)" -> "C/2025 A1")
+    mpc_desig = link_desig
+    if re.match(r"^\d+I/", link_desig):
+        mpc_desig = link_desig.split("/")[0]  # "3I"
+    elif re.match(r"^[CPD]/", link_desig):
+        mpc_desig = re.sub(r"\s*\(.*?\)\s*$", "", link_desig)  # strip "(name)"
+    link_encoded = _urlquote(link_desig, safe="")
+    # NEOfixer and NEOCC only work for NEOs with packed designations
+    if link_packed and link_packed != link_desig:
+        # Has a real packed form — likely an asteroid
         links.append(html.A(
             "NEOfixer",
             href=f"https://neofixer.arizona.edu/site/500/{link_packed}",
             target="_blank", style=_link_btn_style()))
+    if link_desig:
         links.append(html.A(
             "JPL SBDB",
-            href=f"https://ssd.jpl.nasa.gov/tools/sbdb_lookup.html#/?sstr={link_packed}",
+            href=f"https://ssd.jpl.nasa.gov/tools/sbdb_lookup.html#/?sstr={link_encoded}",
             target="_blank", style=_link_btn_style()))
-        if link_nospace:
+        link_nospace = link_desig.replace(" ", "")
+        if link_packed and link_packed != link_desig:
             links.append(html.A(
                 "NEOCC",
                 href=f"https://neo.ssa.esa.int/search-for-asteroids?sum=1&des={link_nospace}",
                 target="_blank", style=_link_btn_style()))
         links.append(html.A(
             "MPC Explorer",
-            href=f"https://data.minorplanetcenter.net/explorer/?tab=Designated&search={link_desig}",
+            href=f"https://data.minorplanetcenter.net/explorer/?tab=Designated&search={_urlquote(mpc_desig, safe='')}",
             target="_blank", style=_link_btn_style()))
         links.append(html.A(
             "MPC DB",
-            href=f"https://www.minorplanetcenter.net/db_search/show_object?utf8=✓&object_id={link_desig}",
+            href=f"https://www.minorplanetcenter.net/db_search/show_object?utf8=✓&object_id={_urlquote(mpc_desig, safe='')}",
             target="_blank", style=_link_btn_style()))
     if mpec_url:
         links.append(html.A("MPEC", href=mpec_url, target="_blank",
