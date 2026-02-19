@@ -3374,6 +3374,98 @@ app.layout = html.Div(
                                              "or MPC packed date (K24CG). "
                                              "Shows ISO, JD, and MJD.",
                                     ),
+                                    # ── 9. Airmass ↔ altitude ──
+                                    _tool_card(
+                                        "Airmass \u2194 Altitude",
+                                        "Convert between airmass and "
+                                        "elevation.",
+                                        [html.Div(
+                                            style={"display": "flex",
+                                                   "gap": "8px",
+                                                   "flexWrap": "wrap",
+                                                   "alignItems": "center"},
+                                            children=[
+                                                dcc.Input(
+                                                    id="tool-airmass-x",
+                                                    type="number",
+                                                    placeholder="Airmass",
+                                                    debounce=True,
+                                                    style={
+                                                        **_tool_input_style(),
+                                                        "width": "100px"},
+                                                ),
+                                                dcc.Input(
+                                                    id="tool-airmass-alt",
+                                                    type="number",
+                                                    placeholder="Alt (\u00b0)",
+                                                    debounce=True,
+                                                    style={
+                                                        **_tool_input_style(),
+                                                        "width": "100px"},
+                                                ),
+                                            ],
+                                        )],
+                                        output_id="tool-airmass-output",
+                                        info="X = 1/sin(alt) "
+                                             "(plane-parallel). "
+                                             "Airmass 1.0 = zenith (90\u00b0"
+                                             "), 1.41 = 45\u00b0, "
+                                             "2.0 = 30\u00b0, "
+                                             "3.0 \u2248 19.5\u00b0. "
+                                             "Kasten & Young (1989) "
+                                             "refraction-corrected formula "
+                                             "used for low altitudes.",
+                                    ),
+                                    # ── 10. CLN + offset ↔ UTC ──
+                                    _tool_card(
+                                        "CLN \u2194 UTC",
+                                        "Convert between Catalina "
+                                        "Lunation Number and UTC date.",
+                                        [html.Div(
+                                            style={"display": "flex",
+                                                   "gap": "8px",
+                                                   "flexWrap": "wrap",
+                                                   "alignItems": "center"},
+                                            children=[
+                                                dcc.Input(
+                                                    id="tool-cln-date",
+                                                    type="text",
+                                                    placeholder="CLN or "
+                                                        "UTC datetime",
+                                                    debounce=True,
+                                                    style={
+                                                        **_tool_input_style(),
+                                                        "width": "200px"},
+                                                ),
+                                                dcc.Input(
+                                                    id="tool-cln-offset",
+                                                    type="number",
+                                                    placeholder="\u0394 days",
+                                                    debounce=True,
+                                                    style={
+                                                        **_tool_input_style(),
+                                                        "width": "90px"},
+                                                ),
+                                                # hidden — no longer needed
+                                                dcc.Input(
+                                                    id="tool-cln-tz",
+                                                    type="hidden",
+                                                    value=7,
+                                                ),
+                                            ],
+                                        )],
+                                        output_id="tool-cln-output",
+                                        info="Catalina Lunation Number "
+                                             "(CLN): full moons since "
+                                             "1980-01-02 (CLN 0).\n"
+                                             "Mean synodic month = "
+                                             "29.530589 days.\n"
+                                             "Enter CLN (e.g. 570) with "
+                                             "optional \u0394 days offset "
+                                             "from that full moon.\n"
+                                             "Enter a UTC date/datetime to "
+                                             "get CLN + offset.",
+                                    ),
                                 ],
                             ),
                         ]),
@@ -3610,6 +3702,11 @@ def _get_defaults():
         "tool-class-q": None,
         "tool-obs80-input": "",
         "tool-date-input": "",
+        "tool-airmass-x": None,
+        "tool-airmass-alt": None,
+        "tool-cln-date": "",
+        "tool-cln-offset": None,
+        "tool-cln-tz": 7,
         # Shared
         "group-by": "combined",
         "plot-height": "700",
@@ -3630,7 +3727,9 @@ _TAB_KEYS = {
                    "tool-hmag-albedo", "tool-hmag-albedo-mode",
                    "tool-tj-a", "tool-tj-e", "tool-tj-i",
                    "tool-class-a", "tool-class-e", "tool-class-i",
-                   "tool-class-q", "tool-obs80-input", "tool-date-input"},
+                   "tool-class-q", "tool-obs80-input", "tool-date-input",
+                   "tool-airmass-x", "tool-airmass-alt",
+                   "tool-cln-date", "tool-cln-offset", "tool-cln-tz"},
 }
 _SHARED_KEYS = {"group-by", "plot-height"}
 
@@ -3649,6 +3748,8 @@ _RESET_ORDER = [
     "tool-tj-a", "tool-tj-e", "tool-tj-i",
     "tool-class-a", "tool-class-e", "tool-class-i", "tool-class-q",
     "tool-obs80-input", "tool-date-input",
+    "tool-airmass-x", "tool-airmass-alt",
+    "tool-cln-date", "tool-cln-offset", "tool-cln-tz",
     "group-by", "plot-height",
 ]
 
@@ -7273,6 +7374,174 @@ def tool_date(value):
     return html.Span("Accepts: MJD, JD, ISO date, decimal day "
                       "(2024-12-27.238), MPC packed date (K24CG).",
                       className="subtext", style={"fontSize": "12px"})
+
+
+# ---------------------------------------------------------------------------
+# Tool: Airmass ↔ Altitude
+# ---------------------------------------------------------------------------
+
+@app.callback(
+    Output("tool-airmass-output", "children"),
+    Output("tool-airmass-x", "value", allow_duplicate=True),
+    Output("tool-airmass-alt", "value", allow_duplicate=True),
+    Input("tool-airmass-x", "value"),
+    Input("tool-airmass-alt", "value"),
+    prevent_initial_call=True,
+)
+def tool_airmass(x_val, alt_val):
+    import math
+    triggered = dash.callback_context.triggered[0]["prop_id"]
+
+    _arrow = "  \u2192  "
+    _bold = {"fontWeight": "600", "fontSize": "14px"}
+    _small = {"fontSize": "12px"}
+
+    if "tool-airmass-x" in triggered:
+        if x_val is None or x_val == "":
+            return "", no_update, no_update
+        try:
+            x = float(x_val)
+            if x < 1.0:
+                return html.Span("Airmass must be \u2265 1.0",
+                                  style={"color": "#c0392b",
+                                         "fontSize": "12px"}), \
+                    no_update, no_update
+            alt_deg = math.degrees(math.asin(1.0 / x))
+            msg = html.Span([
+                html.Span(f"X = {x:.3f}", style=_small),
+                html.Span(_arrow, style=_small),
+                html.Span(f"{alt_deg:.2f}\u00b0 altitude", style=_bold),
+            ])
+            return msg, no_update, None
+        except (ValueError, ZeroDivisionError):
+            return html.Span("Invalid airmass",
+                              style={"color": "#c0392b",
+                                     "fontSize": "12px"}), \
+                no_update, no_update
+
+    if "tool-airmass-alt" in triggered:
+        if alt_val is None or alt_val == "":
+            return "", no_update, no_update
+        try:
+            alt = float(alt_val)
+            if alt <= 0 or alt > 90:
+                return html.Span("Altitude must be 0\u00b0 < alt \u2264 90\u00b0",
+                                  style={"color": "#c0392b",
+                                         "fontSize": "12px"}), \
+                    no_update, no_update
+            alt_rad = math.radians(alt)
+            if alt >= 10:
+                x = 1.0 / math.sin(alt_rad)
+            else:
+                # Kasten & Young (1989) for low altitudes
+                x = 1.0 / (math.sin(alt_rad) + 0.50572
+                            * (alt + 6.07995) ** -1.6364)
+            msg = html.Span([
+                html.Span(f"{alt:.2f}\u00b0 altitude", style=_small),
+                html.Span(_arrow, style=_small),
+                html.Span(f"X = {x:.3f}", style=_bold),
+                html.Span(
+                    "  (Kasten & Young)" if alt < 10 else "",
+                    className="subtext",
+                    style={"fontSize": "11px", "marginLeft": "8px"}),
+            ])
+            return msg, None, no_update
+        except ValueError:
+            return html.Span("Invalid altitude",
+                              style={"color": "#c0392b",
+                                     "fontSize": "12px"}), \
+                no_update, no_update
+
+    raise PreventUpdate
+
+
+# ---------------------------------------------------------------------------
+# Tool: CLN ↔ UTC  (Catalina Lunation Number)
+# ---------------------------------------------------------------------------
+# CLN 0 = full moon on 1980-01-02 (UTC).
+# Mean synodic month = 29.530588853 days.
+
+_CLN_EPOCH_JD = 2444240.87639  # JD of 1980-01-02 09:02 UTC (full moon)
+_SYNODIC_MONTH = 29.530588853
+
+@app.callback(
+    Output("tool-cln-output", "children"),
+    Input("tool-cln-date", "value"),
+    Input("tool-cln-offset", "value"),
+    Input("tool-cln-tz", "value"),
+    prevent_initial_call=True,
+)
+def tool_cln(date_str, offset, _tz_unused):
+    from datetime import datetime as _dt, timedelta as _td
+    import re as _re
+    import math
+
+    _arrow = "  \u2192  "
+    _bold = {"fontWeight": "600", "fontSize": "14px"}
+    _small = {"fontSize": "12px"}
+    _sub = {"fontSize": "11px", "marginLeft": "8px"}
+
+    if not date_str or not str(date_str).strip():
+        return ""
+    s = str(date_str).strip()
+    day_offset = float(offset) if offset is not None else 0.0
+
+    # Helper: JD ↔ datetime
+    _J2000 = _dt(2000, 1, 1, 12, 0, 0)  # JD 2451545.0
+
+    def _jd_to_dt(jd):
+        return _J2000 + _td(days=jd - 2451545.0)
+
+    def _dt_to_jd(dt):
+        return (dt - _J2000).total_seconds() / 86400.0 + 2451545.0
+
+    # --- Input is a number → treat as CLN ---
+    try:
+        cln = int(s)
+        # CLN → full moon JD, then apply offset
+        fm_jd = _CLN_EPOCH_JD + cln * _SYNODIC_MONTH
+        target_jd = fm_jd + day_offset
+        dt = _jd_to_dt(target_jd)
+        sign = "+" if day_offset >= 0 else ""
+        offset_part = (f"  \u0394{sign}{day_offset:g} d"
+                       if day_offset != 0 else "")
+        return html.Span([
+            html.Span(f"CLN {cln}{offset_part}", style=_small),
+            html.Span(_arrow, style=_small),
+            html.Span(dt.strftime("%Y-%m-%d %H:%M:%S UT"), style=_bold),
+            html.Span(f"  (full moon JD {fm_jd:.2f})",
+                       className="subtext", style=_sub),
+        ])
+    except ValueError:
+        pass
+
+    # --- Input is a date/datetime → compute CLN + offset ---
+    try:
+        # Try ISO datetime
+        dt = _dt.fromisoformat(
+            s.replace("Z", "").replace("/", "-"))
+    except ValueError:
+        return html.Span(
+            "Enter CLN number (e.g. 570) or UTC date "
+            "(YYYY-MM-DD or YYYY-MM-DD HH:MM:SS).",
+            className="subtext", style={"fontSize": "12px"})
+
+    jd = _dt_to_jd(dt)
+    # Fractional lunations since epoch
+    lunations = (jd - _CLN_EPOCH_JD) / _SYNODIC_MONTH
+    cln = math.floor(lunations)
+    fm_jd = _CLN_EPOCH_JD + cln * _SYNODIC_MONTH
+    delta_days = jd - fm_jd
+    sign = "+" if delta_days >= 0 else ""
+    fm_dt = _jd_to_dt(fm_jd)
+    return html.Span([
+        html.Span(s, style=_small),
+        html.Span(_arrow, style=_small),
+        html.Span(f"CLN {cln}", style=_bold),
+        html.Span(f"  \u0394 = {sign}{delta_days:.4f} d", style=_bold),
+        html.Span(f"  (full moon {fm_dt.strftime('%Y-%m-%d %H:%M')} UT)",
+                   className="subtext", style=_sub),
+    ])
 
 
 # ---------------------------------------------------------------------------
