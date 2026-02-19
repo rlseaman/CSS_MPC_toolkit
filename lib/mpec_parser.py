@@ -308,7 +308,8 @@ def _extract_designation(pre_text):
 
     The designation appears as a centered bold line like **2026 CE3**
     or just as a line with the designation.  Also handles comets like
-    "COMET  C/2026 A1 (MAPS)".
+    "COMET  C/2026 A1 (MAPS)" and interstellar objects like
+    "COMET  3I/ATLAS".
     """
     # Look for **DESIGNATION** pattern (bold markers)
     m = re.search(r"\*\*(\d{4}\s+\w+\d*)\*\*", pre_text)
@@ -322,9 +323,15 @@ def _extract_designation(pre_text):
         m2 = re.match(r"^(\d{4}\s+[A-Z]{1,2}\d*)$", stripped.strip())
         if m2:
             return m2.group(1)
-        # Comet: "COMET  C/2026 A1 (MAPS)"
+        # Comet: "COMET  C/2026 A1 (MAPS)" or "COMET P/2025 B2 (Smith)"
         m2 = re.match(
             r"^(?:COMET\s+)?([CPD]/\d{4}\s+\w+(?:\s+\(.*?\))?)$",
+            stripped.strip())
+        if m2:
+            return m2.group(1).strip()
+        # Interstellar object: "COMET  3I/ATLAS" or "COMET  1I/'Oumuamua"
+        m2 = re.match(
+            r"^(?:COMET\s+)?(\d+I/\S+(?:\s+\(.*?\))?)$",
             stripped.strip())
         if m2:
             return m2.group(1).strip()
