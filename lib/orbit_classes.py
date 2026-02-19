@@ -12,13 +12,17 @@ Element set notes:
     are populated for only ~43% of objects.  Use q_e_to_a() or the DERIVED_COLUMNS
     in lib/orbits.py to compute Keplerian elements when needed.
 
-Reference boundaries:
-    Atira:   Q < 0.983 AU  (aphelion inside Earth's orbit)
-    Aten:    a < 1.0 AU, Q >= 0.983 AU
-    Apollo:  a >= 1.0 AU, q <= 1.017 AU
-    Amor:    1.017 < q < 1.3 AU
+Reference boundaries (JPL/CNEOS, confirmed against mpc_orbits data):
+    Atira (IEO): a < 1.0 AU, Q < 0.983 AU  (aphelion inside Earth perihelion)
+    Aten:        a < 1.0 AU, Q >= 0.983 AU  (Earth-crossing, a < 1)
+    Apollo:      a >= 1.0 AU, q <= 1.017 AU (Earth-crossing, a >= 1)
+    Amor:        a >= 1.0 AU, 1.017 < q <= 1.3 AU
     Mars-crossing: 1.3 <= q < 1.666 AU (approximate)
     Main Belt: 2.0 < a < 3.3 AU (approximate)
+
+MPC orbit_type_int mapping (verified Feb 2026):
+    0=Atira/IEO, 1=Aten, 2=Apollo, 3=Amor, 10=Mars-X, 11=MB,
+    12=Hungaria, 19=JT, 20=Dual, 21=Centaur, 22=TNO, 23=SDO, 30=Comet
 """
 
 import math
@@ -32,11 +36,10 @@ A_JUPITER = 5.2026
 # ---------------------------------------------------------------------------
 
 ORBIT_TYPES = {
-    0:    ("IEO",     "Interior Earth Object",    "#e6194b"),
-    1:    ("Atira",   "Atira",                    "#e6194b"),
+    0:    ("Atira",   "Atira",                    "#e6194b"),
+    1:    ("Aten",    "Aten",                     "#d62728"),
     2:    ("Apollo",  "Apollo",                   "#f58231"),
     3:    ("Amor",    "Amor",                     "#ffe119"),
-    4:    ("Aten",    "Aten",                     "#d62728"),
     10:   ("Mars-X",  "Mars-crossing",            "#3cb44b"),
     11:   ("MB",      "Main Belt",                "#4363d8"),
     12:   ("Hungaria","Hungaria",                 "#42d4f4"),
@@ -77,7 +80,7 @@ def color_map():
 
 def category_order():
     """Return list of long_name values in canonical display order."""
-    order = [0, 1, 4, 2, 3, 10, 11, 12, 13, 14, 19, 20, 21, 22, 23, 30, None]
+    order = [0, 1, 2, 3, 10, 11, 12, 13, 14, 19, 20, 21, 22, 23, 30, None]
     return [ORBIT_TYPES[k][1] for k in order if k in ORBIT_TYPES]
 
 
@@ -197,10 +200,10 @@ def classify_from_elements(a, e, i_deg, q):
     Q = a * (1.0 + e)
 
     # NEO subtypes (q < 1.3 AU or Q < 0.983)
-    if Q < 0.983:
-        return 1   # Atira
+    if a < 1.0 and Q < 0.983:
+        return 0   # Atira (IEO)
     if a < 1.0 and Q >= 0.983:
-        return 4   # Aten
+        return 1   # Aten
     if a >= 1.0 and q <= 1.017:
         return 2   # Apollo
     if 1.017 < q < 1.3:

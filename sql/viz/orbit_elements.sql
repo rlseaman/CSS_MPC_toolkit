@@ -45,7 +45,7 @@ SELECT
             / 5.2026 * (1.0 - e * e), 0))
     AS tisserand_j
 FROM mpc_orbits
--- WHERE orbit_type_int IN (1, 2, 3, 4)   -- NEAs only
+-- WHERE orbit_type_int IN (0, 1, 2, 3)   -- NEAs only (0=Atira,1=Aten,2=Apollo,3=Amor)
 -- AND h BETWEEN 18 AND 30                 -- faint objects
 -- AND earth_moid < 0.05                   -- PHO candidates
 ORDER BY packed_desig

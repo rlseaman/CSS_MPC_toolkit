@@ -3313,14 +3313,15 @@ app.layout = html.Div(
                                             ],
                                         )],
                                         output_id="tool-class-output",
-                                        info="Uses MPC dynamical boundaries "
-                                             "to classify orbits: Atira "
-                                             "(Q<0.983), Aten (a<1, Q>0.983),"
-                                             " Apollo (a\u22651, q\u22641.017)"
-                                             ", Amor (1.017<q\u22641.3), "
-                                             "Mars-crossing, Hungaria, MBA, "
-                                             "Hilda, Jupiter Trojan, Centaur,"
-                                             " TNO. q is derived from a,e "
+                                        info="JPL/CNEOS dynamical boundaries: "
+                                             "Atira (a<1, Q<0.983), "
+                                             "Aten (a<1, Q\u22650.983), "
+                                             "Apollo (a\u22651, q\u22641.017)"
+                                             ", Amor (a\u22651, 1.017<q\u22641.3)"
+                                             ", Mars-crossing, Hungaria, MBA"
+                                             ", Hilda, Jupiter Trojan, "
+                                             "Centaur, TNO. "
+                                             "q is derived from a,e "
                                              "if not entered.",
                                     ),
                                     # ── 7. Parse obs80 line ──
@@ -4779,7 +4780,7 @@ def _build_mpec_list_item(entry, idx):
 
 
 def _classify_orbit(a, e, q, designation=""):
-    """Classify NEO orbit from elements."""
+    """Classify NEO orbit from elements (JPL/CNEOS boundaries)."""
     # Comets don't get asteroid orbit class labels
     if designation and designation.startswith(("C/", "P/", "D/")):
         return "Comet"
@@ -4787,12 +4788,18 @@ def _classify_orbit(a, e, q, designation=""):
         return ""
     if q > 1.3:
         return "non-NEO"
+    # Derive a from q and e if not directly available
+    if a is None and q is not None and e is not None and e < 1.0:
+        a = q / (1.0 - e)
     if a is not None and e is not None:
         Q = a * (1 + e)
         if a < 1.0 and Q < 0.983:
             return "Atira"
         if a < 1.0:
             return "Aten"
+        if q <= 1.017:
+            return "Apollo"
+        return "Amor"
     if q <= 1.017:
         return "Apollo"
     return "Amor"
@@ -4807,6 +4814,48 @@ def _get_orbit_class(oe, detail=None):
     q = oe.get("q")
     desig = detail.get("designation", "") if detail else ""
     return _classify_orbit(a, e, q, designation=desig)
+
+
+def _validate_orbit_class(orbit_class, oe, detail=None):
+    """Validate an orbit class label against JPL boundaries from elements.
+
+    Returns None if consistent or elements are insufficient, or a warning
+    string describing the discrepancy (e.g. "elements give Aten").
+    """
+    _VALIDATABLE = {"Atira", "Aten", "Apollo", "Amor"}
+    if not orbit_class or orbit_class not in _VALIDATABLE:
+        return None
+    if not oe:
+        return None
+    desig = detail.get("designation", "") if detail else ""
+    if desig and desig.startswith(("C/", "P/", "D/")):
+        return None
+    a = oe.get("a")
+    e = oe.get("e")
+    q = oe.get("q")
+    if q is None or e is None:
+        return None
+    # Derive a if not directly available
+    if a is None and e < 1.0:
+        a = q / (1.0 - e)
+    if a is None:
+        return None
+    Q_aph = a * (1.0 + e)
+    # Classify from elements using JPL/CNEOS boundaries
+    if a < 1.0 and Q_aph < 0.983:
+        elem_class = "Atira"
+    elif a < 1.0:
+        elem_class = "Aten"
+    elif q <= 1.017:
+        elem_class = "Apollo"
+    elif q <= 1.3:
+        elem_class = "Amor"
+    else:
+        return None  # non-NEO, can't validate
+    if elem_class != orbit_class:
+        return (f"DB says {orbit_class} but elements give {elem_class} "
+                f"(a={a:.4f}, q={q:.4f}, Q={Q_aph:.4f})")
+    return None
 
 
 def _is_pha(oe, detail=None):
@@ -5026,6 +5075,8 @@ def _build_mpec_detail(detail, section_state=None, in_recent=True):
     orbit_class = _get_orbit_class(oe, detail) if not is_editorial else ""
     if resolved and resolved.get("orbit_class"):
         orbit_class = resolved["orbit_class"]
+    # Validate orbit class against JPL boundaries (silent unless mismatch)
+    orbit_class_warning = _validate_orbit_class(orbit_class, oe, detail) if not is_editorial else None
     is_pha = _is_pha(oe, detail) if not is_editorial else False
     orbit_info = _build_orbit_info_line(oe, detail) if not is_editorial else html.Div()
 
@@ -5164,6 +5215,13 @@ def _build_mpec_detail(detail, section_state=None, in_recent=True):
             style={"fontFamily": "sans-serif", "fontSize": "18px",
                    "fontWeight": "600", "marginLeft": "10px",
                    "verticalAlign": "middle"}))
+    if orbit_class_warning:
+        line1_children.append(html.Span(
+            html.Span("*", style={"cursor": "help"}),
+            title=orbit_class_warning,
+            style={"color": "#e65100", "fontSize": "16px",
+                   "fontWeight": "700", "marginLeft": "2px",
+                   "verticalAlign": "super"}))
     if is_pha:
         line1_children.append(html.Span(
             "PHA", className="mpec-badge", style={**_SUMMARY_BADGE,
@@ -5171,7 +5229,7 @@ def _build_mpec_detail(detail, section_state=None, in_recent=True):
                           "color": "white"}))
     # Size badges based on H magnitude (NEOs only)
     _NEO_CLASSES = {"Atira", "Aten", "Apollo", "Amor",
-                    "Interior Earth Object", "Dual-status (NEO/comet)"}
+                    "Dual-status (NEO/comet)"}
     is_neo = orbit_class in _NEO_CLASSES
     h_for_badge = oe.get("H")
     if is_neo and h_for_badge is not None and h_for_badge <= 17.75:

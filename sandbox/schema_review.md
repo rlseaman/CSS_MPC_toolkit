@@ -86,19 +86,19 @@ integers with no lookup table.  Known mappings (from external documentation):
 
 **mpc_orbits.orbit_type_int:**
 
-| Code | Type | Count |
+| Code | Type | Count (Feb 2026) |
 |------|------|-------|
-| 0 | Unclassified/Atira | 20 |
-| 1 | Atira | 743 |
-| 2 | Apollo | 4,578 |
-| 3 | Aten | 3,191 |
-| 10 | Mars-crossing | 12,287 |
-| 11 | Main Belt | 935,419 |
-| 12 | Hungaria (?) | 12,793 |
-| 19 | Hilda (?) | 7,822 |
-| 20 | Jupiter Trojan (?) | 2,427 |
-| 21-23 | Distant objects (?) | 1,869 |
-| 30 | Comet-like (?) | 38 |
+| 0 | Atira (IEO) | 20 |
+| 1 | Aten | 766 |
+| 2 | Apollo | 4,690 |
+| 3 | Amor | 3,268 |
+| 10 | Mars-crossing | 12,457 |
+| 11 | Main Belt | 949,076 |
+| 12 | Hungaria | 12,845 |
+| 19 | Jupiter Trojan | 7,965 |
+| 20 | Dual-status (NEO/comet) | 2,454 |
+| 21-23 | Centaur / TNO / SDO | 2,115 |
+| 30 | Comet-like | 37 |
 | NULL | **No classification** | **529,661 (35%)** |
 
 **primary_objects.object_type:**
