@@ -4601,7 +4601,7 @@ def _mpec_badge(mpec_type):
     return html.Span(label, className="mpec-badge", style=style)
 
 
-def _get_cached_summary(mpec_path):
+def _get_cached_summary(mpec_path, title=""):
     """Extract orbit summary from a cached MPEC (fast, disk-only)."""
     if not mpec_path:
         return None
@@ -4616,6 +4616,10 @@ def _get_cached_summary(mpec_path):
         return None
     import re as _re
     summary = {}
+
+    # Classify MPEC type from cached content
+    from lib.mpec_parser import classify_mpec
+    summary["type"] = classify_mpec(title, text)
     # Extract UTC time from MPEC header: "Issued YYYY Month DD, HH:MM UT"
     m_time = _re.search(r"Issued\s+\d{4}\s+\w+\s+\d{1,2},\s*(\d{2}:\d{2})\s*UT",
                          text)
@@ -4656,18 +4660,21 @@ def _get_cached_summary(mpec_path):
     m = _re.search(r"H\s+([\d.]+)\s+G\s+([\d.]+)", oe_text)
     if m:
         summary["H"] = float(m.group(1))
-    # a, e from dedicated element lines (start-of-line)
+    # a, e, q from dedicated element lines (start-of-line)
     m = _re.search(r"^a\s+([\d.]+)", oe_text, _re.MULTILINE)
     if m:
         summary["a"] = float(m.group(1))
     m = _re.search(r"^e\s+([\d.]+)", oe_text, _re.MULTILINE)
     if m:
         summary["e"] = float(m.group(1))
+    m = _re.search(r"^q\s+([\d.]+)", oe_text, _re.MULTILINE)
+    if m:
+        summary["q"] = float(m.group(1))
     m = _re.search(r"Incl\.\s+([\d.]+)", oe_text)
     if m:
         summary["i"] = float(m.group(1))
-    # Derive q
-    if "a" in summary and "e" in summary:
+    # Derive q from a and e if not directly present
+    if "q" not in summary and "a" in summary and "e" in summary:
         summary["q"] = summary["a"] * (1 - summary["e"])
     # Extract designation for orbit classification
     from lib.mpec_parser import _extract_designation
@@ -4696,7 +4703,7 @@ def _get_cached_summary(mpec_path):
 
 def _build_mpec_list_item(entry, idx):
     """Build a clickable MPEC list card."""
-    summary = _get_cached_summary(entry.get("path"))
+    summary = _get_cached_summary(entry.get("path"), title=entry.get("title", ""))
     # Build summary annotation line
     annot_parts = []
     _sub = {"fontSize": "11px", "color": "var(--subtext-color, #888)",
@@ -4743,7 +4750,9 @@ def _build_mpec_list_item(entry, idx):
                    "alignItems": "center"},
             children=[
                 html.Span(children=title_children),
-                _mpec_badge(entry.get("type", "discovery")),
+                _mpec_badge(
+                    (summary or {}).get("type")
+                    or entry.get("type", "discovery")),
             ],
         ),
         html.Div(
