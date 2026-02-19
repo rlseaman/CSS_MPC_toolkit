@@ -4815,7 +4815,7 @@ def _get_orbit_class(oe, detail=None):
     a = oe.get("a")
     e = oe.get("e")
     q = oe.get("q")
-    i_deg = oe.get("i")
+    i_deg = oe.get("incl")
     desig = detail.get("designation", "") if detail else ""
     return _classify_orbit(a, e, q, i_deg=i_deg, designation=desig)
 
@@ -4836,7 +4836,7 @@ def _validate_orbit_class(orbit_class, oe, detail=None):
     a = oe.get("a")
     e = oe.get("e")
     q = oe.get("q")
-    i_deg = oe.get("i")
+    i_deg = oe.get("incl")
     if q is None or e is None:
         return None
     from lib.orbit_classes import classify_from_elements, long_name
@@ -5036,11 +5036,12 @@ def _build_mpec_detail(detail, section_state=None, in_recent=True):
         link_packed = packed
     # For interstellar/comet designations, strip name after "/" for MPC
     # lookups (e.g. "3I/ATLAS" -> "3I", "C/2025 A1 (MAPS)" -> "C/2025 A1")
+    import re as _re_link
     mpc_desig = link_desig
-    if re.match(r"^\d+I/", link_desig):
+    if _re_link.match(r"^\d+I/", link_desig):
         mpc_desig = link_desig.split("/")[0]  # "3I"
-    elif re.match(r"^[CPD]/", link_desig):
-        mpc_desig = re.sub(r"\s*\(.*?\)\s*$", "", link_desig)  # strip "(name)"
+    elif _re_link.match(r"^[CPD]/", link_desig):
+        mpc_desig = _re_link.sub(r"\s*\(.*?\)\s*$", "", link_desig)  # strip "(name)"
     link_encoded = _urlquote(link_desig, safe="")
     # NEOfixer and NEOCC only work for NEOs with packed designations
     if link_packed and link_packed != link_desig:
