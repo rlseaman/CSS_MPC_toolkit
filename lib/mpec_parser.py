@@ -575,21 +575,7 @@ def fetch_mpec_detail(mpec_path, cache_dir=None):
             # Extract mpec_id and title from cached content
             page_parser = _MPECPageParser()
             # We stored just the pre text; reconstruct minimal parse
-            title_line = ""
-            for line in pre_text.split("\n")[:30]:
-                s = line.strip().strip("*")
-                # Asteroid: "2026 CE3"
-                m = re.match(r"^(\d{4}\s+[A-Z]{1,2}\d*)$", s.strip())
-                if m:
-                    title_line = m.group(1)
-                    break
-                # Comet: "COMET  C/2026 A1 (MAPS)" or "C/2026 A1 (Name)"
-                m = re.match(
-                    r"^(?:COMET\s+)?([CPD]/\d{4}\s+\w+(?:\s+\(.*?\))?)$",
-                    s.strip())
-                if m:
-                    title_line = m.group(1).strip()
-                    break
+            title_line = _extract_designation(pre_text) or ""
             mpec_m = re.search(r"M\.P\.E\.C\.\s+(\S+)", pre_text)
             mpec_id = mpec_m.group(1) if mpec_m else ""
             result = parse_mpec_content(
