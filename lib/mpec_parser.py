@@ -183,22 +183,43 @@ def classify_mpec(title, pre_text=""):
         if "Revision to MPEC" in pre_text or "Additional Observations" in pre_text:
             return "recovery"
 
-    # If we have pre_text but no special indicators, it's a discovery
+    # Year-based heuristic: compare designation year to MPEC issue year.
+    # A designation from a prior year implies recovery/follow-up, not
+    # first discovery.  Works for both title-only and full-content MPECs.
+    import datetime
+    current_year = datetime.date.today().year
+    # Try designation year from title or content:
+    #   "2026 CE3", "C/2026 A1", "COMET C/2026 A1", "**2025 XY**"
+    desig_year = None
+    combined = title or ""
+    if pre_text:
+        combined = pre_text[:2000]
+    m = re.search(r"(?:[CPD]/)(\d{4})\s+\w", combined)
+    if not m:
+        m = re.search(r"\b(\d{4})\s+[A-Z]{1,2}\d*\b", combined)
+    if m:
+        desig_year = int(m.group(1))
+    if desig_year is not None:
+        if desig_year < current_year:
+            return "recovery"
+        return "discovery"
+
+    # No year in designation (interstellar objects like 3I/ATLAS, numbered
+    # comets, etc.).  Check if earliest observation predates the MPEC year.
+    if pre_text:
+        obs_years = re.findall(
+            r"[A-Za-z](\d{4})\s+\d{2}\s+\d", pre_text[:5000])
+        if obs_years:
+            earliest_obs = min(int(y) for y in obs_years)
+            if earliest_obs < current_year:
+                return "recovery"
+
+    # Default: if we have content, assume discovery
     if pre_text:
         return "discovery"
 
-    # No pre_text available — use heuristic on title
     if not title:
         return "editorial"
-
-    # Extract year from designation: "2026 CE3", "C/2026 A1", "COMET C/2026 A1"
-    import datetime
-    current_year = datetime.date.today().year
-    m = re.search(r"(\d{4})\s+\w", title)
-    if m and int(m.group(1)) == current_year:
-        return "discovery"
-    if m and int(m.group(1)) < current_year:
-        return "recovery"
 
     return "discovery"
 
