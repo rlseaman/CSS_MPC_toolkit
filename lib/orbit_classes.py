@@ -112,7 +112,8 @@ def q_e_to_a(q, e):
     """
     try:
         import numpy as np
-        result = np.where(e < 1.0, q / (1.0 - e), np.nan)
+        denom = np.where(e < 1.0, 1.0 - e, 1.0)  # avoid division by zero
+        result = np.where(e < 1.0, q / denom, np.nan)
         return result
     except (ImportError, TypeError):
         if e is None or e >= 1.0:
@@ -127,7 +128,8 @@ def q_e_to_aphelion(q, e):
     """
     try:
         import numpy as np
-        a = np.where(e < 1.0, q / (1.0 - e), np.nan)
+        denom = np.where(e < 1.0, 1.0 - e, 1.0)  # avoid division by zero
+        a = np.where(e < 1.0, q / denom, np.nan)
         return a * (1.0 + e)
     except (ImportError, TypeError):
         if e is None or e >= 1.0:

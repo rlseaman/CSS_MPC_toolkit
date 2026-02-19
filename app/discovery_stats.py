@@ -4678,9 +4678,10 @@ def _get_cached_summary(mpec_path):
     q = summary.get("q")
     if q is not None:
         summary["is_neo"] = q <= 1.3
-        a = summary.get("a", 0)
-        e = summary.get("e", 0)
-        cls = _classify_orbit(a, e, q, designation=desig)
+        a = summary.get("a")
+        e = summary.get("e")
+        i_deg = summary.get("i")
+        cls = _classify_orbit(a, e, q, i_deg=i_deg, designation=desig)
         if cls:
             summary["class"] = cls
         # PHA: explicit flag from MPC, or MOID <= 0.05 AU and H <= 22
@@ -4779,30 +4780,23 @@ def _build_mpec_list_item(entry, idx):
     )
 
 
-def _classify_orbit(a, e, q, designation=""):
-    """Classify NEO orbit from elements (JPL/CNEOS boundaries)."""
+def _classify_orbit(a, e, q, i_deg=None, designation=""):
+    """Classify orbit from elements using full MPC scheme.
+
+    Delegates to lib.orbit_classes.classify_from_elements() for the
+    canonical 17-type classification.  Returns the long_name string
+    (e.g. 'Apollo', 'Main Belt') or 'Comet' for cometary designations.
+    """
     # Comets don't get asteroid orbit class labels
     if designation and designation.startswith(("C/", "P/", "D/")):
         return "Comet"
-    if q is None:
+    if e is None and q is None:
         return ""
-    if q > 1.3:
-        return "non-NEO"
-    # Derive a from q and e if not directly available
-    if a is None and q is not None and e is not None and e < 1.0:
-        a = q / (1.0 - e)
-    if a is not None and e is not None:
-        Q = a * (1 + e)
-        if a < 1.0 and Q < 0.983:
-            return "Atira"
-        if a < 1.0:
-            return "Aten"
-        if q <= 1.017:
-            return "Apollo"
-        return "Amor"
-    if q <= 1.017:
-        return "Apollo"
-    return "Amor"
+    from lib.orbit_classes import classify_from_elements, long_name
+    oti = classify_from_elements(a, e, i_deg, q)
+    if oti is None:
+        return ""
+    return long_name(oti)
 
 
 def _get_orbit_class(oe, detail=None):
@@ -4812,18 +4806,18 @@ def _get_orbit_class(oe, detail=None):
     a = oe.get("a")
     e = oe.get("e")
     q = oe.get("q")
+    i_deg = oe.get("i")
     desig = detail.get("designation", "") if detail else ""
-    return _classify_orbit(a, e, q, designation=desig)
+    return _classify_orbit(a, e, q, i_deg=i_deg, designation=desig)
 
 
 def _validate_orbit_class(orbit_class, oe, detail=None):
-    """Validate an orbit class label against JPL boundaries from elements.
+    """Validate an orbit class label against elements-based classification.
 
     Returns None if consistent or elements are insufficient, or a warning
-    string describing the discrepancy (e.g. "elements give Aten").
+    string describing the discrepancy.
     """
-    _VALIDATABLE = {"Atira", "Aten", "Apollo", "Amor"}
-    if not orbit_class or orbit_class not in _VALIDATABLE:
+    if not orbit_class or orbit_class == "Comet":
         return None
     if not oe:
         return None
@@ -4833,28 +4827,26 @@ def _validate_orbit_class(orbit_class, oe, detail=None):
     a = oe.get("a")
     e = oe.get("e")
     q = oe.get("q")
+    i_deg = oe.get("i")
     if q is None or e is None:
         return None
-    # Derive a if not directly available
-    if a is None and e < 1.0:
-        a = q / (1.0 - e)
-    if a is None:
+    from lib.orbit_classes import classify_from_elements, long_name
+    oti = classify_from_elements(a, e, i_deg, q)
+    if oti is None:
         return None
-    Q_aph = a * (1.0 + e)
-    # Classify from elements using JPL/CNEOS boundaries
-    if a < 1.0 and Q_aph < 0.983:
-        elem_class = "Atira"
-    elif a < 1.0:
-        elem_class = "Aten"
-    elif q <= 1.017:
-        elem_class = "Apollo"
-    elif q <= 1.3:
-        elem_class = "Amor"
-    else:
-        return None  # non-NEO, can't validate
+    elem_class = long_name(oti)
     if elem_class != orbit_class:
-        return (f"DB says {orbit_class} but elements give {elem_class} "
-                f"(a={a:.4f}, q={q:.4f}, Q={Q_aph:.4f})")
+        # Derive display values for the warning
+        if a is None and e < 1.0:
+            a = q / (1.0 - e)
+        Q_aph = a * (1.0 + e) if a is not None else None
+        parts = [f"DB says {orbit_class} but elements give {elem_class}"]
+        if a is not None:
+            parts.append(f"a={a:.4f}")
+        parts.append(f"q={q:.4f}")
+        if Q_aph is not None:
+            parts.append(f"Q={Q_aph:.4f}")
+        return f"{parts[0]} ({', '.join(parts[1:])})"
     return None
 
 
@@ -7256,21 +7248,26 @@ def tool_orbit_class(a, e, i_deg, q):
     elif a is not None and q is not None and e is None:
         e = 1 - q / a if a > 0 else None
     elif e is not None and q is not None and a is None:
-        a = q / (1 - e) if e < 1 else None
+        a = q / (1 - e) if e != 1 else None
 
-    if a is None or e is None:
+    if e is None:
         return "", clear_a, clear_e, clear_q
-    if a <= 0 or e < 0 or e >= 1:
+    if e < 0:
         return html.Span(
-            "Invalid elements (need a > 0, 0 \u2264 e < 1)",
+            "Invalid eccentricity (need e \u2265 0)",
             style={"color": "#c0392b", "fontSize": "12px"},
         ), clear_a, clear_e, clear_q
+
+    # Hyperbolic/parabolic: only need q and e
+    # Elliptical: need a (or derivable from q,e)
+    if e < 1 and (a is None or a <= 0):
+        return "", clear_a, clear_e, clear_q
 
     from lib.orbit_classes import classify_from_elements, long_name
     oti = classify_from_elements(a, e, i_deg, q)
     if oti is None:
         return html.Span(
-            "Could not classify (ambiguous boundaries)",
+            "Could not classify (insufficient elements)",
             style={"fontSize": "12px"},
         ), clear_a, clear_e, clear_q
     name = long_name(oti)
@@ -7280,21 +7277,20 @@ def tool_orbit_class(a, e, i_deg, q):
                    className="subtext",
                    style={"fontSize": "11px", "marginLeft": "6px"}),
     ]
-    is_neo = q <= 1.3
-    if is_neo:
+    if q is not None and q <= 1.3:
         items.append(html.Span(
             "  NEO",
             style={"backgroundColor": "#e74c3c", "color": "white",
                     "padding": "1px 6px", "borderRadius": "3px",
                     "fontSize": "11px", "fontWeight": "600",
                     "marginLeft": "6px"}))
-    if is_neo:
-        Q = a * (1 + e)
-        if q <= 1.05 and Q >= 0.95:
-            items.append(html.Span(
-                "  Earth-crossing",
-                style={"fontSize": "11px", "marginLeft": "6px",
-                       "color": "#e67e22"}))
+        if a is not None and e < 1:
+            Q = a * (1 + e)
+            if q <= 1.05 and Q >= 0.95:
+                items.append(html.Span(
+                    "  Earth-crossing",
+                    style={"fontSize": "11px", "marginLeft": "6px",
+                           "color": "#e67e22"}))
     return html.Div(items), clear_a, clear_e, clear_q
 
 
