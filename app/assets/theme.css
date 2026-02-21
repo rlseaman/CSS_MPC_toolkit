@@ -343,6 +343,12 @@
     color-scheme: light dark;
 }
 
+/* ── Status banners (error, loading, refresh) — fixed colors on fixed backgrounds ── */
+#page-container .status-banner,
+#page-container .status-banner * {
+    color: var(--banner-color) !important;
+}
+
 /* ── Keyboard shortcut overlay ── */
 #kb-shortcut-overlay {
     color: inherit;

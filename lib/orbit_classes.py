@@ -45,6 +45,15 @@ A_NEPTUNE = 30.0690
 # Main Belt outer boundary: 2:1 mean-motion resonance with Jupiter
 A_MB_OUTER = 3.27831
 
+# Main Belt subdivision boundaries (Kirkwood gaps)
+A_HUNGARIA_INNER = 1.78   # inner edge of Hungaria zone
+A_HUNGARIA_OUTER = 2.06   # 4:1 resonance
+A_MB_INNER_OUTER = 2.50   # 3:1 resonance (inner/middle boundary)
+A_MB_MIDDLE_OUTER = 2.82  # 5:2 resonance (middle/outer boundary)
+
+# Amor near/distant boundary
+Q_AMOR_SPLIT = 1.15  # AU
+
 
 # ---------------------------------------------------------------------------
 # orbit_type_int -> (short_name, long_name, hex_color)
@@ -98,6 +107,105 @@ def category_order():
     """Return list of long_name values in canonical display order."""
     order = [0, 1, 2, 3, 9, 10, 11, 12, 19, 20, 21, 22, 23, 30, 31, 99, None]
     return [ORBIT_TYPES[k][1] for k in order if k in ORBIT_TYPES]
+
+
+# ---------------------------------------------------------------------------
+# Extended classification (21 types) for Boxscore tab
+# ---------------------------------------------------------------------------
+# Sub-codes use the parent MPC code * 10 + subdivision index.
+# Amor:  30 = Near Amor, 31 = Distant Amor  (parent type 3)
+# MB:   110 = Hungaria, 111 = Inner MB, 112 = Middle MB, 113 = Outer MB
+#        (parent type 11)
+# All other types keep their MPC orbit_type_int unchanged.
+
+EXTENDED_ORBIT_TYPES = {
+    0:    ("Atira",     "Atira",             "#e6194b"),
+    1:    ("Aten",      "Aten",              "#d62728"),
+    2:    ("Apollo",    "Apollo",            "#f58231"),
+    30:   ("NrAmor",    "Near Amor",         "#ffe119"),
+    31:   ("FrAmor",    "Distant Amor",      "#e6d800"),
+    9:    ("InOther",   "Inner Other",       "#bcbd22"),
+    10:   ("Mars-X",    "Mars Crosser",      "#3cb44b"),
+    110:  ("Hung",      "Hungaria",          "#2a5caa"),
+    111:  ("IMB",       "Inner Main Belt",   "#3a6fd8"),
+    112:  ("MMB",       "Middle Main Belt",  "#4363d8"),
+    113:  ("OMB",       "Outer Main Belt",   "#5c80e0"),
+    12:   ("JT",        "Jupiter Trojan",    "#9A6324"),
+    19:   ("MidOther",  "Middle Other",      "#469990"),
+    20:   ("JupCoup",   "Jupiter Coupled",   "#800000"),
+    21:   ("NepTr",     "Neptune Trojan",    "#17becf"),
+    22:   ("Centaur",   "Centaur",           "#808000"),
+    23:   ("TNO",       "TNO",               "#000075"),
+    300:  ("Hyper",     "Hyperbolic",        "#f032e6"),
+    310:  ("Para",      "Parabolic",         "#e377c2"),
+    99:   ("Other",     "Other (Unusual)",   "#a9a9a9"),
+    None: ("Unclass",   "Unclassified",      "#bfbfbf"),
+}
+
+# Mapping from extended code to MPC parent code
+EXTENDED_TO_PARENT = {
+    30: 3, 31: 3,                          # Amor subdivisions
+    110: 11, 111: 11, 112: 11, 113: 11,   # MB subdivisions
+    300: 30, 310: 31,                       # Hyper/Para (shifted)
+}
+
+# Coarse groupings (7 groups) for high-level summaries
+COARSE_GROUPS = {
+    0: "NEO", 1: "NEO", 2: "NEO", 30: "NEO", 31: "NEO",
+    9: "NEO",
+    10: "Mars Crosser",
+    110: "Main Belt", 111: "Main Belt", 112: "Main Belt", 113: "Main Belt",
+    12: "Jupiter Region", 19: "Jupiter Region", 20: "Jupiter Region",
+    21: "Outer Solar System", 22: "Outer Solar System", 23: "Outer Solar System",
+    300: "Hyperbolic/Parabolic", 310: "Hyperbolic/Parabolic",
+    99: "Unclassified", None: "Unclassified",
+}
+
+COARSE_ORDER = [
+    "NEO", "Mars Crosser", "Main Belt", "Jupiter Region",
+    "Outer Solar System", "Hyperbolic/Parabolic", "Unclassified",
+]
+
+COARSE_COLORS = {
+    "NEO":                     "#e6194b",
+    "Mars Crosser":            "#3cb44b",
+    "Main Belt":               "#4363d8",
+    "Jupiter Region":          "#9A6324",
+    "Outer Solar System":      "#000075",
+    "Hyperbolic/Parabolic":    "#f032e6",
+    "Unclassified":            "#bfbfbf",
+}
+
+
+def extended_short_name(ext_code):
+    """Return short label for an extended classification code."""
+    entry = EXTENDED_ORBIT_TYPES.get(ext_code, EXTENDED_ORBIT_TYPES[None])
+    return entry[0]
+
+
+def extended_long_name(ext_code):
+    """Return long label for an extended classification code."""
+    entry = EXTENDED_ORBIT_TYPES.get(ext_code, EXTENDED_ORBIT_TYPES[None])
+    return entry[1]
+
+
+def extended_color(ext_code):
+    """Return hex color for an extended classification code."""
+    entry = EXTENDED_ORBIT_TYPES.get(ext_code, EXTENDED_ORBIT_TYPES[None])
+    return entry[2]
+
+
+def extended_color_map():
+    """Return dict mapping long_name -> hex_color for extended types."""
+    return {v[1]: v[2] for v in EXTENDED_ORBIT_TYPES.values()}
+
+
+def extended_category_order():
+    """Return list of extended long_name values in canonical display order."""
+    order = [0, 1, 2, 30, 31, 9, 10, 110, 111, 112, 113, 12, 19, 20,
+             21, 22, 23, 300, 310, 99, None]
+    return [EXTENDED_ORBIT_TYPES[k][1] for k in order
+            if k in EXTENDED_ORBIT_TYPES]
 
 
 # ---------------------------------------------------------------------------
@@ -293,3 +401,141 @@ def classify_from_elements(a, e, i_deg, q):
 
     # --- Inner Other: catch-all ---
     return 9   # Inner Other
+
+
+def classify_extended(orbit_type_int, a, e, q):
+    """Map an MPC orbit_type_int to the 21-type extended classification.
+
+    Subdivides Amor (type 3) into Near/Distant at q=1.15 AU, and
+    Main Belt (type 11) into Hungaria/Inner/Middle/Outer by semi-major axis.
+    Shifts Hyperbolic (30->300) and Parabolic (31->310) to avoid collision
+    with the Amor sub-codes.
+
+    Parameters
+    ----------
+    orbit_type_int : int or None
+        MPC orbit type code (from classify_from_elements or DB).
+    a : float or None
+        Semi-major axis in AU (derived from q/(1-e) if needed).
+    e : float
+        Eccentricity.
+    q : float
+        Perihelion distance in AU.
+
+    Returns
+    -------
+    int or None
+        Extended classification code for EXTENDED_ORBIT_TYPES lookup.
+    """
+    if orbit_type_int is None:
+        return None
+
+    # Amor -> Near/Distant
+    if orbit_type_int == 3:
+        if q is not None and q <= Q_AMOR_SPLIT:
+            return 30   # Near Amor
+        return 31       # Distant Amor
+
+    # Main Belt -> Hungaria / Inner / Middle / Outer
+    if orbit_type_int == 11:
+        if a is None and e is not None and e < 1.0 and q is not None:
+            a = q / (1.0 - e)
+        if a is not None:
+            if a < A_HUNGARIA_OUTER:
+                return 110  # Hungaria
+            if a < A_MB_INNER_OUTER:
+                return 111  # Inner Main Belt
+            if a < A_MB_MIDDLE_OUTER:
+                return 112  # Middle Main Belt
+            return 113      # Outer Main Belt
+        return 111  # fallback: Inner MB if a unknown
+
+    # Shift Hyperbolic/Parabolic to avoid Amor sub-code collision
+    if orbit_type_int == 30:
+        return 300
+    if orbit_type_int == 31:
+        return 310
+
+    return orbit_type_int
+
+
+def classify_extended_df(df):
+    """Add extended classification columns to a DataFrame with orbital elements.
+
+    Expects columns: orbit_type_int (or computes from q, e, i), q, e, a (optional).
+    Adds columns: ext_class, ext_name, coarse_class, neo, pha, retrograde.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Must contain columns 'q', 'e', 'i'.  Optionally 'orbit_type_int',
+        'a', 'h', 'earth_moid'.
+
+    Returns
+    -------
+    pandas.DataFrame
+        The input DataFrame with classification columns added in-place.
+    """
+    import numpy as np
+
+    # Derive a if missing
+    if 'a' not in df.columns or df['a'].isna().sum() > len(df) * 0.5:
+        df['a'] = q_e_to_a(df['q'].values, df['e'].values)
+
+    # Base classification if not present
+    if 'orbit_type_int' not in df.columns:
+        df['orbit_type_int'] = df.apply(
+            lambda r: classify_from_elements(r.get('a'), r['e'], r.get('i'), r['q']),
+            axis=1)
+
+    # Extended classification (vectorized with numpy)
+    otype = df['orbit_type_int'].values
+    a_vals = df['a'].values
+    q_vals = df['q'].values
+    e_vals = df['e'].values
+    n = len(df)
+    ext = np.full(n, -1, dtype='int32')
+
+    # Default: copy orbit_type_int
+    valid = ~np.isnan(otype.astype('float64'))
+    ext[valid] = otype[valid]
+
+    # Amor split
+    amor = otype == 3
+    ext[amor & (q_vals <= Q_AMOR_SPLIT)] = 30
+    ext[amor & (q_vals > Q_AMOR_SPLIT)] = 31
+
+    # MB subdivisions
+    mb = otype == 11
+    a_mb = np.where(mb & np.isfinite(a_vals), a_vals, np.nan)
+    ext[mb & (a_mb < A_HUNGARIA_OUTER)] = 110
+    ext[mb & (a_mb >= A_HUNGARIA_OUTER) & (a_mb < A_MB_INNER_OUTER)] = 111
+    ext[mb & (a_mb >= A_MB_INNER_OUTER) & (a_mb < A_MB_MIDDLE_OUTER)] = 112
+    ext[mb & (a_mb >= A_MB_MIDDLE_OUTER)] = 113
+    # MB with no valid a: default to 111
+    ext[mb & ~np.isfinite(a_mb)] = 111
+
+    # Shift Hyperbolic/Parabolic
+    ext[otype == 30] = 300
+    ext[otype == 31] = 310
+
+    # Unclassified (orbit_type_int was NaN)
+    ext[~valid] = -1
+
+    df['ext_class'] = ext
+    df['ext_class'] = df['ext_class'].replace(-1, np.nan)
+
+    # Map names
+    df['ext_name'] = df['ext_class'].map(
+        {k: v[1] for k, v in EXTENDED_ORBIT_TYPES.items()}).fillna('Unclassified')
+    df['coarse_class'] = df['ext_class'].map(COARSE_GROUPS).fillna('Unclassified')
+
+    # Flags
+    df['neo'] = df['orbit_type_int'].isin([0, 1, 2, 3])
+    df['retrograde'] = df['i'].fillna(0) >= 90.0
+    if 'earth_moid' in df.columns and 'h' in df.columns:
+        df['pha'] = (df['earth_moid'].fillna(999) <= 0.05) & (df['h'].fillna(99) <= 22.0)
+    else:
+        df['pha'] = False
+
+    return df

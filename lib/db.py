@@ -30,7 +30,14 @@ import psycopg2.extras
 def connect(host=None, dbname="mpc_sbn", user="claude_ro"):
     # Default host from $PGHOST environment variable (no hardcoded hostname)
     if host is None:
-        host = os.environ.get("PGHOST", "localhost")
+        host = os.environ.get("PGHOST")
+        if not host:
+            raise RuntimeError(
+                "PGHOST environment variable is not set. "
+                "Set it to the database server hostname before running, e.g.:\n"
+                "  setenv PGHOST <hostname>   (tcsh)\n"
+                "  export PGHOST=<hostname>   (bash)"
+            )
     """
     Context manager for a read-only database connection.
 

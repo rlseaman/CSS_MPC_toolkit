@@ -569,6 +569,30 @@ CROSS JOIN LATERAL (
 ) o
 """
 
+# ---------------------------------------------------------------------------
+# Boxscore: object catalog from mpc_orbits (all objects, ~1.5M rows)
+# ---------------------------------------------------------------------------
+BOXSCORE_SQL = """
+SELECT
+    mo.unpacked_primary_provisional_designation AS provid,
+    mo.packed_primary_provisional_designation AS packed_provid,
+    ni.permid AS permid,
+    mo.orbit_type_int,
+    mo.q::double precision,
+    mo.e::double precision,
+    mo.i::double precision,
+    CASE WHEN mo.e < 1 THEN (mo.q / (1 - mo.e))::double precision END AS a,
+    mo.h::double precision,
+    mo.earth_moid::double precision,
+    mo.epoch_mjd::double precision,
+    mo.arc_length_total::integer,
+    mo.nobs_total::integer
+FROM mpc_orbits mo
+LEFT JOIN numbered_identifications ni
+    ON ni.packed_primary_provisional_designation
+     = mo.packed_primary_provisional_designation
+"""
+
 CACHE_MAX_AGE_SEC = 86400  # 1 day
 
 # Parse flags once at import time (prevent reloader from re-querying)
@@ -817,6 +841,52 @@ def load_apparition_data():
     print(f"Cached {len(_df_apparition):,} rows to {cache_file}")
 
     return _df_apparition
+
+
+# ---------------------------------------------------------------------------
+# Boxscore: object catalog loader
+# ---------------------------------------------------------------------------
+
+_df_boxscore = None
+
+
+def load_boxscore_data():
+    """Load object catalog from mpc_orbits with extended classification.
+
+    Returns a DataFrame with ~1.5M rows, one per object, including:
+    - Orbital elements (q, e, i, a, h, earth_moid)
+    - MPC orbit_type_int (recovered from elements where NULL)
+    - Extended classification (ext_class, ext_name, coarse_class)
+    - Flags: neo, pha, retrograde
+    """
+    global _df_boxscore
+    if _df_boxscore is not None:
+        return _df_boxscore
+
+    from lib.orbit_classes import (
+        classify_from_elements, classify_extended_df,
+    )
+
+    df, _meta = _load_cached_query(
+        BOXSCORE_SQL, "boxscore_cache", "object catalog")
+    print(f"Loaded {len(df):,} objects from mpc_orbits")
+
+    # Recover missing orbit_type_int from elements (~35% are NULL)
+    missing = df["orbit_type_int"].isna()
+    if missing.any():
+        df.loc[missing, "orbit_type_int"] = df.loc[missing].apply(
+            lambda r: classify_from_elements(r["a"], r["e"], r["i"], r["q"]),
+            axis=1,
+        )
+        recovered = missing.sum() - df["orbit_type_int"].isna().sum()
+        print(f"Recovered orbit class for {recovered:,} of "
+              f"{missing.sum():,} unclassified objects")
+
+    # Apply extended classification (MB subdivisions, Amor split, etc.)
+    df = classify_extended_df(df)
+
+    _df_boxscore = df
+    return _df_boxscore
 
 
 # ---------------------------------------------------------------------------
@@ -1896,6 +1966,7 @@ def _add_cache_headers(response):
 if _REFRESH_ONLY:
     df, query_timestamp = load_data()
     df_apparition = load_apparition_data()
+    load_boxscore_data()
     print("Cache refresh complete.")
     sys.exit(0)
 
@@ -2026,6 +2097,7 @@ app.layout = html.Div(
         # ── Maintenance banner ────────────────────────────────────────
         html.Div(
             _MAINTENANCE_MSG,
+            className="status-banner",
             style={
                 "padding": "10px 20px",
                 "marginBottom": "12px",
@@ -2034,7 +2106,7 @@ app.layout = html.Div(
                 "fontSize": "14px",
                 "fontWeight": "600",
                 "backgroundColor": "#f57f17",
-                "color": "#000",
+                "--banner-color": "#000",
                 "textAlign": "center",
             },
         ) if _MAINTENANCE_MSG else html.Div(),
@@ -2050,6 +2122,7 @@ app.layout = html.Div(
         dcc.Download(id="download-comparison"),
         dcc.Download(id="download-followup"),
         dcc.Download(id="download-circumstances"),
+        dcc.Download(id="download-boxscore"),
         # ── Banner: logo + title + shared controls ───────────────────
         html.Div(
             style={"display": "flex", "gap": "15px", "alignItems": "center",
@@ -3026,6 +3099,122 @@ app.layout = html.Div(
                         ]),
                     ],
                 ),
+                # ━━━ Tab 6: Asteroid Classes ━━━━━━━━━━━━━━━━━━━━━━
+                dcc.Tab(
+                    label="Asteroid Classes",
+                    value="tab-boxscore",
+                    className="nav-tab",
+                    selected_className="nav-tab--selected",
+                    children=[
+                        html.Div(style={"paddingTop": "15px",
+                                        "fontFamily": "sans-serif"},
+                                 children=[
+                            # Summary cards row
+                            html.Div(
+                                id="boxscore-cards",
+                                style={
+                                    "display": "flex", "gap": "12px",
+                                    "flexWrap": "wrap",
+                                    "marginBottom": "15px",
+                                },
+                            ),
+                            # Controls row
+                            html.Div(
+                                style={"display": "flex", "gap": "20px",
+                                        "flexWrap": "wrap",
+                                        "alignItems": "flex-end",
+                                        "marginBottom": "15px"},
+                                children=[
+                                    html.Div(children=[
+                                        html.Label("Class grouping",
+                                                   style=LABEL_STYLE),
+                                        dcc.RadioItems(
+                                            id="box-grouping",
+                                            options=[
+                                                {"label": "Fine (21)",
+                                                 "value": "fine"},
+                                                {"label": "Standard (17)",
+                                                 "value": "standard"},
+                                                {"label": "Coarse (7)",
+                                                 "value": "coarse"},
+                                            ],
+                                            value="fine",
+                                            inline=True,
+                                            labelStyle=RADIO_LABEL_STYLE,
+                                            style=RADIO_STYLE,
+                                        ),
+                                    ]),
+                                    html.Div(children=[
+                                        html.Label("Filters",
+                                                   style=LABEL_STYLE),
+                                        dcc.Checklist(
+                                            id="box-filters",
+                                            options=[
+                                                {"label": " NEO only",
+                                                 "value": "neo"},
+                                                {"label": " PHA only",
+                                                 "value": "pha"},
+                                                {"label": " Retrograde",
+                                                 "value": "retro"},
+                                            ],
+                                            value=[],
+                                            inline=True,
+                                            labelStyle=RADIO_LABEL_STYLE,
+                                            style=RADIO_STYLE,
+                                        ),
+                                    ]),
+                                    html.Div(children=[
+                                        html.Label("H range",
+                                                   style=LABEL_STYLE),
+                                        dcc.RangeSlider(
+                                            id="box-h-range",
+                                            min=5, max=32,
+                                            value=[5, 32],
+                                            marks={
+                                                5: "5", 10: "10",
+                                                15: "15", 20: "20",
+                                                25: "25", 30: "30",
+                                            },
+                                            tooltip={
+                                                "placement": "bottom",
+                                                "always_visible": False},
+                                        ),
+                                    ], style={"width": "250px"}),
+                                    html.Div(
+                                        style={"alignSelf": "flex-end"},
+                                        children=[
+                                            html.Button(
+                                                "Download CSV",
+                                                id="btn-download-boxscore",
+                                                n_clicks=0,
+                                                style=DOWNLOAD_BTN_STYLE,
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            # Cross-tabulation table
+                            html.Div(
+                                id="boxscore-table-container",
+                                style={"overflowX": "auto",
+                                       "marginBottom": "20px"},
+                            ),
+                            # Charts: H distribution + a-e scatter
+                            html.Div(
+                                style={
+                                    "display": "grid",
+                                    "gridTemplateColumns": "1fr 1fr",
+                                    "gap": "10px"},
+                                children=[
+                                    dcc.Graph(id="box-h-dist",
+                                              config=GRAPH_CONFIG),
+                                    dcc.Graph(id="box-a-hist",
+                                              config=GRAPH_CONFIG),
+                                ],
+                            ),
+                        ]),
+                    ],
+                ),
                 # ── Tab 7: Tools for Planetary Defenders ──────────
                 dcc.Tab(
                     label="Tools",
@@ -3593,9 +3782,10 @@ def check_refresh_status(_n):
         return html.Div(
             f"Data refresh in progress \u2014 results shown are from "
             f"the previous update ({query_timestamp}).",
+            className="status-banner",
             style={
                 "backgroundColor": "#fff3cd",
-                "color": "#856404",
+                "--banner-color": "#856404",
                 "padding": "10px 20px",
                 "borderRadius": "4px",
                 "marginBottom": "10px",
@@ -3623,9 +3813,10 @@ def check_loading_status(_n):
         if _data_error:
             banner = html.Div(
                 f"Error loading data: {_data_error}",
+                className="status-banner",
                 style={
                     "backgroundColor": "#f8d7da",
-                    "color": "#721c24",
+                    "--banner-color": "#721c24",
                     "padding": "10px 20px",
                     "borderRadius": "4px",
                     "marginBottom": "10px",
@@ -3641,9 +3832,10 @@ def check_loading_status(_n):
         return None, True, subtitle
     return html.Div(
         "Loading data from cache (please wait)...",
+        className="status-banner",
         style={
             "backgroundColor": "#cce5ff",
-            "color": "#004085",
+            "--banner-color": "#004085",
             "padding": "10px 20px",
             "borderRadius": "4px",
             "marginBottom": "10px",
@@ -3686,6 +3878,10 @@ def _get_defaults():
         "circ-year-range": [2004, year_max],
         "circ-size-filter": "all",
         "circ-color-by": "survey",
+        # Tab 6 — Boxscore
+        "box-grouping": "fine",
+        "box-filters": [],
+        "box-h-range": [5, 32],
         # Tab 7 — Tools
         "tool-pack-input": "",
         "tool-unpack-input": "",
@@ -3723,6 +3919,7 @@ _TAB_KEYS = {
     "tab-followup": {"fu-year-range", "fu-size-filter", "fu-max-days"},
     "tab-circumstances": {"circ-year-range", "circ-size-filter",
                           "circ-color-by"},
+    "tab-boxscore": {"box-grouping", "box-filters", "box-h-range"},
     "tab-tools": {"tool-pack-input", "tool-unpack-input",
                    "tool-validate-input", "tool-hmag-h", "tool-hmag-diam",
                    "tool-hmag-albedo", "tool-hmag-albedo-mode",
@@ -3743,6 +3940,7 @@ _RESET_ORDER = [
     "comp-precovery",
     "fu-year-range", "fu-size-filter", "fu-max-days",
     "circ-year-range", "circ-size-filter", "circ-color-by",
+    "box-grouping", "box-filters", "box-h-range",
     "tool-pack-input", "tool-unpack-input", "tool-validate-input",
     "tool-hmag-h", "tool-hmag-diam", "tool-hmag-albedo",
     "tool-hmag-albedo-mode",
@@ -6948,6 +7146,279 @@ def enrich_mpec_detail(n_intervals, path, prev_data):
     }
 
     return risk_line, stop_poll, enrichment_state
+
+
+# ---------------------------------------------------------------------------
+# Boxscore tab callbacks
+# ---------------------------------------------------------------------------
+
+@app.callback(
+    Output("boxscore-cards", "children"),
+    Output("boxscore-table-container", "children"),
+    Output("box-h-dist", "figure"),
+    Output("box-a-hist", "figure"),
+    Input("box-grouping", "value"),
+    Input("box-filters", "value"),
+    Input("box-h-range", "value"),
+    Input("theme-toggle", "value"),
+    Input("tabs", "value"),
+)
+def update_boxscore(grouping, filters, h_range, theme_name, active_tab):
+    if active_tab != "tab-boxscore":
+        raise PreventUpdate
+
+    from lib.orbit_classes import (
+        EXTENDED_ORBIT_TYPES, ORBIT_TYPES,
+        COARSE_GROUPS, COARSE_ORDER, COARSE_COLORS,
+        extended_category_order, extended_color_map,
+        category_order, color_map,
+    )
+
+    bdf = load_boxscore_data()
+    if bdf is None or len(bdf) == 0:
+        raise PreventUpdate
+
+    t = theme(theme_name)
+    filt = bdf.copy()
+
+    # Apply filters
+    if "neo" in filters:
+        filt = filt[filt["neo"]]
+    if "pha" in filters:
+        filt = filt[filt["pha"]]
+    if "retro" in filters:
+        filt = filt[filt["retrograde"]]
+
+    # H magnitude range
+    h_lo, h_hi = h_range
+    if h_lo > 5 or h_hi < 32:
+        h_mask = filt["h"].between(h_lo, h_hi) | filt["h"].isna()
+        filt = filt[h_mask]
+
+    # Determine grouping column, labels, colors
+    if grouping == "fine":
+        grp_col = "ext_name"
+        cat_order = extended_category_order()
+        clr_map = extended_color_map()
+    elif grouping == "standard":
+        # Map back to MPC 17-type names
+        from lib.orbit_classes import EXTENDED_TO_PARENT, long_name as _ln
+        def _std_name(row):
+            ec = row["ext_class"]
+            parent = EXTENDED_TO_PARENT.get(
+                int(ec) if pd.notna(ec) else None, ec)
+            if pd.isna(parent):
+                return "Unclassified"
+            return _ln(int(parent) if pd.notna(parent) else None)
+        filt = filt.copy()
+        filt["_grp"] = filt.apply(_std_name, axis=1)
+        grp_col = "_grp"
+        cat_order = category_order()
+        clr_map = color_map()
+    else:  # coarse
+        grp_col = "coarse_class"
+        cat_order = COARSE_ORDER
+        clr_map = COARSE_COLORS
+
+    # === Summary cards ===
+    card_style = {
+        "padding": "12px 18px",
+        "borderRadius": "6px",
+        "backgroundColor": t["paper"],
+        "border": f"1px solid {t['hr_color']}",
+        "textAlign": "center",
+        "minWidth": "120px",
+    }
+    card_data = [
+        ("Total Objects", f"{len(filt):,}"),
+        ("NEOs", f"{filt['neo'].sum():,}"),
+        ("PHAs", f"{filt['pha'].sum():,}"),
+        ("With H mag", f"{filt['h'].notna().sum():,}"),
+        ("Median H", f"{filt['h'].median():.1f}"
+         if filt["h"].notna().any() else "—"),
+        ("Retrograde", f"{filt['retrograde'].sum():,}"),
+    ]
+    cards = []
+    for label, value in card_data:
+        cards.append(html.Div(style=card_style, children=[
+            html.Div(value,
+                      style={"fontSize": "22px", "fontWeight": "700",
+                             "lineHeight": "1.2"}),
+            html.Div(label,
+                      style={"fontSize": "12px", "color": t["subtext"],
+                             "marginTop": "2px"}),
+        ]))
+
+    # === Cross-tabulation table ===
+    counts = filt.groupby(grp_col).agg(
+        objects=("provid", "size"),
+        median_h=("h", "median"),
+        mean_e=("e", "mean"),
+        mean_i=("i", "mean"),
+        pct_numbered=("permid", lambda x: 100.0 * x.notna().sum() / max(len(x), 1)),
+    ).reindex([c for c in cat_order if c in filt[grp_col].values])
+    counts = counts.dropna(subset=["objects"])
+    counts = counts[counts["objects"] > 0]
+
+    # Build a Plotly Table figure
+    header_vals = ["Class", "Objects", "Median H", "Mean e",
+                   "Mean i (deg)", "% Numbered"]
+    cell_vals = [
+        counts.index.tolist(),
+        [f"{v:,}" for v in counts["objects"]],
+        [f"{v:.1f}" if pd.notna(v) else "—" for v in counts["median_h"]],
+        [f"{v:.3f}" if pd.notna(v) else "—" for v in counts["mean_e"]],
+        [f"{v:.1f}" if pd.notna(v) else "—" for v in counts["mean_i"]],
+        [f"{v:.1f}%" for v in counts["pct_numbered"]],
+    ]
+
+    # Color the class column cells — convert hex to rgba with low alpha
+    def _hex_to_rgba(h, alpha=0.15):
+        h = h.lstrip("#")
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        return f"rgba({r},{g},{b},{alpha})"
+
+    class_colors = [_hex_to_rgba(clr_map.get(c, "#888888"))
+                    for c in counts.index]
+
+    tbl_fig = go.Figure(data=[go.Table(
+        header=dict(
+            values=[f"<b>{h}</b>" for h in header_vals],
+            fill_color=t["table_header"],
+            font=dict(color=t["table_font"], size=12,
+                      family="sans-serif"),
+            align=["left"] + ["right"] * 5,
+            height=28,
+        ),
+        cells=dict(
+            values=cell_vals,
+            fill_color=[
+                class_colors,
+                t["table_cell"], t["table_cell"],
+                t["table_cell"], t["table_cell"], t["table_cell"],
+            ],
+            font=dict(color=t["table_font"], size=11,
+                      family="sans-serif"),
+            align=["left"] + ["right"] * 5,
+            height=24,
+        ),
+    )])
+    n_rows = len(counts)
+    tbl_height = max(200, 28 + n_rows * 24 + 30)
+    tbl_fig.update_layout(
+        template=t["template"],
+        paper_bgcolor=t["paper"],
+        margin=dict(l=10, r=10, t=30, b=10),
+        height=tbl_height,
+        title=dict(
+            text=f"Object Census — {len(filt):,} objects",
+            font=dict(size=14, family="sans-serif"),
+        ),
+    )
+    tbl_container = dcc.Graph(figure=tbl_fig, config=GRAPH_CONFIG,
+                              style={"height": f"{tbl_height}px"})
+
+    # === H magnitude distribution ===
+    h_valid = filt.dropna(subset=["h"])
+    h_fig = go.Figure()
+
+    if grouping == "coarse":
+        plot_order = COARSE_ORDER
+        color_key = "coarse_class"
+    elif grouping == "standard":
+        plot_order = cat_order
+        color_key = "_grp"
+    else:
+        plot_order = cat_order
+        color_key = "ext_name"
+
+    for cls_name in plot_order:
+        sub = h_valid[h_valid[color_key] == cls_name]
+        if len(sub) == 0:
+            continue
+        h_fig.add_trace(go.Histogram(
+            x=sub["h"], xbins=dict(start=5, end=32, size=0.5),
+            name=cls_name,
+            marker_color=clr_map.get(cls_name, "#888"),
+            opacity=0.85,
+        ))
+    h_fig.update_layout(
+        template=t["template"],
+        paper_bgcolor=t["paper"],
+        plot_bgcolor=t["plot"],
+        barmode="stack",
+        xaxis_title="H magnitude",
+        yaxis_title="Objects",
+        yaxis_type="log",
+        title=dict(text="Absolute Magnitude Distribution",
+                   font=dict(size=14, family="sans-serif")),
+        legend=dict(font=dict(size=10)),
+        margin=dict(l=60, r=20, t=40, b=50),
+        height=400,
+    )
+
+    # === Semi-major axis distribution ===
+    a_valid = filt.dropna(subset=["a"])
+    a_valid = a_valid[a_valid["a"].between(0, 50)]
+    a_fig = go.Figure()
+    for cls_name in plot_order:
+        sub = a_valid[a_valid[color_key] == cls_name]
+        if len(sub) == 0:
+            continue
+        a_fig.add_trace(go.Histogram(
+            x=sub["a"], xbins=dict(start=0, end=50, size=0.1),
+            name=cls_name,
+            marker_color=clr_map.get(cls_name, "#888"),
+            opacity=0.85,
+        ))
+    a_fig.update_layout(
+        template=t["template"],
+        paper_bgcolor=t["paper"],
+        plot_bgcolor=t["plot"],
+        barmode="stack",
+        xaxis_title="Semi-major axis (AU)",
+        yaxis_title="Objects",
+        yaxis_type="log",
+        title=dict(text="Semi-major Axis Distribution",
+                   font=dict(size=14, family="sans-serif")),
+        legend=dict(font=dict(size=10)),
+        margin=dict(l=60, r=20, t=40, b=50),
+        height=400,
+    )
+
+    return cards, tbl_container, h_fig, a_fig
+
+
+@app.callback(
+    Output("download-boxscore", "data"),
+    Input("btn-download-boxscore", "n_clicks"),
+    State("box-grouping", "value"),
+    State("box-filters", "value"),
+    State("box-h-range", "value"),
+    prevent_initial_call=True,
+)
+def download_boxscore(n_clicks, grouping, filters, h_range):
+    if not n_clicks:
+        raise PreventUpdate
+
+    bdf = load_boxscore_data()
+    filt = bdf.copy()
+    if "neo" in filters:
+        filt = filt[filt["neo"]]
+    if "pha" in filters:
+        filt = filt[filt["pha"]]
+    if "retro" in filters:
+        filt = filt[filt["retrograde"]]
+    h_lo, h_hi = h_range
+    if h_lo > 5 or h_hi < 32:
+        filt = filt[filt["h"].between(h_lo, h_hi) | filt["h"].isna()]
+
+    export_cols = ["provid", "packed_provid", "permid", "ext_name",
+                   "coarse_class", "q", "e", "i", "a", "h",
+                   "earth_moid", "neo", "pha", "retrograde"]
+    avail = [c for c in export_cols if c in filt.columns]
+    return send_data_frame(filt[avail].to_csv, "boxscore_objects.csv",
+                           index=False)
 
 
 # ---------------------------------------------------------------------------
