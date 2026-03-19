@@ -35,6 +35,8 @@ from lib.mpec_parser import (fetch_recent_mpecs, fetch_mpec_detail,
                               mpec_id_to_url, lookup_mpecs_by_designation)
 from mpc_designation import pack as pack_designation, unpack as unpack_designation
 from lib.nea_catalog import load_nea_h_lookup
+from lib.solar import (sun_altitude, classify_twilight,
+                       _observer_latitude, TWILIGHT_ORDER)
 from lib.identifications import resolve_designation
 from lib.api_clients import (
     fetch_sbdb, fetch_sentry, fetch_neofixer_orbit, fetch_neocc_risk,
@@ -474,10 +476,15 @@ SELECT
     EXTRACT(YEAR FROM di.obstime)::int AS disc_year,
     EXTRACT(MONTH FROM di.obstime)::int AS disc_month,
     di.obstime::date AS disc_date,
+    di.obstime AS disc_obstime,
     di.stn AS station_code,
     neo.h,
     neo.orbit_type_int,
     neo.q, neo.e, neo.i,
+    oc.longitude::double precision AS stn_longitude,
+    oc.rhocosphi::double precision AS stn_rhocosphi,
+    oc.rhosinphi::double precision AS stn_rhosinphi,
+    oc.observations_type AS stn_type,
     dts.avg_ra_deg,
     dts.avg_dec_deg,
     dts.median_v_mag,
@@ -502,6 +509,7 @@ FROM discovery_info di
 JOIN neo_list neo ON neo.unpacked_desig = di.unpacked_desig
 LEFT JOIN discovery_tracklet_stats dts
     ON dts.unpacked_desig = di.unpacked_desig
+LEFT JOIN obscodes oc ON oc.obscode = di.stn
 ORDER BY di.obstime
 """
 
@@ -753,6 +761,18 @@ def load_data():
         sign = np.where(dra <= 180, 1, -1)
         raw["solar_elong_deg"] = np.where(
             raw["avg_ra_deg"].notna(), sign * elong, np.nan)
+
+    # Compute solar altitude and twilight class at discovery
+    if "disc_obstime" in raw.columns and "stn_longitude" in raw.columns:
+        is_sat = (raw["stn_type"] == "satellite").values
+        lon = raw["stn_longitude"].values.astype(float)
+        lat = _observer_latitude(
+            raw["stn_rhocosphi"].values.astype(float),
+            raw["stn_rhosinphi"].values.astype(float))
+        alt = sun_altitude(raw["disc_obstime"], lon, lat)
+        raw["sun_alt_deg"] = np.where(is_sat, np.nan,
+                                      np.round(alt, 2))
+        raw["twilight_class"] = classify_twilight(alt, is_sat)
 
     # Pre-compute half-magnitude bin index
     raw["h_bin_idx"] = np.where(
@@ -8102,6 +8122,7 @@ _DISCOVERY_EXPORT_COLS = [
     "orbit_type_int", "q", "e", "i",
     "avg_ra_deg", "avg_dec_deg", "median_v_mag", "tracklet_nobs",
     "rate_deg_per_day", "position_angle_deg", "solar_elong_deg",
+    "sun_alt_deg", "twilight_class",
 ]
 
 
