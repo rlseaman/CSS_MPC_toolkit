@@ -23,7 +23,7 @@ set -euo pipefail
 # Database connection (override with environment variables)
 PGHOST="${PGHOST:-localhost}"
 PGDATABASE="${PGDATABASE:-mpc_sbn}"
-PGUSER="${PGUSER:-}"
+PGUSER="${PGUSER:-claude_ro}"
 
 # Paths (relative to repository root)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -96,11 +96,16 @@ else
     log "WARNING: validate_output.sh not found or not executable, skipping validation"
 fi
 
-# --- Step 3: Copy to final location -------------------------------------------
+# --- Step 3: Copy to dated file and update symlink ----------------------------
 
-FINAL_CSV="$REPO_DIR/NEO_discovery_tracklets.csv"
-cp "$OUTPUT_CSV" "$FINAL_CSV"
-log "Output copied to $FINAL_CSV"
+DATE_STAMP=$(date '+%d%b%y')
+DATED_CSV="$REPO_DIR/NEO_discovery_tracklets_${DATE_STAMP}.csv"
+LINK_NAME="$REPO_DIR/NEO_discovery_tracklets.csv"
+
+cp "$OUTPUT_CSV" "$DATED_CSV"
+ln -sf "$(basename "$DATED_CSV")" "$LINK_NAME"
+log "Output saved to $DATED_CSV"
+log "Symlink $LINK_NAME -> $(basename "$DATED_CSV")"
 
 # --- Step 4: Upload to GitHub Releases (optional) -----------------------------
 
@@ -111,5 +116,5 @@ fi
 
 # --- Summary ------------------------------------------------------------------
 
-OUTPUT_LINES=$(wc -l < "$FINAL_CSV" | tr -d ' ')
+OUTPUT_LINES=$(wc -l < "$DATED_CSV" | tr -d ' ')
 log "Pipeline complete. $OUTPUT_LINES rows (including header) written."
