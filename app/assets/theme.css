@@ -84,6 +84,12 @@
 #page-container .rc-slider-rail {
     background-color: var(--hr-color, #ccc) !important;
 }
+/* Linked slider mode — both thumbs highlighted when Shift held */
+.slider-linked .dash-slider-thumb,
+.slider-linked .rc-slider-handle {
+    box-shadow: 0 0 0 3px rgba(91, 141, 239, 0.4) !important;
+    transition: box-shadow 0.15s ease;
+}
 
 /* ── Dropdowns (Dash 4.x component) ── */
 /* Outer wrapper */

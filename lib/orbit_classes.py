@@ -459,7 +459,7 @@ def classify_extended(orbit_type_int, a, e, q):
     return orbit_type_int
 
 
-def classify_extended_df(df):
+def classify_extended_df(df, pha_set=None):
     """Add extended classification columns to a DataFrame with orbital elements.
 
     Expects columns: orbit_type_int (or computes from q, e, i), q, e, a (optional).
@@ -470,6 +470,10 @@ def classify_extended_df(df):
     df : pandas.DataFrame
         Must contain columns 'q', 'e', 'i'.  Optionally 'orbit_type_int',
         'a', 'h', 'earth_moid'.
+    pha_set : set[str], optional
+        Set of unpacked provisional designations from PHA.txt.  When
+        provided, PHA membership uses this authoritative list instead of
+        the incomplete earth_moid column.  Requires 'provid' column.
 
     Returns
     -------
@@ -533,7 +537,9 @@ def classify_extended_df(df):
     # Flags
     df['neo'] = df['orbit_type_int'].isin([0, 1, 2, 3])
     df['retrograde'] = df['i'].fillna(0) >= 90.0
-    if 'earth_moid' in df.columns and 'h' in df.columns:
+    if pha_set is not None and 'provid' in df.columns:
+        df['pha'] = df['provid'].isin(pha_set)
+    elif 'earth_moid' in df.columns and 'h' in df.columns:
         df['pha'] = (df['earth_moid'].fillna(999) <= 0.05) & (df['h'].fillna(99) <= 22.0)
     else:
         df['pha'] = False

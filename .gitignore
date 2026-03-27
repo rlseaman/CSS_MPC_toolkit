@@ -34,7 +34,10 @@ notebooks/.ipynb_checkpoints/
 # App runtime cache
 app/.neo_cache*
 app/.nea_*
+app/.pha_*
+app/.sbdb_*
 app/.apparition_cache*
+app/.boxscore_cache*
 app/.mpec_cache/
 
 # Downloaded / generated data files

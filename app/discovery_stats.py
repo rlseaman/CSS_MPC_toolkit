@@ -35,6 +35,8 @@ from lib.mpec_parser import (fetch_recent_mpecs, fetch_mpec_detail,
                               mpec_id_to_url, lookup_mpecs_by_designation)
 from mpc_designation import pack as pack_designation, unpack as unpack_designation
 from lib.nea_catalog import load_nea_h_lookup
+from lib.pha_catalog import load_pha_set
+from lib.sbdb_moid import load_sbdb_moid_lookup
 from lib.solar import (sun_altitude, classify_twilight,
                        _observer_latitude, TWILIGHT_ORDER)
 from lib.identifications import resolve_designation
@@ -902,8 +904,20 @@ def load_boxscore_data():
         print(f"Recovered orbit class for {recovered:,} of "
               f"{missing.sum():,} unclassified objects")
 
+    # Fill missing earth_moid from JPL SBDB (~63% of NEOs lack it in MPC)
+    moid_lookup = load_sbdb_moid_lookup(_APP_DIR, force_refresh=_FORCE_REFRESH)
+    moid_missing = df["earth_moid"].isna() & df["provid"].isin(moid_lookup)
+    if moid_missing.any():
+        df.loc[moid_missing, "earth_moid"] = (
+            df.loc[moid_missing, "provid"].map(moid_lookup))
+        print(f"Filled earth_moid for {moid_missing.sum():,} objects "
+              f"from SBDB")
+
+    # Load authoritative PHA list from PHA.txt
+    pha_set = load_pha_set(_APP_DIR, force_refresh=_FORCE_REFRESH)
+
     # Apply extended classification (MB subdivisions, Amor split, etc.)
-    df = classify_extended_df(df)
+    df = classify_extended_df(df, pha_set=pha_set)
 
     _df_boxscore = df
     return _df_boxscore
@@ -7253,9 +7267,6 @@ def update_boxscore(grouping, filters, h_range, theme_name, active_tab):
         ("Total Objects", f"{len(filt):,}"),
         ("NEOs", f"{filt['neo'].sum():,}"),
         ("PHAs", f"{filt['pha'].sum():,}"),
-        ("With H mag", f"{filt['h'].notna().sum():,}"),
-        ("Median H", f"{filt['h'].median():.1f}"
-         if filt["h"].notna().any() else "—"),
         ("Retrograde", f"{filt['retrograde'].sum():,}"),
     ]
     cards = []
