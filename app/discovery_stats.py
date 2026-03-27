@@ -117,6 +117,10 @@ PROJECT_STATIONS = {}
 for _stn, _proj in STATION_TO_PROJECT.items():
     PROJECT_STATIONS.setdefault(_proj, []).append(_stn)
 
+# Station-level color: inherit from parent project
+STATION_COLORS = {stn: None for stn in STATION_TO_PROJECT}  # placeholder
+# (filled after PROJECT_COLORS is defined below)
+
 # Stacking order matches CNEOS (bottom to top in the bar chart).
 # Plotly stacks traces in list order, so first entry = bottom of stack.
 PROJECT_ORDER = [
@@ -132,7 +136,7 @@ PROJECT_ORDER = [
     "Bok NEO Survey",
     "Rubin/LSST",
     "Other-US",
-    "Others",
+    "Others (S+F)",
 ]
 
 # Colors match CNEOS site_all.json exactly
@@ -149,8 +153,21 @@ PROJECT_COLORS = {
     "Bok NEO Survey": "#dcbeff",
     "Rubin/LSST": "#800000",
     "Other-US": "#9A6324",
-    "Others": "#d4bc9a",
+    "Others (S+F)": "#d4bc9a",
 }
+
+# Fill station-level colors from their parent project
+for _stn, _proj in STATION_TO_PROJECT.items():
+    STATION_COLORS[_stn] = PROJECT_COLORS.get(_proj, "#a9a9a9")
+STATION_COLORS["Others (S+F)"] = PROJECT_COLORS["Others (S+F)"]
+
+# Ordered station list for dropdown (excluding follow-up/others)
+_SURVEY_STATIONS = []
+for _proj in ["LINEAR", "NEAT", "Spacewatch", "LONEOS",
+              "Catalina Survey", "Pan-STARRS", "NEOWISE",
+              "ATLAS", "Bok NEO Survey", "Rubin/LSST", "Other-US"]:
+    for _stn in sorted(PROJECT_STATIONS.get(_proj, [])):
+        _SURVEY_STATIONS.append(_stn)
 
 # H magnitude size classes (standard p_v = 0.14 boundaries)
 H_BINS = [
@@ -726,7 +743,7 @@ def load_data():
     raw["station_name"] = (raw["station_code"].map(STATION_NAMES)
                            .fillna(raw["station_code"]))
     raw["project"] = (raw["station_code"].map(STATION_TO_PROJECT)
-                      .fillna("Others"))
+                      .fillna("Others (S+F)"))
 
     def h_bin(h):
         if pd.isna(h):
@@ -804,9 +821,13 @@ def _postprocess_apparition(df_raw):
     df_raw["first_obs"] = pd.to_datetime(df_raw["first_obs"])
     df_raw["first_post_disc"] = pd.to_datetime(df_raw["first_post_disc"])
     df_raw["project"] = (df_raw["station_code"].map(STATION_TO_PROJECT)
-                         .fillna("Others"))
+                         .fillna("Others (S+F)"))
     df_raw["days_from_disc"] = (
         (df_raw["first_obs"] - df_raw["disc_obstime"])
+        .dt.total_seconds() / 86400
+    )
+    df_raw["post_disc_days"] = (
+        (df_raw["first_post_disc"] - df_raw["disc_obstime"])
         .dt.total_seconds() / 86400
     )
     return df_raw
@@ -928,10 +949,15 @@ def load_boxscore_data():
 # ---------------------------------------------------------------------------
 
 def build_survey_sets(df_main, df_app, year_range, size_filter,
-                      exclude_precovery):
-    """Build per-project sets of NEO designations from apparition data.
+                      exclude_precovery, window_days=200,
+                      group_col="project"):
+    """Build per-group sets of NEO designations from apparition data.
 
-    Returns (dict[project \u2192 set[designation]], set[designation] eligible).
+    *group_col* controls grouping: ``"project"`` for survey projects,
+    ``"station_code"`` for individual stations (with unmapped stations
+    still grouped as ``"Others (S+F)"``).
+
+    Returns (dict[group \u2192 set[designation]], set[designation] eligible).
     """
     y0, y1 = year_range
     eligible = df_main[
@@ -941,8 +967,29 @@ def build_survey_sets(df_main, df_app, year_range, size_filter,
     desig_set = set(eligible["designation"])
 
     tkl = df_app[df_app["designation"].isin(desig_set)]
+
+    # Apply apparition window filter
     if exclude_precovery:
-        tkl = tkl[tkl["first_post_disc"].notna()]
+        tkl = tkl[tkl["post_disc_days"].between(0, window_days)]
+    else:
+        # Include if first_obs within window OR first_post_disc within window
+        tkl = tkl[
+            (tkl["days_from_disc"].between(-window_days, window_days))
+            | (tkl["post_disc_days"].between(0, window_days))
+        ]
+
+    # Group by station or project
+    if group_col == "station_code":
+        survey_sets = {}
+        for stn, grp in tkl.groupby("station_code"):
+            proj = STATION_TO_PROJECT.get(stn)
+            if proj is None:
+                key = "Others (S+F)"
+                survey_sets.setdefault(key, set()).update(
+                    grp["designation"])
+            else:
+                survey_sets[stn] = set(grp["designation"])
+        return survey_sets, desig_set
 
     survey_sets = {}
     for proj, grp in tkl.groupby("project"):
@@ -1242,6 +1289,18 @@ def _empty_figure(message, t, height):
     return fig
 
 
+def _venn_label(count, eligible_total, label_mode):
+    """Format a Venn region label based on the selected mode."""
+    if label_mode == "pct":
+        pct = count / eligible_total * 100 if eligible_total else 0
+        return f"<b>{pct:.1f}%</b>"
+    elif label_mode == "both":
+        pct = count / eligible_total * 100 if eligible_total else 0
+        return f"<b>{count:,}</b><br>({pct:.1f}%)"
+    else:  # "counts"
+        return f"<b>{count:,}</b>"
+
+
 def _circle_trace(cx, cy, r, color, name):
     """Return a go.Scatter trace drawing a filled circle."""
     theta = np.linspace(0, 2 * np.pi, 80)
@@ -1258,13 +1317,15 @@ def _circle_trace(cx, cy, r, color, name):
     )
 
 
-def _make_venn1(s, name, color, t, height):
+def _make_venn1(s, name, color, t, height, label_mode="counts",
+                eligible_total=0, yr_tag=""):
     """Create a single-set diagram showing one circle with its count."""
     fig = go.Figure()
     cx, cy, r = 5.0, 3.5, 2.5
     fig.add_trace(_circle_trace(cx, cy, r, color, name))
     fig.add_annotation(
-        x=cx, y=cy, text=f"<b>{len(s):,}</b>",
+        x=cx, y=cy,
+        text=_venn_label(len(s), eligible_total, label_mode),
         showarrow=False, font=dict(size=24, color=t["text"]))
     fig.add_annotation(
         x=cx, y=cy + r + 0.5,
@@ -1274,7 +1335,7 @@ def _make_venn1(s, name, color, t, height):
         template=t["template"],
         paper_bgcolor=t["paper"], plot_bgcolor=t["paper"],
         height=height,
-        title="NEOs detected during discovery apparition",
+        title=f"NEOs detected during discovery apparition {yr_tag}",
         xaxis=dict(range=[0, 10], showgrid=False, zeroline=False,
                    showticklabels=False, visible=False),
         yaxis=dict(range=[-0.5, 7.5], showgrid=False, zeroline=False,
@@ -1285,7 +1346,8 @@ def _make_venn1(s, name, color, t, height):
     return fig
 
 
-def _make_venn2(sets, names, colors, t, height):
+def _make_venn2(sets, names, colors, t, height, label_mode="counts",
+                eligible_total=0, yr_tag=""):
     """Create a 2-set Venn diagram using filled scatter circles."""
     A, B = sets
     a_only = len(A - B)
@@ -1302,16 +1364,20 @@ def _make_venn2(sets, names, colors, t, height):
         fig.add_trace(_circle_trace(
             cx[i], cy[i], r, colors[i], names[i]))
 
-    # Region counts — positions are geometric centroids of each region
-    fig.add_annotation(x=3.0, y=3.5, text=f"<b>{a_only:,}</b>",
+    # Region labels — positions are geometric centroids of each region
+    fsz = 18 if label_mode == "both" else 20
+    fig.add_annotation(x=3.0, y=3.5,
+                       text=_venn_label(a_only, eligible_total, label_mode),
                        showarrow=False,
-                       font=dict(size=20, color=t["text"]))
-    fig.add_annotation(x=5.0, y=3.5, text=f"<b>{both:,}</b>",
+                       font=dict(size=fsz, color=t["text"]))
+    fig.add_annotation(x=5.0, y=3.5,
+                       text=_venn_label(both, eligible_total, label_mode),
                        showarrow=False,
-                       font=dict(size=20, color=t["text"]))
-    fig.add_annotation(x=7.0, y=3.5, text=f"<b>{b_only:,}</b>",
+                       font=dict(size=fsz, color=t["text"]))
+    fig.add_annotation(x=7.0, y=3.5,
+                       text=_venn_label(b_only, eligible_total, label_mode),
                        showarrow=False,
-                       font=dict(size=20, color=t["text"]))
+                       font=dict(size=fsz, color=t["text"]))
 
     # Set labels above circles
     for i in range(2):
@@ -1331,7 +1397,7 @@ def _make_venn2(sets, names, colors, t, height):
         template=t["template"],
         paper_bgcolor=t["paper"], plot_bgcolor=t["paper"],
         height=height,
-        title="NEOs co-detected during discovery apparition",
+        title=f"NEOs co-detected during discovery apparition {yr_tag}",
         xaxis=dict(range=[-0.5, 10.5], showgrid=False,
                    zeroline=False, showticklabels=False,
                    visible=False),
@@ -1343,7 +1409,8 @@ def _make_venn2(sets, names, colors, t, height):
     return fig
 
 
-def _make_venn3(sets, names, colors, t, height):
+def _make_venn3(sets, names, colors, t, height, label_mode="counts",
+                eligible_total=0, yr_tag=""):
     """Create a 3-set Venn diagram using filled scatter circles."""
     A, B, C = sets
     abc = A & B & C
@@ -1374,10 +1441,12 @@ def _make_venn3(sets, names, colors, t, height):
         (6.1, 3.3, bc_only),
         (5.0, 3.9, abc),
     ]
+    fsz = 14 if label_mode == "both" else 16
     for x, y, val in regions:
         fig.add_annotation(
-            x=x, y=y, text=f"<b>{len(val):,}</b>",
-            showarrow=False, font=dict(size=16, color=t["text"]))
+            x=x, y=y,
+            text=_venn_label(len(val), eligible_total, label_mode),
+            showarrow=False, font=dict(size=fsz, color=t["text"]))
 
     # Set labels
     label_pos = [(3.5, 7.5), (6.5, 7.5), (5.0, -0.5)]
@@ -1398,7 +1467,7 @@ def _make_venn3(sets, names, colors, t, height):
         template=t["template"],
         paper_bgcolor=t["paper"], plot_bgcolor=t["paper"],
         height=height,
-        title="NEOs co-detected during discovery apparition",
+        title=f"NEOs co-detected during discovery apparition {yr_tag}",
         xaxis=dict(range=[-0.5, 10.5], showgrid=False,
                    zeroline=False, showticklabels=False,
                    visible=False),
@@ -1410,12 +1479,30 @@ def _make_venn3(sets, names, colors, t, height):
     return fig
 
 
-def _make_survey_reach(survey_sets, t, height):
+_BOTTOM_SURVEYS = {"Others (S+F)", "Catalina Follow-up"}
+# Fixed bottom order: Others (S+F) at very bottom, then Catalina Follow-up
+_BOTTOM_ORDER = ["Others (S+F)", "Catalina Follow-up"]
+
+
+def _make_survey_reach(survey_sets, t, height, yr_tag="",
+                       color_map=None):
     """Horizontal bar chart of unique NEOs detected per survey."""
-    items = sorted(survey_sets.items(), key=lambda x: len(x[1]))
+    if color_map is None:
+        color_map = PROJECT_COLORS
+    # Pin follow-up/other to bottom (works in both project & station mode)
+    _bottom_keys = _BOTTOM_SURVEYS | {
+        stn for stn, proj in STATION_TO_PROJECT.items()
+        if proj in _BOTTOM_SURVEYS}
+    bottom = [(k, v) for k, v in survey_sets.items()
+              if k in _bottom_keys]
+    bottom.sort(key=lambda x: (x[0] != "Others (S+F)", len(x[1])))
+    rest = [(k, v) for k, v in survey_sets.items()
+            if k not in _bottom_keys]
+    rest.sort(key=lambda x: len(x[1]))
+    items = bottom + rest
     names = [k for k, v in items]
     counts = [len(v) for k, v in items]
-    bar_colors = [PROJECT_COLORS.get(n, "#a9a9a9") for n in names]
+    bar_colors = [color_map.get(n, "#a9a9a9") for n in names]
 
     fig = go.Figure(go.Bar(
         y=names, x=counts, orientation="h",
@@ -1427,7 +1514,7 @@ def _make_survey_reach(survey_sets, t, height):
     fig.update_layout(
         template=t["template"],
         paper_bgcolor=t["paper"], plot_bgcolor=t["plot"],
-        title="NEOs detected per survey (apparition window)",
+        title=f"NEOs detected per survey {yr_tag}",
         xaxis_title="Unique NEOs",
         height=height,
         margin=dict(l=120, r=60),
@@ -1435,7 +1522,7 @@ def _make_survey_reach(survey_sets, t, height):
     return fig
 
 
-def _make_pairwise_heatmap(survey_sets, t, height):
+def _make_pairwise_heatmap(survey_sets, t, height, yr_tag=""):
     """Asymmetric co-detection percentage matrix."""
     names = sorted(survey_sets.keys(),
                    key=lambda n: -len(survey_sets[n]))
@@ -1475,7 +1562,7 @@ def _make_pairwise_heatmap(survey_sets, t, height):
     fig.update_layout(
         template=t["template"],
         paper_bgcolor=t["paper"],
-        title="Pairwise co-detection (% of row survey's NEOs)",
+        title=f"Pairwise co-detection (% of row survey's NEOs) {yr_tag}",
         height=height,
         xaxis=dict(title="Also detected by", side="bottom"),
         yaxis=dict(title="Survey", autorange="reversed"),
@@ -1484,12 +1571,20 @@ def _make_pairwise_heatmap(survey_sets, t, height):
     return fig
 
 
-def _make_comparison_summary(survey_sets, all_desigs, t, height):
+def _make_comparison_summary(survey_sets, all_desigs, t, height,
+                             yr_tag=""):
     """Summary statistics table for multi-survey comparison."""
+    # Exclude follow-up/other from survey-level stats
+    # (works for both project and station mode)
+    _exclude = _BOTTOM_SURVEYS | {
+        stn for stn, proj in STATION_TO_PROJECT.items()
+        if proj in _BOTTOM_SURVEYS}
+    survey_sets_filt = {k: v for k, v in survey_sets.items()
+                        if k not in _exclude}
     desig_survey_count = {}
     for desig in all_desigs:
         desig_survey_count[desig] = sum(
-            1 for s in survey_sets.values() if desig in s)
+            1 for s in survey_sets_filt.values() if desig in s)
 
     total = len(all_desigs)
     detected_any = sum(
@@ -1540,9 +1635,111 @@ def _make_comparison_summary(survey_sets, all_desigs, t, height):
     fig.update_layout(
         template=t["template"],
         paper_bgcolor=t["paper"],
-        title="Multi-survey Detection Summary",
+        title=f"Detection Summary (surveys only) {yr_tag}",
         height=height,
         margin=dict(l=10, r=10, t=60, b=10),
+    )
+    return fig
+
+
+def _make_annual_overlap(df_main, df_app, survey_select, year_range,
+                         size_filter, exclude_precovery, label_mode,
+                         t, height, window_days=200,
+                         group_col="project", color_map=None):
+    """Line chart of total NEOs detected per survey per discovery year.
+
+    Each selected survey gets its own line.  Y-axis shows counts or
+    percentages of eligible NEOs depending on *label_mode*.
+    """
+    if color_map is None:
+        color_map = PROJECT_COLORS
+    y0, y1 = year_range
+    surveys = (survey_select or [])[:3]
+    if not surveys:
+        return _empty_figure(
+            "Select 1\u20133 surveys for annual chart", t, height)
+
+    # --- per-year survey sets -------------------------------------------
+    eligible_main = df_main[
+        (df_main["disc_year"] >= y0) & (df_main["disc_year"] <= y1)]
+    if size_filter != "all":
+        eligible_main = eligible_main[
+            eligible_main["size_class"] == size_filter]
+
+    years = sorted(eligible_main["disc_year"].unique())
+    if not years:
+        return _empty_figure("No data in selected range", t, height)
+
+    show_pct = label_mode == "pct"
+
+    # Pre-filter apparition data once with window
+    app_filt = df_app[df_app["designation"].isin(
+        set(eligible_main["designation"]))]
+    if exclude_precovery:
+        app_filt = app_filt[app_filt["post_disc_days"].between(
+            0, window_days)]
+    else:
+        app_filt = app_filt[
+            (app_filt["days_from_disc"].between(
+                -window_days, window_days))
+            | (app_filt["post_disc_days"].between(0, window_days))
+        ]
+
+    # Determine grouping column
+    if group_col == "station_code":
+        app_filt = app_filt.copy()
+        app_filt["_grp"] = app_filt["station_code"].where(
+            app_filt["station_code"].isin(STATION_TO_PROJECT),
+            "Others (S+F)")
+    else:
+        app_filt = app_filt.copy()
+        app_filt["_grp"] = app_filt["project"]
+
+    # Build per-survey, per-year counts
+    series = {sv: [] for sv in surveys}
+    for yr in years:
+        desigs_yr = set(eligible_main.loc[
+            eligible_main["disc_year"] == yr, "designation"])
+        elig = len(desigs_yr)
+        app_yr = app_filt[app_filt["designation"].isin(desigs_yr)]
+        for sv in surveys:
+            n = app_yr.loc[
+                app_yr["_grp"] == sv, "designation"].nunique()
+            series[sv].append(
+                n / elig * 100 if (show_pct and elig) else n)
+
+    # --- build figure ---------------------------------------------------
+    fig = go.Figure()
+    for sv in surveys:
+        color = color_map.get(sv, "#a9a9a9")
+        fig.add_trace(go.Scatter(
+            x=years, y=series[sv],
+            mode="lines+markers",
+            name=sv,
+            line=dict(width=2.5, color=color),
+            marker=dict(size=5, color=color),
+            hovertemplate=(
+                f"<b>{sv}</b><br>"
+                + "Year %{x}<br>"
+                + ("%{y:.1f}% of eligible<extra></extra>"
+                   if show_pct else
+                   "%{y:,} NEOs<extra></extra>")),
+        ))
+
+    yaxis_title = ("% of eligible NEOs" if show_pct
+                   else "NEOs detected (apparition)")
+    fig.update_layout(
+        template=t["template"],
+        paper_bgcolor=t["paper"], plot_bgcolor=t["plot"],
+        title="Annual detections during discovery apparition",
+        xaxis_title="Discovery year",
+        yaxis_title=yaxis_title,
+        height=height,
+        legend=dict(
+            orientation="h", yanchor="bottom", y=1.02,
+            xanchor="left", x=0, font=dict(size=11)),
+        margin=dict(l=60, r=20, t=80, b=50),
+        hovermode="x unified",
     )
     return fig
 
@@ -2801,9 +2998,20 @@ app.layout = html.Div(
                                                    style=LABEL_STYLE),
                                         dcc.Dropdown(
                                             id="comp-survey-select",
-                                            options=[
-                                                {"label": p, "value": p}
-                                                for p in PROJECT_ORDER],
+                                            options=(
+                                                [{"label": p, "value": p}
+                                                 for p in PROJECT_ORDER
+                                                 if p not in (
+                                                     "Catalina Follow-up",
+                                                     "Others (S+F)")]
+                                                + [{"label": "\u2500" * 20,
+                                                    "value": "_sep",
+                                                    "disabled": True}]
+                                                + [{"label": p, "value": p}
+                                                   for p in (
+                                                       "Catalina Follow-up",
+                                                       "Others (S+F)")]
+                                            ),
                                             value=["Catalina Survey",
                                                    "Pan-STARRS",
                                                    "ATLAS"],
@@ -2825,6 +3033,64 @@ app.layout = html.Div(
                                                  "value": "include"},
                                             ],
                                             value="post_only",
+                                            inline=True,
+                                            style=RADIO_STYLE,
+                                            labelStyle=
+                                                RADIO_LABEL_STYLE,
+                                        ),
+                                    ]),
+                                    html.Div(children=[
+                                        html.Label("Apparition window",
+                                                   style=LABEL_STYLE),
+                                        dcc.Dropdown(
+                                            id="comp-window",
+                                            options=[
+                                                {"label": "\u00b150 days",
+                                                 "value": 50},
+                                                {"label": "\u00b1100 days",
+                                                 "value": 100},
+                                                {"label": "\u00b1150 days",
+                                                 "value": 150},
+                                                {"label": "\u00b1200 days",
+                                                 "value": 200},
+                                            ],
+                                            value=200,
+                                            clearable=False,
+                                            style={"width": "130px"},
+                                        ),
+                                    ]),
+                                    html.Div(children=[
+                                        html.Label("Group by",
+                                                   style=LABEL_STYLE),
+                                        dcc.RadioItems(
+                                            id="comp-group-mode",
+                                            options=[
+                                                {"label": " Projects",
+                                                 "value": "project"},
+                                                {"label": " Stations",
+                                                 "value": "station"},
+                                            ],
+                                            value="project",
+                                            inline=True,
+                                            style=RADIO_STYLE,
+                                            labelStyle=
+                                                RADIO_LABEL_STYLE,
+                                        ),
+                                    ]),
+                                    html.Div(children=[
+                                        html.Label("Venn labels",
+                                                   style=LABEL_STYLE),
+                                        dcc.RadioItems(
+                                            id="comp-venn-labels",
+                                            options=[
+                                                {"label": " Counts",
+                                                 "value": "counts"},
+                                                {"label": " Percentages",
+                                                 "value": "pct"},
+                                                {"label": " Both",
+                                                 "value": "both"},
+                                            ],
+                                            value="counts",
                                             inline=True,
                                             style=RADIO_STYLE,
                                             labelStyle=
@@ -2873,7 +3139,8 @@ app.layout = html.Div(
                                     ),
                                 ],
                             ),
-                            # 2x2 visualization grid
+                            # 2x2 visualization grid + full-width
+                            # annual overlap chart
                             dcc.Loading(
                                 type="default",
                                 children=[
@@ -2898,6 +3165,9 @@ app.layout = html.Div(
                                                 config=GRAPH_CONFIG),
                                         ],
                                     ),
+                                    dcc.Graph(
+                                        id="annual-overlap",
+                                        config=GRAPH_CONFIG),
                                 ],
                             ),
                         ]),
@@ -3904,6 +4174,9 @@ def _get_defaults():
         "comp-size-filter": "all",
         "comp-survey-select": ["Catalina Survey", "Pan-STARRS", "ATLAS"],
         "comp-precovery": "post_only",
+        "comp-window": 200,
+        "comp-group-mode": "project",
+        "comp-venn-labels": "counts",
         # Tab 4
         "fu-year-range": [2004, year_max],
         "fu-size-filter": "all",
@@ -3949,7 +4222,9 @@ _TAB_KEYS = {
     "tab-neomod": {"h-year-range", "h-range", "h-yscale", "h-mode",
                     "size-mapping", "comp-labels-toggle"},
     "tab-comparison": {"comp-year-range", "comp-size-filter",
-                       "comp-survey-select", "comp-precovery"},
+                       "comp-survey-select", "comp-precovery",
+                       "comp-window", "comp-group-mode",
+                       "comp-venn-labels"},
     "tab-followup": {"fu-year-range", "fu-size-filter", "fu-max-days"},
     "tab-circumstances": {"circ-year-range", "circ-size-filter",
                           "circ-color-by"},
@@ -3971,7 +4246,8 @@ _RESET_ORDER = [
     "h-year-range", "h-range", "h-yscale", "h-mode",
     "size-mapping", "comp-labels-toggle",
     "comp-year-range", "comp-size-filter", "comp-survey-select",
-    "comp-precovery",
+    "comp-precovery", "comp-window", "comp-group-mode",
+    "comp-venn-labels",
     "fu-year-range", "fu-size-filter", "fu-max-days",
     "circ-year-range", "circ-size-filter", "circ-color-by",
     "box-grouping", "box-filters", "box-h-range",
@@ -4634,25 +4910,41 @@ def update_neomod3_table(h_year_range, theme_name, _tab):
     Output("survey-reach", "figure"),
     Output("pairwise-heatmap", "figure"),
     Output("comparison-summary", "figure"),
+    Output("annual-overlap", "figure"),
     Input("comp-year-range", "value"),
     Input("comp-size-filter", "value"),
     Input("comp-survey-select", "value"),
     Input("comp-precovery", "value"),
+    Input("comp-window", "value"),
+    Input("comp-group-mode", "value"),
+    Input("comp-venn-labels", "value"),
     Input("theme-toggle", "value"),
     Input("plot-height", "value"),
     Input("tabs", "value"),
 )
 def update_comparison(year_range, size_filter, survey_select,
-                      precovery, theme_name, plot_height, active_tab):
+                      precovery, window_days, group_mode, venn_labels,
+                      theme_name, plot_height, active_tab):
     if active_tab != "tab-comparison" or df is None or df_apparition is None:
         raise PreventUpdate
 
     t = theme(theme_name)
     height = int(plot_height)
     exclude_precovery = precovery == "post_only"
+    window_days = int(window_days or 200)
+    group_col = ("station_code" if group_mode == "station"
+                 else "project")
+    color_map = (STATION_COLORS if group_mode == "station"
+                 else PROJECT_COLORS)
 
     survey_sets, eligible = build_survey_sets(
-        df, df_apparition, year_range, size_filter, exclude_precovery)
+        df, df_apparition, year_range, size_filter, exclude_precovery,
+        window_days, group_col)
+
+    eligible_total = len(eligible)
+    y0, y1 = year_range
+    yr_tag = (f"({y0})" if y0 == y1
+              else f"({y0}\u2013{str(y1)[-2:]})")
 
     # Venn diagram
     survey_select = survey_select or []
@@ -4661,27 +4953,36 @@ def update_comparison(year_range, size_filter, survey_select,
             "Select 1\u20133 surveys for Venn diagram", t, height)
     elif len(survey_select) == 1:
         s = survey_sets.get(survey_select[0], set())
-        c = PROJECT_COLORS.get(survey_select[0], "#a9a9a9")
-        venn_fig = _make_venn1(s, survey_select[0], c, t, height)
+        c = color_map.get(survey_select[0], "#a9a9a9")
+        venn_fig = _make_venn1(s, survey_select[0], c, t, height,
+                               venn_labels, eligible_total, yr_tag)
     elif len(survey_select) == 2:
         venn_sets = [survey_sets.get(s, set()) for s in survey_select]
-        venn_colors = [PROJECT_COLORS.get(s, "#a9a9a9")
+        venn_colors = [color_map.get(s, "#a9a9a9")
                        for s in survey_select]
         venn_fig = _make_venn2(
-            venn_sets, survey_select, venn_colors, t, height)
+            venn_sets, survey_select, venn_colors, t, height,
+            venn_labels, eligible_total, yr_tag)
     else:
         sel = survey_select[:3]
         venn_sets = [survey_sets.get(s, set()) for s in sel]
-        venn_colors = [PROJECT_COLORS.get(s, "#a9a9a9") for s in sel]
+        venn_colors = [color_map.get(s, "#a9a9a9") for s in sel]
         venn_fig = _make_venn3(
-            venn_sets, sel, venn_colors, t, height)
+            venn_sets, sel, venn_colors, t, height,
+            venn_labels, eligible_total, yr_tag)
 
-    reach_fig = _make_survey_reach(survey_sets, t, height)
-    heatmap_fig = _make_pairwise_heatmap(survey_sets, t, height)
+    reach_fig = _make_survey_reach(
+        survey_sets, t, height, yr_tag, color_map)
+    heatmap_fig = _make_pairwise_heatmap(survey_sets, t, height, yr_tag)
     summary_fig = _make_comparison_summary(
-        survey_sets, eligible, t, height)
+        survey_sets, eligible, t, height, yr_tag)
 
-    return venn_fig, reach_fig, heatmap_fig, summary_fig
+    overlap_fig = _make_annual_overlap(
+        df, df_apparition, survey_select, year_range,
+        size_filter, exclude_precovery, venn_labels, t, height,
+        window_days, group_col, color_map)
+
+    return venn_fig, reach_fig, heatmap_fig, summary_fig, overlap_fig
 
 
 # ---------------------------------------------------------------------------
@@ -8212,17 +8513,24 @@ def download_neomod(n_clicks, h_year_range, h_range):
     State("comp-year-range", "value"),
     State("comp-size-filter", "value"),
     State("comp-precovery", "value"),
+    State("comp-window", "value"),
+    State("comp-group-mode", "value"),
     prevent_initial_call=True,
 )
-def download_comparison(n_clicks, year_range, size_filter, precovery):
+def download_comparison(n_clicks, year_range, size_filter, precovery,
+                        window_days, group_mode):
     if not n_clicks or df is None or df_apparition is None:
         raise PreventUpdate
     exclude_precovery = precovery == "post_only"
+    group_col = ("station_code" if group_mode == "station"
+                 else "project")
     survey_sets, eligible = build_survey_sets(
-        df, df_apparition, year_range, size_filter, exclude_precovery)
+        df, df_apparition, year_range, size_filter, exclude_precovery,
+        int(window_days or 200), group_col)
     # Build per-survey summary
     rows = []
-    for proj in PROJECT_ORDER:
+    for proj in sorted(survey_sets.keys(),
+                       key=lambda k: -len(survey_sets[k])):
         s = survey_sets.get(proj, set())
         if s:
             rows.append({
@@ -8283,14 +8591,60 @@ def download_circumstances(n_clicks, year_range, size_filter):
 # Enforce max 3 surveys for Venn
 # ---------------------------------------------------------------------------
 
+def _project_dropdown_options():
+    """Dropdown options for project-level grouping."""
+    return (
+        [{"label": p, "value": p}
+         for p in PROJECT_ORDER
+         if p not in ("Catalina Follow-up", "Others (S+F)")]
+        + [{"label": "\u2500" * 20, "value": "_sep",
+            "disabled": True}]
+        + [{"label": p, "value": p}
+           for p in ("Catalina Follow-up", "Others (S+F)")]
+    )
+
+
+def _station_dropdown_options():
+    """Dropdown options for station-level grouping."""
+    opts = []
+    for stn in _SURVEY_STATIONS:
+        name = STATION_NAMES.get(stn, stn)
+        proj = STATION_TO_PROJECT[stn]
+        opts.append({"label": f"{stn} ({name} \u2014 {proj})",
+                     "value": stn})
+    opts.append({"label": "\u2500" * 20, "value": "_sep",
+                 "disabled": True})
+    # Follow-up stations
+    for proj in ("Catalina Follow-up",):
+        for stn in sorted(PROJECT_STATIONS.get(proj, [])):
+            name = STATION_NAMES.get(stn, stn)
+            opts.append({"label": f"{stn} ({name} \u2014 {proj})",
+                         "value": stn})
+    opts.append({"label": "Others (S+F)", "value": "Others (S+F)"})
+    return opts
+
+
+_DEFAULT_PROJECT_SELECTION = ["Catalina Survey", "Pan-STARRS", "ATLAS"]
+_DEFAULT_STATION_SELECTION = ["G96", "F51", "T05"]
+
+
 @app.callback(
-    Output("comp-survey-select", "value"),
+    Output("comp-survey-select", "options", allow_duplicate=True),
+    Output("comp-survey-select", "value", allow_duplicate=True),
+    Input("comp-group-mode", "value"),
     Input("comp-survey-select", "value"),
     prevent_initial_call=True,
 )
-def cap_survey_selection(value):
-    if value and len(value) > 3:
-        return value[:3]
+def update_survey_dropdown(group_mode, current_value):
+    trigger = ctx.triggered_id
+    if trigger == "comp-group-mode":
+        if group_mode == "station":
+            return _station_dropdown_options(), _DEFAULT_STATION_SELECTION
+        else:
+            return _project_dropdown_options(), _DEFAULT_PROJECT_SELECTION
+    # Cap at 3 selections
+    if current_value and len(current_value) > 3:
+        return no_update, current_value[:3]
     raise PreventUpdate
 
 
