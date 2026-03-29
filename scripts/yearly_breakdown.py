@@ -19,9 +19,10 @@ Usage:
     python scripts/yearly_breakdown.py             # default: >= 50 NEOs
     python scripts/yearly_breakdown.py --min 20    # lower threshold
     python scripts/yearly_breakdown.py --all       # no threshold
-    python scripts/yearly_breakdown.py --project   # roll up by project
-    python scripts/yearly_breakdown.py --sort pha  # sort by PHAs
-    python scripts/yearly_breakdown.py --sort first # sort by first year
+    python scripts/yearly_breakdown.py --project    # roll up by project
+    python scripts/yearly_breakdown.py --sort pha   # sort by PHAs
+    python scripts/yearly_breakdown.py --sort first  # sort by first year
+    python scripts/yearly_breakdown.py --current     # show current-year activity
 """
 
 import argparse
@@ -278,6 +279,52 @@ STATION_NAMES = {
     "Z84": "Calar Alto-Schmidt",
 }
 
+# ---------------------------------------------------------------------------
+# DB NEO discovery counts from mpc_sbn (q <= 1.30 definition)
+# Generated 2026-03-29 via sql/station_discovery_profile.sql
+# ---------------------------------------------------------------------------
+DB_NEO_COUNTS = {
+    "G96": 13153, "F51": 9050, "F52": 4135, "703": 3886, "704": 2477,
+    "V00": 1257, "691": 861, "T08": 570, "C51": 481, "T05": 470,
+    "E12": 458, "I41": 408, "W84": 371, "K88": 341, "W94": 337,
+    "U68": 331, "644": 298, "699": 289, "G45": 193, "W68": 168,
+    "L51": 153, "M22": 152, "675": 148, "608": 110, "W16": 98,
+    "291": 91, "J75": 91, "568": 69, "P07": 68, "381": 57,
+    "L87": 56, "D29": 55, "413": 53, "Y00": 43, "X05": 39,
+    "O18": 36, "566": 31, "N94": 31, "809": 29, "X74": 29,
+    "106": 27, "J04": 24, "K19": 22, "I52": 19, "J43": 18,
+    "095": 16, "T09": 16, "309": 13, "R17": 13, "950": 12,
+    "U74": 12, "926": 11, "Z84": 9, "Q66": 9, "033": 8,
+    "461": 8, "807": 7, "599": 7, "010": 7, "H15": 7,
+    "W93": 7, "N56": 7, "327": 6, "683": 6, "I08": 6,
+    "G03": 6, "W57": 6, "333": 5, "012": 5, "805": 5,
+    "T14": 5, "Q60": 5, "695": 4, "046": 4, "024": 4,
+    "411": 4, "760": 4, "621": 4, "910": 4, "428": 4,
+    "114": 4, "Y05": 4, "662": 4, "247": 4, "O75": 4,
+    "688": 3, "493": 3, "198": 3, "A50": 3, "Q62": 3,
+    "246": 3, "026": 3, "I16": 3, "I93": 3, "500": 3,
+    "Y89": 3, "M11": 3, "400": 2, "300": 2, "557": 2,
+    "078": 2, "H21": 2, "808": 2, "941": 2, "690": 2,
+    "673": 2, "408": 2, "152": 2, "H36": 2, "029": 2,
+    "402": 2, "118": 2, "C85": 2, "N87": 2, "G37": 2,
+    "J13": 2, "N86": 2, "872": 2, "C94": 2, "G78": 2,
+    "249": 2, "U63": 2, "M57": 2, "705": 1, "A77": 1,
+    "120": 1, "399": 1, "G32": 1, "372": 1, "D35": 1,
+    "734": 1, "678": 1, "711": 1, "104": 1, "B74": 1,
+    "511": 1, "049": 1, "595": 1, "G92": 1, "290": 1,
+    "A44": 1, "185": 1, "F84": 1, "H55": 1, "B01": 1,
+    "385": 1, "888": 1, "620": 1, "G89": 1, "446": 1,
+    "754": 1, "069": 1, "693": 1, "113": 1, "C95": 1,
+    "323": 1, "D00": 1, "W86": 1, "119": 1, "896": 1,
+    "561": 1, "W76": 1, "897": 1, "304": 1, "V03": 1,
+    "045": 1, "074": 1, "858": 1, "N89": 1, "468": 1,
+    "K95": 1, "V06": 1, "X19": 1, "W95": 1, "240": 1,
+    "X07": 1, "C57": 1, "I47": 1, "823": 1, "548": 1,
+    "883": 1, "C55": 1, "V11": 1, "221": 1, "Z17": 1,
+    "L32": 1, "Y66": 1, "661": 1, "L96": 1, "Y01": 1,
+    "Q57": 1, "H27": 1,
+}
+
 
 def fetch_page(url=URL):
     """Download the YearlyBreakdown page and return the text."""
@@ -354,6 +401,10 @@ def _add_accum(target, source):
     """Add source counts into target."""
     for k in _ACCUM_KEYS:
         target[k] += source[k]
+    # Merge yearly_neos
+    for y, n in source.get("yearly_neos", {}).items():
+        target.setdefault("yearly_neos", {})[y] = (
+            target.get("yearly_neos", {}).get(y, 0) + n)
     # Merge year ranges
     if source["first_year"] is not None:
         if (target["first_year"] is None
@@ -546,8 +597,111 @@ SORT_KEYS = {
 }
 
 
+def _detect_current_year(stations):
+    """Detect the current year from the parsed data.
+
+    Returns the most recent numeric year that appears in any station's
+    yearly_neos.  This is derived from the web page, not the calendar,
+    so it tracks the MPC's publishing cadence.
+    """
+    max_year = 0
+    for s in stations.values():
+        for y in s.get("yearly_neos", {}):
+            if y.isdigit():
+                max_year = max(max_year, int(y))
+    return max_year
+
+
+def _compute_current_change(data, current_year):
+    """Compute current-year counts and year-over-year change indicators.
+
+    Returns (current_year, prev_year, doy, results) where results is a
+    list of (count_str, change_str) tuples, one per row.
+    Change is "+" if projected current-year rate exceeds previous year
+    by >15%, "-" if below by >15%, blank if within 15% or insufficient
+    data (both years < 5 combined).
+    """
+    from datetime import date
+    today = date.today()
+    doy = today.timetuple().tm_yday
+    frac = doy / 365.0
+
+    cur = str(current_year)
+    prev = str(current_year - 1)
+
+    results = []
+    for d in data:
+        yn = d.get("yearly_neos", {})
+        n_cur = yn.get(cur, 0)
+        n_prev = yn.get(prev, 0)
+
+        n_cur_str = str(n_cur) if n_cur > 0 else ""
+
+        # Need enough data in both years to be meaningful
+        if n_prev + n_cur < 5:
+            results.append((n_cur_str, ""))
+            continue
+
+        if n_prev == 0:
+            change = "+" if n_cur > 0 else ""
+            results.append((n_cur_str, change))
+            continue
+
+        projected = n_cur / frac
+        ratio = projected / n_prev
+        if ratio > 1.15:
+            change = "+"
+        elif ratio < 0.85:
+            change = "-"
+        else:
+            change = ""
+        results.append((n_cur_str, change))
+    return doy, results
+
+
+def _db_compare_indicator(yb_count, db_count):
+    """Compare DB count to YearlyBreakdown count.
+
+    ">" means DB has more than YB, "<" means DB has less.
+    ">>" / "<<" for >5%, ">>>" / "<<<" for >25%.
+    Blank if difference < 0.5% (functionally equivalent).
+    "0" if DB has no record.
+
+    Double/triple arrows require minimum absolute differences
+    (3 for >>, 5 for >>>) to avoid misleading indicators on
+    small counts.
+    """
+    if db_count is None:
+        return "0"
+    if db_count == 0 and yb_count > 0:
+        return "0"
+    if yb_count == db_count:
+        return ""
+    diff = db_count - yb_count  # positive = DB has more
+    absdiff = abs(diff)
+    if yb_count == 0:
+        return ">>>" if diff >= 5 else ">>" if diff >= 3 else ">"
+    pct = absdiff / yb_count
+    # Below 1%: functionally equivalent
+    if pct < 0.01:
+        return ""
+    ratio = db_count / yb_count
+    if diff > 0:
+        if ratio > 1.25 and absdiff >= 5:
+            return ">>>"
+        if ratio > 1.05 and absdiff >= 3:
+            return ">>"
+        return ">"
+    else:
+        if ratio < 0.75 and absdiff >= 5:
+            return "<<<"
+        if ratio < 0.95 and absdiff >= 3:
+            return "<<"
+        return "<"
+
+
 def print_table(stations, min_neos=50, by_project=False, sort_by="total",
-                sort_explicit=False):
+                sort_explicit=False, show_current=False, db_compare=False):
     """Print a formatted summary table."""
     col_keys = ["nea_all", "pha", "nea_1km", "nea_h22",
                 "aten", "apollo", "amor"]
@@ -615,6 +769,24 @@ def print_table(stations, min_neos=50, by_project=False, sort_by="total",
         right_strs = [STATION_NAMES.get(code, "") for code in labels]
         right_header = "Name"
 
+    # DB comparison column
+    if db_compare:
+        if by_project:
+            # Sum DB counts for constituent stations of each project
+            db_strs = []
+            for _, _, codes in rows:
+                db_total = sum(DB_NEO_COUNTS.get(c, 0) for c in codes)
+                yb_total = sum(
+                    stations.get(c, {}).get("nea_all", 0) for c in codes)
+                db_strs.append(_db_compare_indicator(yb_total, db_total))
+        else:
+            db_strs = []
+            for code, d in zip(labels, data):
+                db_n = DB_NEO_COUNTS.get(code)
+                db_strs.append(_db_compare_indicator(d["nea_all"], db_n))
+    else:
+        db_strs = None
+
     # Compute totals
     totals = {k: sum(d[k] for d in data) for k in col_keys}
 
@@ -655,40 +827,89 @@ def print_table(stations, min_neos=50, by_project=False, sort_by="total",
     first_w = max(5, max(len(y) for y in all_firsts))
     last_w = max(4, max(len(y) for y in all_lasts))
 
-    def fmt_row(label, proj_short, nums, first, last, right):
+    # Current-year / Chng columns
+    if show_current:
+        current_year = _detect_current_year(stations)
+        doy, changes = _compute_current_change(data, current_year)
+        cur_strs = [c[0] for c in changes]
+        chng_strs = [c[1] for c in changes]
+        cur_header = str(current_year)
+        cur_w = max(len(cur_header),
+                    max((len(s) for s in cur_strs), default=4))
+    else:
+        cur_strs = None
+        chng_strs = None
+        current_year = None
+        doy = None
+
+    def fmt_row(label, proj_short, nums, db_ind="", first="", last="",
+                n_cur="", chng="", right=""):
         parts = [f"{label:>{label_width}}"]
         if proj_strs is not None:
             parts.append(f"{proj_short:<{proj_w}}")
-        for v, w in zip(nums, num_widths):
+        # First numeric column (NEOs), then DB indicator, then rest
+        parts.append(f"{nums[0]:>{num_widths[0]}}")
+        if db_compare:
+            parts.append(f"{db_ind:>3}")
+        for v, w in zip(nums[1:], num_widths[1:]):
             parts.append(f"{v:>{w}}")
         parts.append(f"{first:>{first_w}}")
         parts.append(f"{last:>{last_w}}")
+        if show_current:
+            parts.append(f"{n_cur:>{cur_w}}")
+            parts.append(f"{chng:>4}")
         parts.append(f"  {right}")
         return "  ".join(parts)
 
     # Header and separator
     hdr = fmt_row(label_header,
                   "Proj" if proj_strs is not None else "",
-                  col_headers, "First", "Last", right_header)
-    # Separator extends to just before the right-side text column
+                  col_headers,
+                  db_ind="DB" if db_compare else "",
+                  first="First", last="Last",
+                  n_cur=cur_header if show_current else "",
+                  chng="Chng" if show_current else "",
+                  right=right_header)
     sep_test = fmt_row(label_header,
                        "Proj" if proj_strs is not None else "",
-                       col_headers, "First", "Last", "")
+                       col_headers,
+                       db_ind="---" if db_compare else "",
+                       first="First", last="Last",
+                       n_cur="----" if show_current else "",
+                       chng="----" if show_current else "",
+                       right="")
     sep_len = len(sep_test.rstrip())
     print(hdr)
     print("-" * sep_len)
 
     pshorts = proj_strs or [""] * len(labels)
-    for label, d, ps, rstr in zip(labels, data, pshorts, right_strs):
+    if cur_strs is None:
+        cur_strs = [""] * len(labels)
+        chng_strs = [""] * len(labels)
+    if db_strs is None:
+        db_strs = [""] * len(labels)
+    for label, d, ps, dbi, nc, chng, rstr in zip(
+            labels, data, pshorts, db_strs,
+            cur_strs, chng_strs, right_strs):
         nums = [d[k] for k in col_keys]
         first = d["first_year"] or ""
         last = d["last_year"] or ""
-        print(fmt_row(label, ps, nums, first, last, rstr))
+        print(fmt_row(label, ps, nums, db_ind=dbi, first=first, last=last,
+                      n_cur=nc, chng=chng, right=rstr))
 
     print("-" * sep_len)
     total_ps = "" if proj_strs is None else ""
+    if show_current:
+        total_cur = sum(
+            d.get("yearly_neos", {}).get(str(current_year), 0)
+            for d in data)
+        total_cur_str = str(total_cur) if total_cur > 0 else ""
+    else:
+        total_cur_str = ""
     print(fmt_row("Total", total_ps,
-                  [totals[k] for k in col_keys], "", "", ""))
+                  [totals[k] for k in col_keys],
+                  first="", last="",
+                  n_cur=total_cur_str, chng="", right=""))
     kind = "projects" if by_project else "stations"
     if sort_by != "total":
         sort_label = sort_by
@@ -715,6 +936,70 @@ def print_table(stations, min_neos=50, by_project=False, sort_by="total",
         print(f"\n{len(labels)} {kind}{threshold_str}"
               f" (sorted by {sort_label})")
 
+    if show_current and current_year:
+        prev_year = current_year - 1
+        print(f"\nChng: \"+\" if projected {current_year} rate exceeds"
+              f" {prev_year} by >15%,"
+              f" \"-\" if below by >15% (day {doy}/365).")
+
+    if db_compare:
+        # Stations in DB but not in YB, filtered by current threshold
+        yb_stns = set(stations.keys())
+        db_only = sorted(
+            c for c in DB_NEO_COUNTS
+            if c not in yb_stns
+            and DB_NEO_COUNTS[c] >= min_neos
+            and DB_NEO_COUNTS[c] > 0)
+        if db_only:
+            codes_str = ", ".join(
+                f"{c}({DB_NEO_COUNTS[c]})" for c in db_only)
+            print(f"\nIn DB but missing from YB: {codes_str}")
+        print(f"\nDB: mpc_sbn vs YB."
+              f" \">\" more in DB, \">>\" >5%, \">>>\" >25%."
+              f" \"<\" less, \"0\" not in DB. Blank if <1%.")
+
+
+def write_markdown(filename, stations, min_neos=50, by_project=False,
+                   sort_by="total", sort_explicit=False,
+                   show_current=False, db_compare=False):
+    """Write the table as a Markdown file with pipe tables.
+
+    Captures the same output as print_table but formatted for Markdown.
+    Convert to PDF with: python scripts/md2pdf.py <file.md>
+    """
+    import io
+    from contextlib import redirect_stdout
+    from datetime import datetime, timezone
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        print_table(stations, min_neos=min_neos, by_project=by_project,
+                    sort_by=sort_by, sort_explicit=sort_explicit,
+                    show_current=show_current, db_compare=db_compare)
+    raw = buf.getvalue()
+
+    # Parse the fixed-width output into a markdown pipe table
+    lines = raw.split("\n")
+    md_lines = []
+
+    # Title
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    title = "NEO Discovery Statistics by Project" if by_project \
+            else "NEO Discovery Statistics by Station"
+    md_lines.append(f"# {title}")
+    md_lines.append("")
+    md_lines.append(f"Source: MPC YearlyBreakdown | Generated: {now}")
+    md_lines.append("")
+    md_lines.append("```")
+    for line in lines:
+        md_lines.append(line)
+    md_lines.append("```")
+
+    with open(filename, "w") as f:
+        f.write("\n".join(md_lines) + "\n")
+    print(f"Wrote {filename}")
+    print(f"Convert to PDF: python scripts/md2pdf.py {filename}")
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -731,6 +1016,15 @@ def main():
                         choices=["total", "pha", "1km", "140m",
                                  "first", "last"],
                         help="Sort order (default: total)")
+    parser.add_argument("--current", action="store_true",
+                        help="Add current-year count and year-over-year "
+                             "change indicator columns")
+    parser.add_argument("--db_compare", action="store_true",
+                        help="Add DB column comparing YearlyBreakdown "
+                             "to mpc_sbn database counts")
+    parser.add_argument("--md", default=None, metavar="FILE",
+                        help="Write output as Markdown file "
+                             "(convert to PDF with scripts/md2pdf.py)")
     parser.add_argument("--since", type=int, default=None,
                         help="Only accumulate discoveries from this "
                              "year onward (e.g. --since 2000)")
@@ -749,8 +1043,16 @@ def main():
     sort_explicit = any(a.startswith("--sort") for a in sys.argv[1:])
 
     print(f"Found {len(stations)} station codes.\n")
-    print_table(stations, min_neos=threshold, by_project=args.project,
-                sort_by=args.sort, sort_explicit=sort_explicit)
+
+    common_args = dict(
+        min_neos=threshold, by_project=args.project,
+        sort_by=args.sort, sort_explicit=sort_explicit,
+        show_current=args.current, db_compare=args.db_compare,
+    )
+    print_table(stations, **common_args)
+
+    if args.md:
+        write_markdown(args.md, stations, **common_args)
 
 
 if __name__ == "__main__":

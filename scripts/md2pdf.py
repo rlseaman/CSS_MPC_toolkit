@@ -91,8 +91,22 @@ strong {
 }
 """
 
+_LANDSCAPE_OVERRIDES = """
+@page {
+    size: 14in 8.5in;
+    margin: 0.5in;
+}
+body {
+    max-width: 13in;
+}
+pre {
+    font-size: 8.5pt;
+    line-height: 1.3;
+}
+"""
 
-def md_to_pdf(md_path, pdf_path):
+
+def md_to_pdf(md_path, pdf_path, landscape=False):
     """Convert a Markdown file to PDF."""
     with open(md_path) as f:
         md_text = f.read()
@@ -100,9 +114,13 @@ def md_to_pdf(md_path, pdf_path):
     html_body = markdown.markdown(
         md_text, extensions=["tables", "fenced_code"])
 
+    style = _STYLESHEET
+    if landscape:
+        style += _LANDSCAPE_OVERRIDES
+
     html_doc = (
         '<!DOCTYPE html>\n<html>\n<head><meta charset="utf-8">\n'
-        f"<style>{_STYLESHEET}</style>\n"
+        f"<style>{style}</style>\n"
         f"</head>\n<body>\n{html_body}\n</body></html>"
     )
 
@@ -115,6 +133,8 @@ def main():
     parser.add_argument("input", help="Input Markdown file")
     parser.add_argument("-o", "--output", default=None,
                         help="Output PDF path (default: same name, .pdf)")
+    parser.add_argument("--landscape", action="store_true",
+                        help="Landscape orientation with smaller monospace")
     parser.add_argument("--open", action="store_true", dest="open_after",
                         help="Open the PDF after generating")
     args = parser.parse_args()
@@ -128,7 +148,7 @@ def main():
     else:
         pdf_path = os.path.splitext(args.input)[0] + ".pdf"
 
-    md_to_pdf(args.input, pdf_path)
+    md_to_pdf(args.input, pdf_path, landscape=args.landscape)
     size_kb = os.path.getsize(pdf_path) / 1024
     print(f"{pdf_path}  ({size_kb:.0f} KB)")
 
