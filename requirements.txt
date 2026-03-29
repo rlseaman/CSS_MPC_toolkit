@@ -7,6 +7,7 @@ psycopg2-binary>=2.9
 # Data manipulation
 pandas>=2.1
 numpy>=1.26
+pyarrow>=15.0
 
 # MPC designation pack/unpack (github.com/rlseaman/MPC_designations)
 mpc-designation @ git+https://github.com/rlseaman/MPC_designations.git#subdirectory=python

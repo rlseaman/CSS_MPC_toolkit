@@ -652,10 +652,14 @@ def _load_cached_query(sql, prefix, label):
     """Load query result from cache file or database.
 
     Returns (DataFrame, meta_file_path).
+    Uses Parquet format for compact storage and fast loads.
+    Falls back to legacy CSV cache if Parquet not yet generated.
     """
     sql_hash = hashlib.md5(sql.encode()).hexdigest()[:8]
-    cache_file = os.path.join(_APP_DIR, f".{prefix}_{sql_hash}.csv")
-    meta_file = cache_file.replace(".csv", ".meta")
+    cache_file = os.path.join(_APP_DIR, f".{prefix}_{sql_hash}.parquet")
+    meta_file = os.path.join(
+        _APP_DIR, f".{prefix}_{sql_hash}.meta")
+    legacy_csv = os.path.join(_APP_DIR, f".{prefix}_{sql_hash}.csv")
 
     use_cache = False
     if not _FORCE_REFRESH and os.path.exists(cache_file):
@@ -667,10 +671,22 @@ def _load_cached_query(sql, prefix, label):
         else:
             print(f"{label} cache is {age/3600:.1f} h old "
                   "\u2014 refreshing")
+    elif not _FORCE_REFRESH and os.path.exists(legacy_csv):
+        age = time.time() - os.path.getmtime(legacy_csv)
+        if age < CACHE_MAX_AGE_SEC:
+            use_cache = True
+            cache_file = legacy_csv
+            print(f"Loading legacy CSV cache for {label} "
+                  f"(age: {age/3600:.1f} h)")
+        else:
+            print(f"{label} legacy cache is {age/3600:.1f} h old "
+                  "\u2014 refreshing")
     elif _FORCE_REFRESH:
         print(f"--refresh: re-querying {label}")
 
     if use_cache:
+        if cache_file.endswith(".parquet"):
+            return pd.read_parquet(cache_file), meta_file
         return pd.read_csv(cache_file), meta_file
 
     print(f"Querying database for {label}...")
@@ -678,7 +694,7 @@ def _load_cached_query(sql, prefix, label):
     query_time = datetime.now(timezone.utc)
     with connect() as conn:
         result = timed_query(conn, sql, label=label)
-    result.to_csv(cache_file, index=False)
+    result.to_parquet(cache_file, index=False)
     with open(meta_file, "w") as f:
         f.write(query_time.strftime("%Y-%m-%d %H:%M UTC"))
     print(f"Cached {len(result):,} rows to {cache_file}")
@@ -844,8 +860,11 @@ def load_apparition_data():
 
     sql_hash = hashlib.md5(APPARITION_SQL.encode()).hexdigest()[:8]
     cache_file = os.path.join(
+        _APP_DIR, f".apparition_cache_{sql_hash}.parquet")
+    meta_file = os.path.join(
+        _APP_DIR, f".apparition_cache_{sql_hash}.meta")
+    legacy_csv = os.path.join(
         _APP_DIR, f".apparition_cache_{sql_hash}.csv")
-    meta_file = cache_file.replace(".csv", ".meta")
 
     use_cache = False
     if not _FORCE_REFRESH and os.path.exists(cache_file):
@@ -857,14 +876,27 @@ def load_apparition_data():
         else:
             print(f"Apparition cache is {age/3600:.1f} h old "
                   "\u2014 refreshing")
+    elif not _FORCE_REFRESH and os.path.exists(legacy_csv):
+        age = time.time() - os.path.getmtime(legacy_csv)
+        if age < CACHE_MAX_AGE_SEC:
+            use_cache = True
+            cache_file = legacy_csv
+            print(f"Loading legacy CSV apparition cache "
+                  f"(age: {age/3600:.1f} h)")
+        else:
+            print(f"Apparition legacy cache is {age/3600:.1f} h old "
+                  "\u2014 refreshing")
     elif _FORCE_REFRESH:
         print("--refresh: re-querying apparition data")
 
     if use_cache:
-        _df_apparition = pd.read_csv(
-            cache_file,
-            parse_dates=["first_obs", "disc_obstime",
-                         "first_post_disc"])
+        if cache_file.endswith(".parquet"):
+            _df_apparition = pd.read_parquet(cache_file)
+        else:
+            _df_apparition = pd.read_csv(
+                cache_file,
+                parse_dates=["first_obs", "disc_obstime",
+                             "first_post_disc"])
         print(f"Loaded {len(_df_apparition):,} cached station rows")
         return _df_apparition
 
@@ -878,7 +910,7 @@ def load_apparition_data():
     print(f"Got {len(raw):,} station-level rows")
 
     _df_apparition = _postprocess_apparition(raw)
-    _df_apparition.to_csv(cache_file, index=False)
+    _df_apparition.to_parquet(cache_file, index=False)
     with open(meta_file, "w") as f:
         f.write(query_time.strftime("%Y-%m-%d %H:%M UTC"))
     print(f"Cached {len(_df_apparition):,} rows to {cache_file}")

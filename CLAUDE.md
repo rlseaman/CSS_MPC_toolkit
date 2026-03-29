@@ -130,11 +130,14 @@ Stations are mapped to project groups via `STATION_TO_PROJECT`:
 - Per-tab "Download CSV" buttons export currently filtered data
 
 ### Architecture
-- **Two SQL queries** cached to CSV (1-day auto-invalidation):
+- **Three SQL queries** cached to Parquet (1-day auto-invalidation,
+  falls back to legacy CSV if Parquet not yet generated):
   - `LOAD_SQL` — discovery data + tracklet circumstances
-    (~43K NEOs, 6 extra columns for RA/Dec/Vmag/rate/PA, ~30s query)
+    (~43K NEOs, 6 extra columns for RA/Dec/Vmag/rate/PA, ~1 min)
   - `APPARITION_SQL` — station-level observations within +/-200 days
-    of discovery (~362K station rows, ~1-2 min query)
+    of discovery (~362K station rows, ~1 min)
+  - `BOXSCORE_SQL` — full mpc_orbits catalog with classification
+    (~1.5M rows, all object classes, ~13 min)
 - **NEA.txt H magnitude override** (`lib/nea_catalog.py`): downloads
   the MPC's curated NEA catalog, resolves designations via
   `numbered_identifications` and `mpc_designation`, and overrides
