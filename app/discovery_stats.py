@@ -67,6 +67,7 @@ STATION_NAMES = {
     "I52": "Mt. Lemmon-Steward",
     "V06": "CSS-Kuiper",
     "G84": "Mt. Lemmon SkyCenter",
+    "693": "Catalina Station",
     "V00": "Kitt Peak-Bok",
     "X05": "Rubin",
     "F51": "Pan-STARRS 1",
@@ -85,14 +86,24 @@ STATION_NAMES = {
     "608": "NEAT-Haleakala",
     "I41": "ZTF",
     "C51": "WISE/NEOWISE",
-    "C57": "WISE/NEOWISE",
     "W84": "DECam",
     "U68": "SynTrack",
     "U74": "SynTrack 2",
+    "675": "Palomar Mountain",
+    "K88": "GINOP-KHK",
+    "W94": "MAPS",
+    "L51": "MARGO",
+    "W16": "Pleasant Groves",
+    "O18": "WFST",
+    "N94": "Altay",
+    "L87": "Moonbase South",
 }
 
 # Station code -> project (for grouped view)
-# Groupings match CNEOS site_all.json definitions
+# Core groupings match CNEOS site_all.json definitions.
+# Extended with Palomar Mountain, Independent Surveys (dynamic in
+# yearly_breakdown.py, static here), Historical, Other Surveys,
+# and Other Follow-up.
 STATION_TO_PROJECT = {
     "704": "LINEAR", "G45": "LINEAR", "P07": "LINEAR",
     "566": "NEAT", "608": "NEAT", "644": "NEAT",
@@ -102,15 +113,103 @@ STATION_TO_PROJECT = {
     "G96": "Catalina Survey",
     "I52": "Catalina Follow-up", "V06": "Catalina Follow-up",
     "G84": "Catalina Follow-up",
+    "693": "Catalina Survey",
     "V00": "Bok NEO Survey",
     "F51": "Pan-STARRS", "F52": "Pan-STARRS",
-    "C51": "NEOWISE", "C57": "NEOWISE",
+    "C51": "NEOWISE",
     "T05": "ATLAS", "T07": "ATLAS", "T08": "ATLAS",
     "T03": "ATLAS", "M22": "ATLAS", "W68": "ATLAS", "R17": "ATLAS",
     "X05": "Rubin/LSST",
     "I41": "Other-US", "U68": "Other-US", "U74": "Other-US",
     "W84": "Other-US",
+    # Palomar Mountain — single station, historical significance
+    "675": "Palomar Mountain",
+    # Independent Surveys — active NEO discoverers not affiliated
+    # with a major survey project (>10 NEOs in recent years)
+    "K88": "Independent Surveys", "W94": "Independent Surveys",
+    "L51": "Independent Surveys", "W16": "Independent Surveys",
+    "O18": "Independent Surveys", "N94": "Independent Surveys",
+    "L87": "Independent Surveys",
+    # Historical — stations whose last NEO discovery was 1999 or earlier
+    "010": "Historical", "024": "Historical", "026": "Historical",
+    "029": "Historical", "045": "Historical", "046": "Historical",
+    "071": "Historical", "074": "Historical", "078": "Historical",
+    "104": "Historical", "120": "Historical", "327": "Historical",
+    "372": "Historical", "385": "Historical", "391": "Historical",
+    "399": "Historical", "400": "Historical", "402": "Historical",
+    "411": "Historical", "500": "Historical", "511": "Historical",
+    "548": "Historical", "561": "Historical", "595": "Historical",
+    "662": "Historical", "688": "Historical", "690": "Historical",
+    "734": "Historical", "760": "Historical", "805": "Historical",
+    "808": "Historical", "883": "Historical", "888": "Historical",
+    "896": "Historical", "910": "Historical",
+    # Other Surveys — stations with NEO discoveries from the MPC
+    # YearlyBreakdown page, not in a named project above
+    "012": "Other Surveys", "033": "Other Surveys",
+    "049": "Other Surveys", "069": "Other Surveys",
+    "095": "Other Surveys", "106": "Other Surveys",
+    "113": "Other Surveys", "114": "Other Surveys",
+    "118": "Other Surveys", "119": "Other Surveys",
+    "152": "Other Surveys", "185": "Other Surveys",
+    "198": "Other Surveys", "221": "Other Surveys",
+    "240": "Other Surveys", "246": "Other Surveys",
+    "247": "Other Surveys", "290": "Other Surveys",
+    "300": "Other Surveys", "304": "Other Surveys",
+    "309": "Other Surveys", "333": "Other Surveys",
+    "381": "Other Surveys", "408": "Other Surveys",
+    "413": "Other Surveys", "428": "Other Surveys",
+    "446": "Other Surveys", "461": "Other Surveys",
+    "493": "Other Surveys", "557": "Other Surveys",
+    "568": "Other Surveys", "599": "Other Surveys",
+    "620": "Other Surveys", "621": "Other Surveys",
+    "661": "Other Surveys", "673": "Other Surveys",
+    "678": "Other Surveys", "683": "Other Surveys",
+    "695": "Other Surveys", "705": "Other Surveys",
+    "807": "Other Surveys", "809": "Other Surveys",
+    "823": "Other Surveys", "858": "Other Surveys",
+    "926": "Other Surveys", "941": "Other Surveys",
+    "950": "Other Surveys",
+    "A44": "Other Surveys", "A50": "Other Surveys",
+    "A77": "Other Surveys", "B01": "Other Surveys",
+    "B74": "Other Surveys",
+    "C41": "Other Surveys", "C55": "Other Surveys",
+    "C57": "Other Surveys", "C85": "Other Surveys",
+    "C94": "Other Surveys", "C95": "Other Surveys",
+    "D00": "Other Surveys", "D29": "Other Surveys",
+    "D35": "Other Surveys",
+    "F84": "Other Surveys",
+    "G03": "Other Surveys", "G32": "Other Surveys",
+    "G37": "Other Surveys", "G78": "Other Surveys",
+    "G89": "Other Surveys", "G92": "Other Surveys",
+    "H15": "Other Surveys", "H21": "Other Surveys",
+    "H27": "Other Surveys", "H36": "Other Surveys",
+    "H55": "Other Surveys",
+    "I08": "Other Surveys", "I16": "Other Surveys",
+    "I93": "Other Surveys",
+    "J04": "Other Surveys", "J13": "Other Surveys",
+    "J43": "Other Surveys", "J75": "Other Surveys",
+    "K19": "Other Surveys", "K95": "Other Surveys",
+    "L96": "Other Surveys",
+    "M11": "Other Surveys", "M57": "Other Surveys",
+    "N56": "Other Surveys", "N86": "Other Surveys",
+    "N87": "Other Surveys", "N89": "Other Surveys",
+    "O75": "Other Surveys",
+    "Q57": "Other Surveys", "Q60": "Other Surveys",
+    "Q62": "Other Surveys", "Q66": "Other Surveys",
+    "T09": "Other Surveys", "T14": "Other Surveys",
+    "U63": "Other Surveys",
+    "V03": "Other Surveys", "V11": "Other Surveys",
+    "W57": "Other Surveys", "W76": "Other Surveys",
+    "W86": "Other Surveys", "W93": "Other Surveys",
+    "W95": "Other Surveys",
+    "X07": "Other Surveys", "X19": "Other Surveys",
+    "X74": "Other Surveys",
+    "Y00": "Other Surveys", "Y01": "Other Surveys",
+    "Y05": "Other Surveys", "Y66": "Other Surveys",
+    "Y89": "Other Surveys",
+    "Z84": "Other Surveys",
 }
+# Any station not in STATION_TO_PROJECT falls into "Other Follow-up"
 
 # Reverse mapping: project -> list of station codes
 PROJECT_STATIONS = {}
@@ -136,10 +235,15 @@ PROJECT_ORDER = [
     "Bok NEO Survey",
     "Rubin/LSST",
     "Other-US",
-    "Others (S+F)",
+    "Palomar Mountain",
+    "Independent Surveys",
+    "Historical",
+    "Other Surveys",
+    "Other Follow-up",
 ]
 
-# Colors match CNEOS site_all.json exactly
+# Colors match CNEOS site_all.json exactly for core groups.
+# Extended groups use distinguishable muted tones.
 PROJECT_COLORS = {
     "LINEAR": "#4363d8",
     "NEAT": "#f58231",
@@ -153,19 +257,24 @@ PROJECT_COLORS = {
     "Bok NEO Survey": "#dcbeff",
     "Rubin/LSST": "#800000",
     "Other-US": "#9A6324",
-    "Others (S+F)": "#d4bc9a",
+    "Palomar Mountain": "#e6beff",
+    "Independent Surveys": "#fabebe",
+    "Historical": "#c0c0c0",
+    "Other Surveys": "#d4bc9a",
+    "Other Follow-up": "#b0b0b0",
 }
 
 # Fill station-level colors from their parent project
 for _stn, _proj in STATION_TO_PROJECT.items():
     STATION_COLORS[_stn] = PROJECT_COLORS.get(_proj, "#a9a9a9")
-STATION_COLORS["Others (S+F)"] = PROJECT_COLORS["Others (S+F)"]
+STATION_COLORS["Other Follow-up"] = PROJECT_COLORS["Other Follow-up"]
 
-# Ordered station list for dropdown (excluding follow-up/others)
+# Ordered station list for dropdown (excluding grouped categories)
 _SURVEY_STATIONS = []
 for _proj in ["LINEAR", "NEAT", "Spacewatch", "LONEOS",
               "Catalina Survey", "Pan-STARRS", "NEOWISE",
-              "ATLAS", "Bok NEO Survey", "Rubin/LSST", "Other-US"]:
+              "ATLAS", "Bok NEO Survey", "Rubin/LSST", "Other-US",
+              "Palomar Mountain", "Independent Surveys"]:
     for _stn in sorted(PROJECT_STATIONS.get(_proj, [])):
         _SURVEY_STATIONS.append(_stn)
 
@@ -759,7 +868,7 @@ def load_data():
     raw["station_name"] = (raw["station_code"].map(STATION_NAMES)
                            .fillna(raw["station_code"]))
     raw["project"] = (raw["station_code"].map(STATION_TO_PROJECT)
-                      .fillna("Others (S+F)"))
+                      .fillna("Other Follow-up"))
 
     def h_bin(h):
         if pd.isna(h):
@@ -837,7 +946,7 @@ def _postprocess_apparition(df_raw):
     df_raw["first_obs"] = pd.to_datetime(df_raw["first_obs"])
     df_raw["first_post_disc"] = pd.to_datetime(df_raw["first_post_disc"])
     df_raw["project"] = (df_raw["station_code"].map(STATION_TO_PROJECT)
-                         .fillna("Others (S+F)"))
+                         .fillna("Other Follow-up"))
     df_raw["days_from_disc"] = (
         (df_raw["first_obs"] - df_raw["disc_obstime"])
         .dt.total_seconds() / 86400
@@ -987,7 +1096,7 @@ def build_survey_sets(df_main, df_app, year_range, size_filter,
 
     *group_col* controls grouping: ``"project"`` for survey projects,
     ``"station_code"`` for individual stations (with unmapped stations
-    still grouped as ``"Others (S+F)"``).
+    still grouped as ``"Other Follow-up"``).
 
     Returns (dict[group \u2192 set[designation]], set[designation] eligible).
     """
@@ -1016,7 +1125,7 @@ def build_survey_sets(df_main, df_app, year_range, size_filter,
         for stn, grp in tkl.groupby("station_code"):
             proj = STATION_TO_PROJECT.get(stn)
             if proj is None:
-                key = "Others (S+F)"
+                key = "Other Follow-up"
                 survey_sets.setdefault(key, set()).update(
                     grp["designation"])
             else:
@@ -1511,9 +1620,11 @@ def _make_venn3(sets, names, colors, t, height, label_mode="counts",
     return fig
 
 
-_BOTTOM_SURVEYS = {"Others (S+F)", "Catalina Follow-up"}
-# Fixed bottom order: Others (S+F) at very bottom, then Catalina Follow-up
-_BOTTOM_ORDER = ["Others (S+F)", "Catalina Follow-up"]
+_BOTTOM_SURVEYS = {"Other Follow-up", "Other Surveys", "Historical",
+                    "Catalina Follow-up"}
+# Fixed bottom order: grouped categories at bottom
+_BOTTOM_ORDER = ["Other Follow-up", "Other Surveys", "Historical",
+                 "Catalina Follow-up"]
 
 
 def _make_survey_reach(survey_sets, t, height, yr_tag="",
@@ -1527,7 +1638,8 @@ def _make_survey_reach(survey_sets, t, height, yr_tag="",
         if proj in _BOTTOM_SURVEYS}
     bottom = [(k, v) for k, v in survey_sets.items()
               if k in _bottom_keys]
-    bottom.sort(key=lambda x: (x[0] != "Others (S+F)", len(x[1])))
+    _bo = {p: i for i, p in enumerate(_BOTTOM_ORDER)}
+    bottom.sort(key=lambda x: _bo.get(x[0], 999))
     rest = [(k, v) for k, v in survey_sets.items()
             if k not in _bottom_keys]
     rest.sort(key=lambda x: len(x[1]))
@@ -1536,18 +1648,45 @@ def _make_survey_reach(survey_sets, t, height, yr_tag="",
     counts = [len(v) for k, v in items]
     bar_colors = [color_map.get(n, "#a9a9a9") for n in names]
 
+    # Build station list for hover tooltip
+    hover_texts = []
+    for name, desigs in items:
+        stns = sorted(PROJECT_STATIONS.get(name, []))
+        if stns and len(stns) > 15:
+            hover_texts.append(
+                f"{name}: {len(desigs):,} NEOs"
+                f" ({len(stns)} stations)")
+        elif stns:
+            stn_str = ", ".join(stns)
+            hover_texts.append(
+                f"{name}: {len(desigs):,} NEOs"
+                f"<br>Stations: {stn_str}")
+        elif name in STATION_TO_PROJECT:
+            # Individual station mode
+            stn_name = STATION_NAMES.get(name, name)
+            proj = STATION_TO_PROJECT[name]
+            hover_texts.append(
+                f"{name} ({stn_name}): {len(desigs):,} NEOs"
+                f"<br>Project: {proj}")
+        else:
+            hover_texts.append(f"{name}: {len(desigs):,} NEOs")
+
     fig = go.Figure(go.Bar(
         y=names, x=counts, orientation="h",
         marker_color=bar_colors,
-        hovertemplate="%{y}: %{x:,} NEOs<extra></extra>",
+        hovertext=hover_texts,
+        hovertemplate="%{hovertext}<extra></extra>",
         text=[f"{c:,}" for c in counts],
         textposition="outside",
     ))
+    # Pad x-axis to prevent text clipping on the longest bar
+    max_count = max(counts) if counts else 0
     fig.update_layout(
         template=t["template"],
         paper_bgcolor=t["paper"], plot_bgcolor=t["plot"],
-        title=f"NEOs detected per survey {yr_tag}",
+        title=f"Discovery apparition: NEOs detected per survey {yr_tag}",
         xaxis_title="Unique NEOs",
+        xaxis_range=[0, max_count * 1.15],
         height=height,
         margin=dict(l=120, r=60),
     )
@@ -1667,7 +1806,7 @@ def _make_comparison_summary(survey_sets, all_desigs, t, height,
     fig.update_layout(
         template=t["template"],
         paper_bgcolor=t["paper"],
-        title=f"Detection Summary (surveys only) {yr_tag}",
+        title=f"Discovery apparition: Detection Summary (surveys only) {yr_tag}",
         height=height,
         margin=dict(l=10, r=10, t=60, b=10),
     )
@@ -1677,19 +1816,21 @@ def _make_comparison_summary(survey_sets, all_desigs, t, height,
 def _make_annual_overlap(df_main, df_app, survey_select, year_range,
                          size_filter, exclude_precovery, label_mode,
                          t, height, window_days=200,
-                         group_col="project", color_map=None):
+                         group_col="project", color_map=None,
+                         visible_surveys=None):
     """Line chart of total NEOs detected per survey per discovery year.
 
-    Each selected survey gets its own line.  Y-axis shows counts or
-    percentages of eligible NEOs depending on *label_mode*.
+    Each survey gets its own trace.  Surveys in *visible_surveys* are
+    shown; others are hidden but toggleable via the Plotly legend.
+    Y-axis shows counts or percentages depending on *label_mode*.
     """
     if color_map is None:
         color_map = PROJECT_COLORS
     y0, y1 = year_range
-    surveys = (survey_select or [])[:3]
+    surveys = survey_select or []
     if not surveys:
         return _empty_figure(
-            "Select 1\u20133 surveys for annual chart", t, height)
+            "Select surveys for annual chart", t, height)
 
     # --- per-year survey sets -------------------------------------------
     eligible_main = df_main[
@@ -1722,7 +1863,7 @@ def _make_annual_overlap(df_main, df_app, survey_select, year_range,
         app_filt = app_filt.copy()
         app_filt["_grp"] = app_filt["station_code"].where(
             app_filt["station_code"].isin(STATION_TO_PROJECT),
-            "Others (S+F)")
+            "Other Follow-up")
     else:
         app_filt = app_filt.copy()
         app_filt["_grp"] = app_filt["project"]
@@ -1742,12 +1883,21 @@ def _make_annual_overlap(df_main, df_app, survey_select, year_range,
 
     # --- build figure ---------------------------------------------------
     fig = go.Figure()
+    if visible_surveys is None:
+        visible_surveys = set(surveys)
     for sv in surveys:
         color = color_map.get(sv, "#a9a9a9")
+        vis = True if sv in visible_surveys else "legendonly"
+        # Show station name in legend for station-level charts
+        if group_col == "station_code" and sv in STATION_NAMES:
+            label = f"{sv} ({STATION_NAMES[sv]})"
+        else:
+            label = sv
         fig.add_trace(go.Scatter(
             x=years, y=series[sv],
             mode="lines+markers",
-            name=sv,
+            name=label,
+            visible=vis,
             line=dict(width=2.5, color=color),
             marker=dict(size=5, color=color),
             hovertemplate=(
@@ -3033,16 +3183,12 @@ app.layout = html.Div(
                                             options=(
                                                 [{"label": p, "value": p}
                                                  for p in PROJECT_ORDER
-                                                 if p not in (
-                                                     "Catalina Follow-up",
-                                                     "Others (S+F)")]
+                                                 if p not in _BOTTOM_SURVEYS]
                                                 + [{"label": "\u2500" * 20,
                                                     "value": "_sep",
                                                     "disabled": True}]
                                                 + [{"label": p, "value": p}
-                                                   for p in (
-                                                       "Catalina Follow-up",
-                                                       "Others (S+F)")]
+                                                   for p in _BOTTOM_ORDER]
                                             ),
                                             value=["Catalina Survey",
                                                    "Pan-STARRS",
@@ -3199,6 +3345,35 @@ app.layout = html.Div(
                                     ),
                                     dcc.Graph(
                                         id="annual-overlap",
+                                        config=GRAPH_CONFIG),
+                                    # Station-level annual overlap
+                                    html.Div(
+                                        style={"marginTop": "15px",
+                                               "display": "flex",
+                                               "alignItems": "center",
+                                               "gap": "10px"},
+                                        children=[
+                                            html.Label(
+                                                "Station detail:",
+                                                style={"fontWeight":
+                                                       "bold",
+                                                       "fontSize":
+                                                       "12px"}),
+                                            dcc.Dropdown(
+                                                id="comp-station-select",
+                                                options=[],
+                                                value=[],
+                                                multi=True,
+                                                placeholder=(
+                                                    "Select stations "
+                                                    "to compare..."),
+                                                style={
+                                                    "width": "500px"},
+                                            ),
+                                        ],
+                                    ),
+                                    dcc.Graph(
+                                        id="annual-overlap-station",
                                         config=GRAPH_CONFIG),
                                 ],
                             ),
@@ -5009,12 +5184,100 @@ def update_comparison(year_range, size_filter, survey_select,
     summary_fig = _make_comparison_summary(
         survey_sets, eligible, t, height, yr_tag)
 
+    # Annual overlap: show all surveys with enough data, not just Venn selection.
+    # Selected surveys are visible; others are hidden but toggleable via legend.
+    all_surveys = [k for k, v in survey_sets.items()
+                   if len(v) >= 10 and k not in _BOTTOM_SURVEYS]
+    # Put selected surveys first, then the rest
+    selected_set = set(survey_select or [])
+    ordered_surveys = ([s for s in all_surveys if s in selected_set]
+                       + [s for s in all_surveys if s not in selected_set])
     overlap_fig = _make_annual_overlap(
-        df, df_apparition, survey_select, year_range,
+        df, df_apparition, ordered_surveys, year_range,
         size_filter, exclude_precovery, venn_labels, t, height,
-        window_days, group_col, color_map)
+        window_days, group_col, color_map,
+        visible_surveys=selected_set)
 
     return venn_fig, reach_fig, heatmap_fig, summary_fig, overlap_fig
+
+
+# ---------------------------------------------------------------------------
+# Station-level annual overlap — dropdown + chart
+# ---------------------------------------------------------------------------
+
+@app.callback(
+    Output("comp-station-select", "options"),
+    Output("comp-station-select", "value"),
+    Input("comp-survey-select", "value"),
+    State("comp-station-select", "value"),
+)
+def update_station_dropdown(survey_select, current_value):
+    """Populate station dropdown from selected projects' stations."""
+    opts = []
+    suggested = []
+    for proj in (survey_select or []):
+        stns = sorted(PROJECT_STATIONS.get(proj, []))
+        for stn in stns:
+            name = STATION_NAMES.get(stn, stn)
+            opts.append({"label": f"{stn} ({name})", "value": stn})
+            suggested.append(stn)
+    # Add a separator and then all survey stations for free selection
+    if opts:
+        opts.append({"label": "\u2500" * 20, "value": "_sep",
+                     "disabled": True})
+    for stn in _SURVEY_STATIONS:
+        if stn not in suggested:
+            name = STATION_NAMES.get(stn, stn)
+            proj = STATION_TO_PROJECT.get(stn, "")
+            opts.append({"label": f"{stn} ({name} \u2014 {proj})",
+                         "value": stn})
+    # Preserve current selection if still valid, else suggest project stns
+    valid_values = {o["value"] for o in opts if not o.get("disabled")}
+    if current_value:
+        kept = [v for v in current_value if v in valid_values]
+        if kept:
+            return opts, kept
+    return opts, suggested
+
+
+@app.callback(
+    Output("annual-overlap-station", "figure"),
+    Input("comp-station-select", "value"),
+    Input("comp-year-range", "value"),
+    Input("comp-size-filter", "value"),
+    Input("comp-precovery", "value"),
+    Input("comp-window", "value"),
+    Input("comp-venn-labels", "value"),
+    Input("theme-toggle", "value"),
+    Input("plot-height", "value"),
+    Input("tabs", "value"),
+)
+def update_station_overlap(station_select, year_range, size_filter,
+                           precovery, window_days, venn_labels,
+                           theme_name, plot_height, active_tab):
+    if active_tab != "tab-comparison" or df is None or df_apparition is None:
+        raise PreventUpdate
+
+    stations_sel = [s for s in (station_select or []) if s != "_sep"]
+    if not stations_sel:
+        t = theme(theme_name)
+        return _empty_figure(
+            "Select stations above for detail chart",
+            t, int(plot_height))
+
+    t = theme(theme_name)
+    height = int(plot_height)
+    exclude_precovery = precovery == "post_only"
+    window_days = int(window_days or 200)
+
+    fig = _make_annual_overlap(
+        df, df_apparition, stations_sel, year_range,
+        size_filter, exclude_precovery, venn_labels, t, height,
+        window_days, group_col="station_code",
+        color_map=STATION_COLORS)
+    fig.update_layout(
+        title="Annual detections by station (discovery apparition)")
+    return fig
 
 
 # ---------------------------------------------------------------------------
@@ -8628,11 +8891,11 @@ def _project_dropdown_options():
     return (
         [{"label": p, "value": p}
          for p in PROJECT_ORDER
-         if p not in ("Catalina Follow-up", "Others (S+F)")]
+         if p not in _BOTTOM_SURVEYS]
         + [{"label": "\u2500" * 20, "value": "_sep",
             "disabled": True}]
         + [{"label": p, "value": p}
-           for p in ("Catalina Follow-up", "Others (S+F)")]
+           for p in _BOTTOM_ORDER]
     )
 
 
@@ -8646,13 +8909,14 @@ def _station_dropdown_options():
                      "value": stn})
     opts.append({"label": "\u2500" * 20, "value": "_sep",
                  "disabled": True})
-    # Follow-up stations
+    # Follow-up and grouped categories
     for proj in ("Catalina Follow-up",):
         for stn in sorted(PROJECT_STATIONS.get(proj, [])):
             name = STATION_NAMES.get(stn, stn)
             opts.append({"label": f"{stn} ({name} \u2014 {proj})",
                          "value": stn})
-    opts.append({"label": "Others (S+F)", "value": "Others (S+F)"})
+    for proj in ("Historical", "Other Surveys", "Other Follow-up"):
+        opts.append({"label": proj, "value": proj})
     return opts
 
 
