@@ -2108,9 +2108,14 @@ def _make_mag_distribution(dff, color_by, group_by, t, height):
 
 def _make_rate_plot(dff, color_by, group_by, t, height):
     """Scatter of rate of motion vs absolute magnitude H."""
-    valid = dff[dff["rate_deg_per_day"].notna() & dff["h"].notna()]
+    valid = dff[dff["rate_deg_per_day"].notna()
+                & dff["h"].notna()
+                & (dff["h"] <= 35)]
     n_excluded = len(dff) - len(
         dff[dff["rate_deg_per_day"].notna()])
+    # X-axis range: floor to nearest 5 on low end
+    h_min = int(valid["h"].min() // 5) * 5 if len(valid) else 0
+    h_max = 35
 
     if len(valid) == 0:
         return _empty_figure("No rate data", t, height)
@@ -2180,7 +2185,8 @@ def _make_rate_plot(dff, color_by, group_by, t, height):
         paper_bgcolor=t["paper"], plot_bgcolor=t["plot"],
         height=height,
         title="Rate of motion vs. absolute magnitude",
-        xaxis=dict(title="Absolute magnitude H"),
+        xaxis=dict(title="Absolute magnitude H",
+                   range=[h_min, h_max]),
         yaxis=dict(title="Rate (\u00b0/day)", type="log"),
         legend=dict(orientation="h", yanchor="bottom", y=1.02,
                     xanchor="right", x=1),
