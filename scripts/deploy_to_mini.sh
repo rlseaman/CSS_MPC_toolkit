@@ -1,17 +1,20 @@
 #!/bin/bash
 # Deploy NEO Discovery Dashboard caches to Mac Mini
 #
-# Runs on the MBP (which has database access):
-#   1. Rebuilds all Parquet caches via --refresh-only
-#   2. Rsyncs cache files to the Mac Mini
-#   3. Restarts the Dash app on the Mac Mini
+# Runs on the MBP (which has database access).  Intended for manual
+# invocation — not cron — until the Mac Mini hosts its own mpc_sbn
+# replica, after which this script should become obsolete.
+#
+#   1. Rebuilds all Parquet caches on the MBP via --refresh-only
+#      (this also refreshes the MBP's own local caches in-place).
+#   2. Rsyncs cache files to the Mac Mini.
+#   3. On the Mac Mini: git pull origin main, then restart the Dash
+#      app in --serve-only mode so it picks up any code changes
+#      alongside the fresh caches.
 #
 # Usage:
 #   scripts/deploy_to_mini.sh              # full pipeline: refresh + sync + restart
 #   scripts/deploy_to_mini.sh --sync-only  # skip DB refresh, just sync existing caches
-#
-# Cron example (daily at 06:00 local):
-#   0 6 * * * cd /Users/seaman/Desktop/Claude/code/CSS_MPC_toolkit && scripts/deploy_to_mini.sh >> logs/deploy.log 2>&1
 
 set -euo pipefail
 
@@ -106,6 +109,13 @@ set -euo pipefail
 APP_DIR="$HOME/CSS_MPC_toolkit"
 PIDFILE="$APP_DIR/app/.dash.pid"
 
+# Pull latest app code from GitHub so restarts pick up code changes,
+# not just refreshed caches.  Fast-forward only — bail loudly on any
+# divergence rather than silently running stale code.
+cd "$APP_DIR"
+echo "Pulling latest from origin/main..."
+git pull --ff-only origin main
+
 # Kill existing app process
 if [[ -f "$PIDFILE" ]]; then
     OLD_PID=$(cat "$PIDFILE")
@@ -119,7 +129,6 @@ pkill -f "discovery_stats.py" 2>/dev/null || true
 sleep 1
 
 # Start the app in serve-only mode (never queries DB, uses synced caches)
-cd "$APP_DIR"
 source venv/bin/activate
 nohup python app/discovery_stats.py --serve-only > app/dash.log 2>&1 &
 echo $! > "$PIDFILE"
