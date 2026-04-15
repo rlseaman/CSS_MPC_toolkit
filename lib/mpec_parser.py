@@ -32,6 +32,15 @@ _MPC_BASE = "https://www.minorplanetcenter.net"
 _RECENT_URL = f"{_MPC_BASE}/mpec/RecentMPECs.html"
 _LIST_TTL_SEC = 900  # 15 minutes
 
+# In-process memoization of fetch_mpec_detail results.  Dash fires several
+# callbacks per user click (main render, enrichment poll, nav buttons,
+# health check) and each calls fetch_mpec_detail with the same path.
+# Disk cache hits are cheap, but we also want to suppress the remote
+# nav-probe for the latest MPEC in those duplicate calls.  Small dict
+# is enough; the left-panel listing is at most ~100 entries.
+_detail_memo = {}       # path -> parsed detail dict
+_DETAIL_MEMO_MAX = 256
+
 def mpec_id_to_url(mpec_id):
     """Convert an MPEC ID like '2026-C105' to a full MPC URL.
 
@@ -567,6 +576,27 @@ def fetch_recent_mpecs(force=False):
     return results
 
 
+def _next_path_from_listing(mpec_path):
+    """Look up the next newer MPEC's path from the already-cached listing.
+
+    Avoids re-fetching an individual MPEC page just to update its nav
+    links.  Returns "" if the listing is empty, doesn't include this
+    path, or this path is the newest entry (no newer MPEC yet).
+    """
+    # Read from the existing 15-min cache without forcing a refetch.
+    # If the listing cache is empty we just return "" — caller will
+    # have either a cached next_path or fall back to empty nav.
+    entries = _list_cache.get("data") or []
+    if not entries:
+        return ""
+    # Listing is newest-first.  If mpec_path appears at index i, the
+    # newer MPEC is at index i-1.  If i == 0 it's the newest.
+    for i, e in enumerate(entries):
+        if e.get("path") == mpec_path:
+            return entries[i - 1].get("path", "") if i > 0 else ""
+    return ""
+
+
 def fetch_mpec_detail(mpec_path, cache_dir=None):
     """Fetch and parse an individual MPEC page.
 
@@ -576,8 +606,31 @@ def fetch_mpec_detail(mpec_path, cache_dir=None):
 
     Returns:
         Parsed MPEC dict from parse_mpec_content()
+
+    Caching layers (outer to inner):
+      1. In-process memo (_detail_memo) — deduplicates the 4 callbacks
+         that all fire on a single user click.  Never expires in a
+         given process; cleared on restart.
+      2. Disk cache in cache_dir — .txt for pre_text, .nav for
+         prev/next paths.  Permanent: MPEC content never changes.
+      3. Remote fetch from MPC — only when neither cache has it.
     """
-    # Check disk cache
+    # --- Layer 1: in-process memo ---
+    if mpec_path in _detail_memo:
+        result = _detail_memo[mpec_path]
+        # If next_path was empty when memoized (because this was the
+        # newest MPEC at that moment), a later listing refresh may
+        # have revealed a newer one.  Refill in place so navigation
+        # stays current without needing a process restart.
+        if not result.get("next_path"):
+            derived = _next_path_from_listing(mpec_path)
+            if derived:
+                result["next_path"] = derived
+        return result
+
+    result = None
+
+    # --- Layer 2: disk cache ---
     if cache_dir:
         os.makedirs(cache_dir, exist_ok=True)
         safe_name = mpec_path.replace("/", "_").strip("_") + ".txt"
@@ -586,95 +639,92 @@ def fetch_mpec_detail(mpec_path, cache_dir=None):
         if os.path.exists(cache_path):
             with open(cache_path, "r") as f:
                 pre_text = f.read()
-            # Extract mpec_id and title from cached content
-            page_parser = _MPECPageParser()
-            # We stored just the pre text; reconstruct minimal parse
             title_line = _extract_designation(pre_text) or ""
             mpec_m = re.search(r"M\.P\.E\.C\.\s+(\S+)", pre_text)
             mpec_id = mpec_m.group(1) if mpec_m else ""
             result = parse_mpec_content(
                 pre_text, mpec_id=mpec_id, title=title_line, path=mpec_path)
-            # Load cached nav links; backfill from web if missing.
-            # If the cached nav has no next_path, re-fetch: a newer
-            # MPEC may have been published since the cache was written.
-            _nav_cached_prev = ""
-            _nav_cached_next = ""
+            # Load cached nav links
+            nav_prev = ""
+            nav_next = ""
             if os.path.exists(nav_path):
                 try:
                     with open(nav_path, "r") as f:
                         lines = f.read().split("\n")
-                    _nav_cached_prev = lines[0] if len(lines) > 0 else ""
-                    _nav_cached_next = lines[1] if len(lines) > 1 else ""
+                    nav_prev = lines[0] if len(lines) > 0 else ""
+                    nav_next = lines[1] if len(lines) > 1 else ""
                 except OSError:
                     pass
-            if _nav_cached_next:
-                # Cache is complete (has both prev and next)
-                result["prev_path"] = _nav_cached_prev
-                result["next_path"] = _nav_cached_next
-            else:
-                # No next_path cached — re-fetch to check for newer MPEC
-                try:
-                    html_text = _fetch_url(f"{_MPC_BASE}{mpec_path}")
-                    nav_parser = _MPECPageParser()
-                    nav_parser.feed(html_text)
-                    result["prev_path"] = nav_parser.prev_path
-                    result["next_path"] = nav_parser.next_path
-                    if nav_parser.prev_path or nav_parser.next_path:
+            # If next_path is missing (typical for what was once the
+            # latest MPEC), derive it from the recent-MPECs listing
+            # cache.  This avoids the per-click remote re-fetch that
+            # plagued the previous implementation, especially painful
+            # for 200 KB+ comet_orbits/DOU MPECs.
+            if not nav_next:
+                derived_next = _next_path_from_listing(mpec_path)
+                if derived_next:
+                    nav_next = derived_next
+                    try:
                         with open(nav_path, "w") as f:
-                            f.write(f"{nav_parser.prev_path}\n"
-                                    f"{nav_parser.next_path}\n")
-                except Exception:
-                    # Fall back to whatever was cached
-                    result["prev_path"] = _nav_cached_prev
-                    result["next_path"] = _nav_cached_next
-            return result
+                            f.write(f"{nav_prev}\n{nav_next}\n")
+                    except OSError:
+                        pass
+            result["prev_path"] = nav_prev
+            result["next_path"] = nav_next
 
-    url = f"{_MPC_BASE}{mpec_path}"
-    try:
-        html_text = _fetch_url(url)
-    except Exception as e:
-        print(f"Error fetching MPEC {mpec_path}: {e}")
-        return None
-
-    page_parser = _MPECPageParser()
-    page_parser.feed(html_text)
-
-    pre_text = page_parser.pre_text
-    page_title = page_parser.title
-
-    # Extract title portion (after " : ")
-    title = ""
-    if " : " in page_title:
-        title = page_title.split(" : ", 1)[1].strip()
-
-    # Extract MPEC ID from page title
-    mpec_id = ""
-    m = re.match(r"(MPEC\s+\S+)", page_title)
-    if m:
-        mpec_id = m.group(1)
-
-    # Cache to disk
-    if cache_dir and pre_text:
-        safe_name = mpec_path.replace("/", "_").strip("_") + ".txt"
-        cache_path = os.path.join(cache_dir, safe_name)
-        nav_path = os.path.join(cache_dir, safe_name.replace(".txt", ".nav"))
+    # --- Layer 3: remote fetch (only if disk cache missed) ---
+    if result is None:
+        url = f"{_MPC_BASE}{mpec_path}"
         try:
-            with open(cache_path, "w") as f:
-                f.write(pre_text)
-        except OSError:
-            pass
-        # Cache nav links (prev/next MPEC paths)
-        if page_parser.prev_path or page_parser.next_path:
+            html_text = _fetch_url(url)
+        except Exception as e:
+            print(f"Error fetching MPEC {mpec_path}: {e}")
+            return None
+
+        page_parser = _MPECPageParser()
+        page_parser.feed(html_text)
+
+        pre_text = page_parser.pre_text
+        page_title = page_parser.title
+
+        title = ""
+        if " : " in page_title:
+            title = page_title.split(" : ", 1)[1].strip()
+
+        mpec_id = ""
+        m = re.match(r"(MPEC\s+\S+)", page_title)
+        if m:
+            mpec_id = m.group(1)
+
+        # Persist to disk cache for future requests
+        if cache_dir and pre_text:
+            safe_name = mpec_path.replace("/", "_").strip("_") + ".txt"
+            cache_path = os.path.join(cache_dir, safe_name)
+            nav_path = os.path.join(cache_dir, safe_name.replace(".txt", ".nav"))
             try:
-                with open(nav_path, "w") as f:
-                    f.write(f"{page_parser.prev_path}\n{page_parser.next_path}\n")
+                with open(cache_path, "w") as f:
+                    f.write(pre_text)
             except OSError:
                 pass
+            if page_parser.prev_path or page_parser.next_path:
+                try:
+                    with open(nav_path, "w") as f:
+                        f.write(f"{page_parser.prev_path}\n"
+                                f"{page_parser.next_path}\n")
+                except OSError:
+                    pass
 
-    result = parse_mpec_content(pre_text, mpec_id=mpec_id, title=title,
-                                path=mpec_path)
-    result["prev_path"] = page_parser.prev_path
-    result["next_path"] = page_parser.next_path
+        result = parse_mpec_content(pre_text, mpec_id=mpec_id, title=title,
+                                    path=mpec_path)
+        result["prev_path"] = page_parser.prev_path
+        result["next_path"] = page_parser.next_path
+
+    # --- Store in in-process memo ---
+    # Simple FIFO eviction when full; good enough — the memo is just
+    # coalescing rapid duplicate callbacks, not a long-lived store.
+    if len(_detail_memo) >= _DETAIL_MEMO_MAX:
+        _detail_memo.pop(next(iter(_detail_memo)))
+    _detail_memo[mpec_path] = result
     return result
 
 
