@@ -35,21 +35,46 @@ confidentiality or integrity.
    - Expression:
      `(http.request.uri.path contains "/_dash-update-component" and http.request.method eq "POST")`
    - Characteristics: IP address
-   - Threshold: 20 requests / 10 seconds
-   - Action: Block for 10 seconds (only option on free tier;
-     mathematically equivalent to 120/min)
+   - Threshold: **200 requests / 10 seconds** (revised 2026-04-15,
+     see "Threshold sizing" below)
+   - Action: Block for 10 seconds (only option on free tier)
    - Rationale: scoped narrowly to the Dash callback endpoint so
-     static asset fetches and the initial GET aren't rate-limited;
-     threshold sized to clear realistic interactive bursts
-     (rapid filter changes can fire 15–20 POSTs/s) while catching
-     sustained scraping.
+     static asset fetches and the initial GET aren't rate-limited.
+     Threshold covers sustained rapid interactive use while still
+     catching sustained scraping (30+ req/sec).
+
+### Threshold sizing
+
+Each MPEC click triggers roughly 8 Dash callbacks, each a separate
+POST to `/_dash-update-component` (show detail, observation timeline,
+observability chart, enrichment poll, item-style update, plus the
+click handler itself).  The first rule set on 2026-04-15 used
+20/10s based on a naïve assumption of "a few POSTs per click" —
+in reality even slow human exploration (3-4 clicks per 10s) hits
+24–32 POSTs and trips the rule, causing the browser to silently
+drop callbacks and the MPEC viewer to appear stuck after 3-5 clicks.
+Raised to 200/10s later the same day.
+
+Budget bands, for future recalibration:
+
+| Traffic pattern | POSTs / 10s |
+|---|---|
+| Casual click exploration (2–3 clicks/10s × 8) | 16–24 |
+| Rapid click exploration (5–10 clicks/10s × 8) | 40–80 |
+| Aggressive but still-human clicking (~15 clicks/10s) | ~120 |
+| Scraper / sustained abuse (30+ req/sec) | 300+ |
+
+200/10s fits the "aggressive human" band with margin and still
+catches the abuse band.
 
 ### Verification
 
-Rate-limit rule verified firing correctly on 2026-04-15:
-30 back-to-back POSTs to `/_dash-update-component` returned
-`415 × 20` (passed to origin) followed by `429 × 10` (blocked at edge),
-elapsed 3 s.
+Rate-limit rule verified firing correctly on 2026-04-15 with the
+original 20/10s threshold: 30 back-to-back POSTs to
+`/_dash-update-component` returned `415 × 19` (passed to origin —
+Dash rejects empty POST bodies) followed by `429 × 11` (blocked at
+edge), elapsed 3 s.  After raising to 200/10s, the same probe
+should return `415 × 30` (all passed).
 
 ## Hardening Backlog
 
