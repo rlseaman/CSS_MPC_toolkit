@@ -1000,7 +1000,24 @@ def load_apparition_data():
         _APP_DIR, f".apparition_cache_{sql_hash}.csv")
 
     use_cache = False
-    if not _FORCE_REFRESH and os.path.exists(cache_file):
+    if _SERVE_ONLY:
+        # --serve-only: always use existing cache, never query DB
+        if os.path.exists(cache_file):
+            use_cache = True
+            age = time.time() - os.path.getmtime(cache_file)
+            print(f"Loading cached apparition data from "
+                  f"{cache_file} (age: {age/3600:.1f} h, serve-only)")
+        elif os.path.exists(legacy_csv):
+            use_cache = True
+            cache_file = legacy_csv
+            age = time.time() - os.path.getmtime(legacy_csv)
+            print(f"Loading legacy CSV apparition cache "
+                  f"(age: {age/3600:.1f} h, serve-only)")
+        else:
+            raise RuntimeError(
+                "--serve-only: no apparition cache found. "
+                "Run deploy_to_mini.sh to sync caches first.")
+    elif not _FORCE_REFRESH and os.path.exists(cache_file):
         age = time.time() - os.path.getmtime(cache_file)
         if age < CACHE_MAX_AGE_SEC:
             use_cache = True
