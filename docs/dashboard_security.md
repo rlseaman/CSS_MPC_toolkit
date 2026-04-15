@@ -76,6 +76,27 @@ Dash rejects empty POST bodies) followed by `429 × 11` (blocked at
 edge), elapsed 3 s.  After raising to 200/10s, the same probe
 should return `415 × 30` (all passed).
 
+### Outbound politeness: 5 req/s throttle to MPC
+
+The 200/10s front door admits up to 20 req/sec in short bursts,
+which could in principle drive ~20 req/sec of MPC fetches if a
+caller targets never-cached MPEC paths.  Since "MPC blacklisting
+our user-agent" is the most plausible material denial-of-service
+scenario for the dashboard, add a defense-in-depth outbound
+throttle at `lib/mpec_parser.py::_mpc_throttle`: a thread-safe
+paced scheduler that enforces a minimum 200 ms gap between any
+outbound MPC request (5 req/sec absolute ceiling).  Applies to:
+
+- `_fetch_url` — individual MPEC pages + `RecentMPECs.html`
+- `lookup_mpecs_by_designation` — MPC's `data.minorplanetcenter.net/api/mpecs`
+
+Under normal use the throttle is invisible (the cache handles
+most traffic, and sparse requests absorb its idle budget with
+0 ms latency).  Under hostile load, concurrent callers serialize
+fairly — verified with 10 concurrent threads emerging at exactly
+~200 ms intervals.  MPC will see at most 5 req/sec from us
+regardless of what the frontend is doing.
+
 ## Hardening Backlog
 
 Three items deliberately deferred.  None are urgent given the threat
