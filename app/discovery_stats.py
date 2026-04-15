@@ -20,6 +20,10 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Must be set before lib imports so their module-level cache ages see it
+if "--serve-only" in sys.argv:
+    os.environ["CSS_SERVE_ONLY"] = "1"
+
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -743,6 +747,9 @@ if "--host" in sys.argv:
     idx = sys.argv.index("--host")
     _HOST = sys.argv[idx + 1]
     del sys.argv[idx:idx + 2]
+_SERVE_ONLY = "--serve-only" in sys.argv
+if _SERVE_ONLY:
+    sys.argv.remove("--serve-only")
 _DEBUG = "--debug" in sys.argv
 if _DEBUG:
     sys.argv.remove("--debug")
@@ -771,7 +778,24 @@ def _load_cached_query(sql, prefix, label):
     legacy_csv = os.path.join(_APP_DIR, f".{prefix}_{sql_hash}.csv")
 
     use_cache = False
-    if not _FORCE_REFRESH and os.path.exists(cache_file):
+    if _SERVE_ONLY:
+        # --serve-only: always use existing cache, never query DB
+        if os.path.exists(cache_file):
+            use_cache = True
+            age = time.time() - os.path.getmtime(cache_file)
+            print(f"Loading cached {label} from {cache_file} "
+                  f"(age: {age/3600:.1f} h, serve-only)")
+        elif os.path.exists(legacy_csv):
+            use_cache = True
+            cache_file = legacy_csv
+            age = time.time() - os.path.getmtime(legacy_csv)
+            print(f"Loading legacy CSV cache for {label} "
+                  f"(age: {age/3600:.1f} h, serve-only)")
+        else:
+            raise RuntimeError(
+                f"--serve-only: no cache found for {label}. "
+                "Run deploy_to_mini.sh to sync caches first.")
+    elif not _FORCE_REFRESH and os.path.exists(cache_file):
         age = time.time() - os.path.getmtime(cache_file)
         if age < CACHE_MAX_AGE_SEC:
             use_cache = True

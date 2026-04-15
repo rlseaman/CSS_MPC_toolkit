@@ -36,7 +36,8 @@ from mpc_designation import unpack
 # ---------------------------------------------------------------------------
 
 NEA_URL = "https://minorplanetcenter.net/iau/MPCORB/NEA.txt"
-_CACHE_MAX_AGE_SEC = 86400  # 1 day
+_CACHE_MAX_AGE_SEC = (float("inf") if os.environ.get("CSS_SERVE_ONLY")
+                      else 86400)  # 1 day normally; infinite in serve-only
 
 # ---------------------------------------------------------------------------
 # NEA.txt download and parse

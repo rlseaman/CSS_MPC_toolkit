@@ -32,7 +32,8 @@ import pandas as pd
 SBDB_URL = "https://ssd-api.jpl.nasa.gov/sbdb_query.api"
 # NEO orbital classes: Interior Earth Objects, Atens, Apollos, Amors
 SBDB_CLASSES = "IEO,ATE,APO,AMO"
-_CACHE_MAX_AGE_SEC = 86400  # 1 day
+_CACHE_MAX_AGE_SEC = (float("inf") if os.environ.get("CSS_SERVE_ONLY")
+                      else 86400)  # 1 day normally; infinite in serve-only
 
 # ---------------------------------------------------------------------------
 # SBDB API query

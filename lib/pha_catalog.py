@@ -33,7 +33,8 @@ from mpc_designation import unpack
 # ---------------------------------------------------------------------------
 
 PHA_URL = "https://minorplanetcenter.net/iau/MPCORB/PHA.txt"
-_CACHE_MAX_AGE_SEC = 86400  # 1 day
+_CACHE_MAX_AGE_SEC = (float("inf") if os.environ.get("CSS_SERVE_ONLY")
+                      else 86400)  # 1 day normally; infinite in serve-only
 
 # ---------------------------------------------------------------------------
 # PHA.txt download and parse
