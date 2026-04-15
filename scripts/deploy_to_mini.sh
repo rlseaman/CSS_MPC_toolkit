@@ -53,16 +53,19 @@ mkdir -p "$LOG_DIR"
 ssh -o ConnectTimeout=5 -o BatchMode=yes "$MINI_HOST" true 2>/dev/null \
     || die "Cannot reach Mac Mini at $MINI_HOST"
 
-# Verify venv exists
-[[ -f "$PROJECT_DIR/venv/bin/activate" ]] \
-    || die "No venv at $PROJECT_DIR/venv"
+# Verify venv python exists.  We invoke ./venv/bin/python directly
+# rather than `source venv/bin/activate` — the activate script has
+# a hardcoded VIRTUAL_ENV path that breaks if the project dir is
+# renamed, but the interpreter itself keeps working regardless.
+[[ -x "$PROJECT_DIR/venv/bin/python" ]] \
+    || die "No venv python at $PROJECT_DIR/venv/bin/python"
 
 # ── Step 1: Rebuild caches on MBP ────────────────────────────────
 if ! $SYNC_ONLY; then
     log "Step 1: Refreshing caches on MBP"
     cd "$PROJECT_DIR"
-    source venv/bin/activate
-    PGHOST=sibyl python app/discovery_stats.py --refresh-only \
+    PGHOST=sibyl "$PROJECT_DIR/venv/bin/python" \
+        app/discovery_stats.py --refresh-only \
         || die "Cache refresh failed"
     log "Step 1: Cache refresh complete"
 else
@@ -128,9 +131,11 @@ fi
 pkill -f "discovery_stats.py" 2>/dev/null || true
 sleep 1
 
-# Start the app in serve-only mode (never queries DB, uses synced caches)
-source venv/bin/activate
-nohup python app/discovery_stats.py --serve-only > app/dash.log 2>&1 &
+# Start the app in serve-only mode (never queries DB, uses synced caches).
+# Invoke ./venv/bin/python directly — skips the activate script so the
+# app survives any future project directory moves/renames.
+nohup ./venv/bin/python app/discovery_stats.py --serve-only \
+    > app/dash.log 2>&1 &
 echo $! > "$PIDFILE"
 echo "App started with PID $!"
 REMOTE
