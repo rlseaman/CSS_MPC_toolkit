@@ -764,6 +764,26 @@ if "--maintenance" in sys.argv:
         del sys.argv[idx:idx + 1]
 
 
+def _cache_refresh_label():
+    """Return 'Caches refreshed <UTC timestamp>' for the oldest cache
+    parquet on disk, or an empty string if no caches exist.  Oldest is
+    the right ceiling — the dashboard can be no fresher than its slowest
+    cache.  Rsync -a preserves mtimes, so the Mini reports MBP query time.
+    """
+    import glob
+    from datetime import datetime, timezone
+    patterns = [
+        os.path.join(_APP_DIR, ".neo_cache_*.parquet"),
+        os.path.join(_APP_DIR, ".apparition_cache_*.parquet"),
+        os.path.join(_APP_DIR, ".boxscore_cache_*.parquet"),
+    ]
+    mtimes = [os.path.getmtime(p) for pat in patterns for p in glob.glob(pat)]
+    if not mtimes:
+        return ""
+    stamp = datetime.fromtimestamp(min(mtimes), tz=timezone.utc)
+    return f"Caches refreshed {stamp.strftime('%Y-%m-%d %H:%M UTC')}"
+
+
 def _load_cached_query(sql, prefix, label):
     """Load query result from cache file or database.
 
@@ -2616,6 +2636,14 @@ app.layout = html.Div(
                             style={"fontFamily": "sans-serif",
                                    "marginTop": "2px",
                                    "marginBottom": "0"},
+                        ),
+                        html.Div(
+                            _cache_refresh_label(),
+                            className="subtext",
+                            style={"fontFamily": "sans-serif",
+                                   "fontSize": "11px",
+                                   "opacity": "0.65",
+                                   "marginTop": "1px"},
                         ),
                         html.Div(id="service-health-bar"),
                     ],
