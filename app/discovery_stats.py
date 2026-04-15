@@ -5464,6 +5464,8 @@ _1KM_BADGE = {**_BADGE_STYLE,
               "backgroundColor": "#b71c1c", "color": "white"}
 _DOU_BADGE = {**_BADGE_STYLE,
               "backgroundColor": "#7b1fa2", "color": "white"}
+_COMET_ORBITS_BADGE = {**_BADGE_STYLE,
+                       "backgroundColor": "#4527a0", "color": "white"}
 _RETRACTION_BADGE = {**_BADGE_STYLE,
                      "backgroundColor": "#d84315", "color": "white"}
 _EDITORIAL_BADGE = {**_BADGE_STYLE,
@@ -5493,6 +5495,7 @@ _MPEC_TYPE_LABELS = {
     "discovery": ("Discovery", _DISCOVERY_BADGE),
     "recovery": ("Recovery", _RECOVERY_BADGE),
     "dou": ("DOU", _DOU_BADGE),
+    "comet_orbits": ("Comet Orbits", _COMET_ORBITS_BADGE),
     "retraction": ("Retraction", _RETRACTION_BADGE),
     "editorial": ("Editorial", _EDITORIAL_BADGE),
     "identification": ("Identification", _IDENTIFICATION_BADGE),
@@ -6015,6 +6018,8 @@ def _build_mpec_detail(detail, section_state=None, in_recent=True):
         # Use a distinct id so toggle events don't overwrite section-0
         # state (which is the Preamble for discovery/recovery MPECs).
         _section_labels = {"dou": "Daily Orbit Update",
+                           "comet_orbits":
+                               "Observations and Orbits of Comets and A/ Objects",
                            "retraction": "Retraction",
                            "editorial": "Editorial"}
         section_label = _section_labels.get(mpec_type, "Editorial")

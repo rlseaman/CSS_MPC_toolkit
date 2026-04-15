@@ -152,18 +152,24 @@ class _MPECPageParser(HTMLParser):
 # ---------------------------------------------------------------------------
 
 def classify_mpec(title, pre_text=""):
-    """Classify an MPEC as discovery, recovery, dou, retraction, or editorial.
+    """Classify an MPEC as discovery, recovery, dou, comet_orbits,
+    retraction, or editorial.
 
     Args:
         title: MPEC title text (e.g. "2026 CE3" or "DAILY ORBIT UPDATE")
         pre_text: Full pre-formatted content (for fallback classification)
 
     Returns:
-        "discovery", "recovery", "dou", "retraction", or "editorial"
+        "discovery", "recovery", "dou", "comet_orbits", "retraction",
+        or "editorial"
     """
     upper = (title or "").upper()
     if "DAILY ORBIT UPDATE" in upper:
         return "dou"
+    if "OBSERVATIONS AND ORBITS OF COMETS" in upper:
+        # Periodic bulk update of comet and A/ object astrometry + orbits
+        # (no single object subject — semantically DOU-like but distinct).
+        return "comet_orbits"
     if "RETRACTION" in upper:
         return "retraction"
     if "EDITORIAL" in upper:
@@ -174,6 +180,8 @@ def classify_mpec(title, pre_text=""):
         pre_upper = pre_text[:2000].upper()
         if "DAILY ORBIT UPDATE" in pre_upper:
             return "dou"
+        if "OBSERVATIONS AND ORBITS OF COMETS" in pre_upper:
+            return "comet_orbits"
         if "RETRACTION" in pre_upper:
             return "retraction"
         # Match "EDITORIAL" as a standalone line (not part of "editorial
