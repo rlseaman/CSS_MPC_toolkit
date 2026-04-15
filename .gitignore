@@ -1,5 +1,6 @@
 # Output data files (distributed via GitHub Releases, not committed)
 *.csv
+*.parquet
 
 # Downloaded MPC catalog files
 sandbox/*.txt
