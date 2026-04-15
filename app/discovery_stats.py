@@ -7064,13 +7064,12 @@ def _mpec_section(title, content, open_default=False, mono=True,
 def _prefetch_mpec_details(entries):
     """Background-fetch all MPEC details so disk cache populates.
 
-    Paces requests with a short sleep so we don't hammer MPC when
-    seeding a cold cache.  At steady state this function is mostly
-    a no-op (disk cache already has everything) so the pacing only
-    matters on first deploy or after a cache wipe.
+    Pacing is enforced upstream in lib/mpec_parser.py::_mpc_throttle
+    (5 req/s for all outbound MPC calls), so no per-call sleep is
+    needed here.  At steady state this function is mostly a no-op
+    (disk cache already has everything); on a cold cache the
+    throttle spreads the seed fetches out politely.
     """
-    _PREFETCH_DELAY_SEC = 0.2  # 5 req/s — polite toward MPC
-    fetched = 0
     for entry in entries:
         path = entry.get("path", "")
         if not path:
@@ -7081,8 +7080,6 @@ def _prefetch_mpec_details(entries):
             continue
         try:
             fetch_mpec_detail(path, cache_dir=_MPEC_CACHE_DIR)
-            fetched += 1
-            time.sleep(_PREFETCH_DELAY_SEC)
         except Exception as e:
             print(f"Prefetch error for {path}: {e}")
 

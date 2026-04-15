@@ -20,6 +20,7 @@ import email.utils
 import json
 import os
 import re
+import threading
 import time
 import urllib.request
 from html.parser import HTMLParser
@@ -536,8 +537,43 @@ def parse_mpec_content(pre_text, mpec_id="", title="", path=""):
 # Fetching
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Outbound throttle
+# ---------------------------------------------------------------------------
+#
+# Defense-in-depth for the MPC servers.  The MPEC cache and callback
+# memo already suppress almost all remote fetches, but a user hitting
+# the dashboard's 200/10s rate limit with never-seen MPEC paths could
+# theoretically drive ~20 req/sec to MPC before the cache warms up.
+# Even-rate 5 req/sec is well below any scraping threshold MPC is
+# likely to object to — and critically, would be invisible to MPC
+# among ordinary observer traffic.  Above all, we don't want the
+# dashboard to be the reason MPC blacklists our user-agent.
+#
+# Implemented as a strictly-paced scheduler: each call claims the
+# next available 200 ms slot under a lock, then sleeps until that
+# slot arrives (outside the lock so concurrent callers all get their
+# fair share without serializing around the HTTP latency itself).
+_MPC_THROTTLE_INTERVAL = 0.2  # seconds between MPC requests (5 req/s)
+_mpc_throttle_lock = threading.Lock()
+_mpc_next_slot = 0.0  # monotonic time of the next permitted fetch
+
+
+def _mpc_throttle():
+    """Block until the next MPC-request slot is available."""
+    global _mpc_next_slot
+    with _mpc_throttle_lock:
+        now = time.monotonic()
+        slot = max(now, _mpc_next_slot)
+        _mpc_next_slot = slot + _MPC_THROTTLE_INTERVAL
+    wait = slot - time.monotonic()
+    if wait > 0:
+        time.sleep(wait)
+
+
 def _fetch_url(url):
-    """Fetch URL content as string with timeout."""
+    """Fetch URL content as string with timeout and outbound throttle."""
+    _mpc_throttle()
     req = urllib.request.Request(url, headers={
         "User-Agent": "CSS-MPC-Toolkit/1.0",
     })
@@ -764,6 +800,7 @@ def lookup_mpecs_by_designation(designation):
         headers={"User-Agent": "CSS-MPC-Toolkit/1.0",
                  "Content-Type": "application/json"},
     )
+    _mpc_throttle()  # share the 5 req/s MPC budget with _fetch_url
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             raw = json.loads(resp.read().decode("utf-8", errors="replace"))
