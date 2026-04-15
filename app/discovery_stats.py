@@ -5495,7 +5495,7 @@ _MPEC_TYPE_LABELS = {
     "discovery": ("Discovery", _DISCOVERY_BADGE),
     "recovery": ("Recovery", _RECOVERY_BADGE),
     "dou": ("DOU", _DOU_BADGE),
-    "comet_orbits": ("Comet Orbits", _COMET_ORBITS_BADGE),
+    "comet_orbits": ("Comets", _COMET_ORBITS_BADGE),
     "retraction": ("Retraction", _RETRACTION_BADGE),
     "editorial": ("Editorial", _EDITORIAL_BADGE),
     "identification": ("Identification", _IDENTIFICATION_BADGE),
@@ -5609,9 +5609,18 @@ def _get_cached_summary(mpec_path, title=""):
 
 def _build_mpec_list_item(entry, idx):
     """Build a clickable MPEC list card."""
-    summary = _get_cached_summary(entry.get("path"), title=entry.get("title", ""))
+    entry_type = entry.get("type", "discovery")
+    # Orbit-class / H / MOID / PHA annotations only make sense when the
+    # MPEC has a single subject.  Bulk updates (DOU, comet_orbits) and
+    # editorial/retraction pages parse incidentally-matching orbital
+    # elements from whichever object happens to be first, which then
+    # leaks into the listing as a misleading label like "Hyperbolic".
+    is_single_subject = entry_type in ("discovery", "recovery",
+                                       "identification")
+    summary = _get_cached_summary(entry.get("path"),
+                                   title=entry.get("title", "")) \
+        if is_single_subject else None
     # Build summary annotation line
-    annot_parts = []
     _sub = {"fontSize": "11px", "color": "var(--subtext-color, #888)",
             "fontFamily": "monospace"}
     annot_spans = []
@@ -5637,38 +5646,43 @@ def _build_mpec_list_item(entry, idx):
         elif h_val is not None and h_val <= 22.0 and not summary.get("is_pha"):
             badge_spans.append(html.Span("140m", className="mpec-badge", style=_140M_BADGE))
 
-    # Build title line: "2026 CX2" + smaller "(MPEC 2026-C119)"
     title = entry.get("title", "")
     mpec_id = entry.get("mpec_id", "")
 
-    title_children = [
-        html.Span(title, style={"fontSize": "14px", "fontWeight": "600"}),
-    ]
-    if mpec_id:
-        title_children.append(html.Span(
-            f" ({mpec_id})",
-            style={"fontSize": "12px", "fontWeight": "400",
-                   "color": "var(--subtext-color, #888)"}))
-
+    # Row 1: title text + type badge.  MPEC id goes on its own row
+    # below so long titles (e.g. bulk comet-orbit updates) don't
+    # wrap awkwardly around the (MPEC XXXX-YYY) parenthetical.
     children = [
         html.Div(
             style={"display": "flex", "justifyContent": "space-between",
-                   "alignItems": "center"},
+                   "alignItems": "flex-start", "gap": "8px"},
             children=[
-                html.Span(children=title_children),
+                html.Span(
+                    title,
+                    style={"fontSize": "14px", "fontWeight": "600",
+                           "wordBreak": "break-word"},
+                ),
                 _mpec_badge(
                     (summary or {}).get("type")
                     or entry.get("type", "discovery")),
             ],
         ),
-        html.Div(
-            (entry.get("date", "") +
-             (f"  {summary['utc_time']} UT" if summary and summary.get("utc_time") else "")),
+    ]
+    if mpec_id:
+        children.append(html.Div(
+            f"({mpec_id})",
             style={"fontSize": "12px",
                    "color": "var(--subtext-color, #888)",
                    "marginTop": "2px"},
-        ),
-    ]
+        ))
+    children.append(html.Div(
+        (entry.get("date", "") +
+         (f"  {summary['utc_time']} UT"
+          if summary and summary.get("utc_time") else "")),
+        style={"fontSize": "12px",
+               "color": "var(--subtext-color, #888)",
+               "marginTop": "2px"},
+    ))
     if annot_spans or badge_spans:
         # Interleave text spans with dot separators
         interleaved = []
@@ -6017,15 +6031,20 @@ def _build_mpec_detail(detail, section_state=None, in_recent=True):
         # Single section with full content, labeled by type.
         # Use a distinct id so toggle events don't overwrite section-0
         # state (which is the Preamble for discovery/recovery MPECs).
+        # Prefer full pre_text so bulk updates (DOU, comet_orbits) show
+        # all objects — otherwise `header` alone is just the preamble,
+        # since the parser's section splitter carves content at the
+        # first 'Observations:'/'Orbital elements:' heading.
         _section_labels = {"dou": "Daily Orbit Update",
                            "comet_orbits":
                                "Observations and Orbits of Comets and A/ Objects",
                            "retraction": "Retraction",
                            "editorial": "Editorial"}
         section_label = _section_labels.get(mpec_type, "Editorial")
-        content = header or "(no content)"
+        full_text = detail.get("pre_text", "") or header
+        content = full_text or "(no content)"
         sections.append(_mpec_section(
-            section_label, _linkify_preamble(content) if header else content,
+            section_label, _linkify_preamble(content) if full_text else content,
             open_default=True, mono=True, section_id="mpec-section-editorial",
             max_height=None))
     else:

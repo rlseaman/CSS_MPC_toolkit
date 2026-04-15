@@ -503,6 +503,12 @@ def parse_mpec_content(pre_text, mpec_id="", title="", path=""):
         "designation": designation,
         "type": mpec_type,
         "header": sections.get("header", ""),
+        # Full pre_text preserved so editorial-style renderings (DOU,
+        # comet_orbits, retraction, editorial) can show the entire MPEC
+        # in one block — the section-splitter carves off Observations:/
+        # Orbital elements: blocks which would otherwise leave those
+        # views with only the short preamble.
+        "pre_text": pre_text,
         "observations": obs_text,
         "n_obs": n_obs,
         "arc_days": round(arc_days, 1) if arc_days is not None else None,
