@@ -7640,10 +7640,9 @@ def update_obs_timeline(path, plot_height):
         return html.Div()
 
     mpec_type = detail.get("type", "discovery")
-    # Satellites are single-subject MPECs even though NEOfixer (which
-    # sources the ADES data) doesn't track them — the panel will
-    # render as a collapsed "no data" summary, which is what we want.
-    if mpec_type not in ("discovery", "recovery", "satellite"):
+    # Observation History is NEOfixer-sourced (ADES); satellites aren't
+    # tracked by NEOfixer so the panel adds nothing but visual noise.
+    if mpec_type not in ("discovery", "recovery"):
         return html.Div()
 
     designation = detail.get("designation", "")
