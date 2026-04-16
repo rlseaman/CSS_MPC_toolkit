@@ -402,6 +402,11 @@ def _extract_designation(pre_text):
             stripped.strip())
         if m2:
             return m2.group(1).strip()
+        # Natural satellite: "S/2010 J 5" / "S/2023 S 60" etc.
+        m2 = re.match(
+            r"^(S/\d{4}\s+[JSUNMV]\s+\d+)$", stripped.strip())
+        if m2:
+            return m2.group(1)
 
     return None
 
