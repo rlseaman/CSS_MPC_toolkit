@@ -7640,7 +7640,10 @@ def update_obs_timeline(path, plot_height):
         return html.Div()
 
     mpec_type = detail.get("type", "discovery")
-    if mpec_type not in ("discovery", "recovery"):
+    # Satellites are single-subject MPECs even though NEOfixer (which
+    # sources the ADES data) doesn't track them — the panel will
+    # render as a collapsed "no data" summary, which is what we want.
+    if mpec_type not in ("discovery", "recovery", "satellite"):
         return html.Div()
 
     designation = detail.get("designation", "")
@@ -7753,6 +7756,13 @@ def update_obs_chart(path, site, plot_height):
 
     detail = fetch_mpec_detail(path, cache_dir=_MPEC_CACHE_DIR)
     if not detail:
+        return html.Div()
+
+    # Current observability applies only to heliocentric minor bodies —
+    # satellites have planetocentric orbits, NEOfixer has no ephemeris
+    # for them, and the collapsed empty panel is just visual noise.
+    mpec_type = detail.get("type", "discovery")
+    if mpec_type not in ("discovery", "recovery"):
         return html.Div()
 
     designation = detail.get("designation", "")
