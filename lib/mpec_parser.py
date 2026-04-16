@@ -161,6 +161,17 @@ class _MPECPageParser(HTMLParser):
 # Classification
 # ---------------------------------------------------------------------------
 
+def _extract_satellite_parent(pre_text):
+    """Return the parent planet name (e.g. 'Jupiter') for satellite
+    MPECs, or '' if none found.  Looks for the 'Satellite of <planet>'
+    line in the MPEC body."""
+    if not pre_text:
+        return ""
+    m = re.search(r"\bSatellite of\s+(Jupiter|Saturn|Uranus|Neptune"
+                  r"|Mars|Venus|Earth|Pluto)\b", pre_text[:5000])
+    return m.group(1) if m else ""
+
+
 def classify_mpec(title, pre_text=""):
     """Classify an MPEC as discovery, recovery, dou, comet_orbits,
     retraction, or editorial.
@@ -180,18 +191,35 @@ def classify_mpec(title, pre_text=""):
         # Periodic bulk update of comet and A/ object astrometry + orbits
         # (no single object subject — semantically DOU-like but distinct).
         return "comet_orbits"
+    # Natural satellites: provisional designation "S/YYYY P N" where P
+    # is the planet letter (J=Jupiter, S=Saturn, U=Uranus, N=Neptune,
+    # M=Mars, V=Venus).  Classified as a distinct type so the app can
+    # suppress asteroid-only machinery (orbit-class parsing, PHA/NEO
+    # badges, impact-risk enrichment) — jovicentric/saturnicentric
+    # elements interpreted heliocentrically would otherwise label a
+    # moon as "Atira" or "Jupiter Coupled".
+    if re.match(r"^S/\d{4}\s+[JSUNMV]\s+\d", title or ""):
+        return "satellite"
     if "RETRACTION" in upper:
         return "retraction"
     if "EDITORIAL" in upper:
         return "editorial"
 
-    # Check pre_text for DOU/editorial/recovery indicators
+    # Check pre_text for DOU/editorial/recovery/satellite indicators
     if pre_text:
         pre_upper = pre_text[:2000].upper()
         if "DAILY ORBIT UPDATE" in pre_upper:
             return "dou"
         if "OBSERVATIONS AND ORBITS OF COMETS" in pre_upper:
             return "comet_orbits"
+        # "Satellite of Jupiter" / "Satellite of Saturn" etc. appears
+        # as a distinct line in satellite-discovery MPECs.  Boilerplate
+        # phrases like "natural satellites" (in the copyright line) are
+        # disambiguated by requiring "Satellite of <planet>".
+        if re.search(r"\bSatellite of\s+(Jupiter|Saturn|Uranus|Neptune"
+                     r"|Mars|Venus|Earth|Pluto)\b",
+                     pre_text[:5000]):
+            return "satellite"
         if "RETRACTION" in pre_upper:
             return "retraction"
         # Match "EDITORIAL" as a standalone line (not part of "editorial
@@ -519,6 +547,9 @@ def parse_mpec_content(pre_text, mpec_id="", title="", path=""):
         # Orbital elements: blocks which would otherwise leave those
         # views with only the short preamble.
         "pre_text": pre_text,
+        # For satellites, extract the parent planet ("Jupiter", etc.)
+        # so the viewer can subtitle the designation unambiguously.
+        "satellite_of": _extract_satellite_parent(pre_text),
         "observations": obs_text,
         "n_obs": n_obs,
         "arc_days": round(arc_days, 1) if arc_days is not None else None,

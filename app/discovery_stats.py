@@ -5466,6 +5466,8 @@ _DOU_BADGE = {**_BADGE_STYLE,
               "backgroundColor": "#7b1fa2", "color": "white"}
 _COMET_ORBITS_BADGE = {**_BADGE_STYLE,
                        "backgroundColor": "#4527a0", "color": "white"}
+_SATELLITE_BADGE = {**_BADGE_STYLE,
+                    "backgroundColor": "#00695c", "color": "white"}
 _RETRACTION_BADGE = {**_BADGE_STYLE,
                      "backgroundColor": "#d84315", "color": "white"}
 _EDITORIAL_BADGE = {**_BADGE_STYLE,
@@ -5496,6 +5498,7 @@ _MPEC_TYPE_LABELS = {
     "recovery": ("Recovery", _RECOVERY_BADGE),
     "dou": ("DOU", _DOU_BADGE),
     "comet_orbits": ("Comets", _COMET_ORBITS_BADGE),
+    "satellite": ("Satellite", _SATELLITE_BADGE),
     "retraction": ("Retraction", _RETRACTION_BADGE),
     "editorial": ("Editorial", _EDITORIAL_BADGE),
     "identification": ("Identification", _IDENTIFICATION_BADGE),
@@ -5611,12 +5614,18 @@ def _build_mpec_list_item(entry, idx):
     """Build a clickable MPEC list card."""
     entry_type = entry.get("type", "discovery")
     # Orbit-class / H / MOID / PHA annotations only make sense when the
-    # MPEC has a single subject.  Bulk updates (DOU, comet_orbits) and
+    # MPEC has a single subject AND that subject is a heliocentric
+    # minor body.  Bulk updates (DOU, comet_orbits) and
     # editorial/retraction pages parse incidentally-matching orbital
     # elements from whichever object happens to be first, which then
     # leaks into the listing as a misleading label like "Hyperbolic".
+    # Satellites are single-subject but their orbital elements are
+    # planetocentric — interpreting them as heliocentric would label
+    # a moon as "Atira" — so they get disc_stn only, no orbit class.
     is_single_subject = entry_type in ("discovery", "recovery",
-                                       "identification")
+                                       "identification", "satellite")
+    is_minor_body = entry_type in ("discovery", "recovery",
+                                    "identification")
     summary = _get_cached_summary(entry.get("path"),
                                    title=entry.get("title", "")) \
         if is_single_subject else None
@@ -5629,22 +5638,27 @@ def _build_mpec_list_item(entry, idx):
         disc_stn = summary.get("disc_stn", "")
         if disc_stn:
             annot_spans.append(html.Span(disc_stn))
-        cls = summary.get("class", "")
-        if cls:
-            annot_spans.append(html.Span(cls))
-        h_val = summary.get("H")
-        if h_val is not None:
-            annot_spans.append(html.Span(f"H={h_val:.1f}"))
-        moid = summary.get("moid")
-        if moid is not None:
-            annot_spans.append(html.Span(f"MOID={moid:.3f}"))
-        if summary.get("is_pha"):
-            badge_spans.append(html.Span("PHA", className="mpec-badge", style=_PHA_BADGE))
-        # Size badges based on H magnitude
-        if h_val is not None and h_val <= 17.75:
-            badge_spans.append(html.Span("1km", className="mpec-badge", style=_1KM_BADGE))
-        elif h_val is not None and h_val <= 22.0 and not summary.get("is_pha"):
-            badge_spans.append(html.Span("140m", className="mpec-badge", style=_140M_BADGE))
+        if is_minor_body:
+            cls = summary.get("class", "")
+            if cls:
+                annot_spans.append(html.Span(cls))
+            h_val = summary.get("H")
+            if h_val is not None:
+                annot_spans.append(html.Span(f"H={h_val:.1f}"))
+            moid = summary.get("moid")
+            if moid is not None:
+                annot_spans.append(html.Span(f"MOID={moid:.3f}"))
+            if summary.get("is_pha"):
+                badge_spans.append(html.Span("PHA", className="mpec-badge",
+                                              style=_PHA_BADGE))
+            # Size badges based on H magnitude
+            if h_val is not None and h_val <= 17.75:
+                badge_spans.append(html.Span("1km", className="mpec-badge",
+                                              style=_1KM_BADGE))
+            elif h_val is not None and h_val <= 22.0 \
+                    and not summary.get("is_pha"):
+                badge_spans.append(html.Span("140m", className="mpec-badge",
+                                              style=_140M_BADGE))
 
     title = entry.get("title", "")
     mpec_id = entry.get("mpec_id", "")
@@ -5670,7 +5684,7 @@ def _build_mpec_list_item(entry, idx):
     ]
     if mpec_id:
         children.append(html.Div(
-            f"({mpec_id})",
+            mpec_id,
             style={"fontSize": "12px",
                    "color": "var(--subtext-color, #888)",
                    "marginTop": "2px"},
@@ -5908,10 +5922,20 @@ def _build_mpec_detail(detail, section_state=None, in_recent=True):
     # Detect identification MPECs ("1993 TA = 1985 FF") and recover
     # the subject designation from the packed obs80 observations.
     identification_title = ""
-    is_editorial = mpec_type not in ("discovery", "recovery")
-    if " = " in designation and not is_editorial:
+    # Satellites get the structured multi-section layout (Preamble,
+    # Observations, Observer details, Orbital elements, etc.) — only
+    # bulk-update types (DOU, comet_orbits, retraction, editorial)
+    # fall back to the single-section "editorial" rendering.
+    is_editorial = mpec_type not in ("discovery", "recovery", "satellite")
+    # "Minor body" = heliocentric asteroid/comet: the subset for which
+    # orbit classification, PHA designation, NEOfixer, NEOCC, and other
+    # asteroid-specific machinery is meaningful.  Satellites have
+    # planetocentric elements and are excluded.
+    is_minor_body = mpec_type in ("discovery", "recovery")
+    if " = " in designation and not is_editorial and mpec_type != "satellite":
         identification_title = designation  # preserve for subtitle
         mpec_type = "identification"
+        is_minor_body = True
         obs_text = detail.get("observations", "")
         if obs_text:
             packed_obs = obs_text.strip().split("\n")[0][:12].strip()
@@ -5921,17 +5945,17 @@ def _build_mpec_detail(detail, section_state=None, in_recent=True):
                 except Exception:
                     pass  # keep original designation
 
-    # Resolve designation to current identity (discovery/recovery only)
+    # Resolve designation to current identity (asteroid DB only)
     resolved = None
-    if not is_editorial and designation:
+    if is_minor_body and designation:
         try:
             resolved = resolve_designation(designation)
         except Exception:
             resolved = None
 
-    # Build packed designation for external links (skip for editorials)
+    # Build packed designation for external links (asteroid-only)
     packed = ""
-    if designation and not is_editorial:
+    if designation and is_minor_body:
         try:
             packed = pack_designation(designation).strip()
         except Exception:
@@ -5963,8 +5987,9 @@ def _build_mpec_detail(detail, section_state=None, in_recent=True):
     elif _re_link.match(r"^[CPD]/", link_desig):
         mpc_desig = _re_link.sub(r"\s*\(.*?\)\s*$", "", link_desig)  # strip "(name)"
     link_encoded = _urlquote(link_desig, safe="")
-    # NEOfixer and NEOCC only work for NEOs with packed designations
-    if link_packed and link_packed != link_desig:
+    # NEOfixer and NEOCC only apply to heliocentric asteroids/comets —
+    # skip for satellites (no useful target records there).
+    if is_minor_body and link_packed and link_packed != link_desig:
         # Has a real packed form — likely an asteroid
         links.append(html.A(
             "NEOfixer",
@@ -5976,7 +6001,7 @@ def _build_mpec_detail(detail, section_state=None, in_recent=True):
             href=f"https://ssd.jpl.nasa.gov/tools/sbdb_lookup.html#/?sstr={link_encoded}",
             target="_blank", style=_link_btn_style()))
         link_nospace = link_desig.replace(" ", "")
-        if link_packed and link_packed != link_desig:
+        if is_minor_body and link_packed and link_packed != link_desig:
             links.append(html.A(
                 "NEOCC",
                 href=f"https://neo.ssa.esa.int/search-for-asteroids?sum=1&des={link_nospace}",
@@ -6004,15 +6029,22 @@ def _build_mpec_detail(detail, section_state=None, in_recent=True):
     disc_info_line = _build_discoverer_line(observers, disc_stn) if not is_editorial else html.Div()
 
     # Build orbit summary line and class label from parsed elements.
-    # Prefer DB-resolved orbit class (precise) over MPEC element classification.
+    # Asteroids/comets only — satellites have planetocentric elements
+    # that would misclassify as "Atira" / "Jupiter Coupled" etc.
     oe = detail.get("orbital_elements", {})
-    orbit_class = _get_orbit_class(oe, detail) if not is_editorial else ""
+    orbit_class = _get_orbit_class(oe, detail) if is_minor_body else ""
     if resolved and resolved.get("orbit_class"):
         orbit_class = resolved["orbit_class"]
     # Validate orbit class against JPL boundaries (silent unless mismatch)
-    orbit_class_warning = _validate_orbit_class(orbit_class, oe, detail) if not is_editorial else None
-    is_pha = _is_pha(oe, detail) if not is_editorial else False
-    orbit_info = _build_orbit_info_line(oe, detail) if not is_editorial else html.Div()
+    orbit_class_warning = _validate_orbit_class(orbit_class, oe, detail) \
+        if is_minor_body else None
+    is_pha = _is_pha(oe, detail) if is_minor_body else False
+    # orbit_info (H / arc / obs / MOID / U) is meaningful for satellites
+    # too — MOID naturally doesn't appear for satellites since MPEC
+    # element format for moons omits earth_moid.  Show it for anything
+    # non-editorial.
+    orbit_info = _build_orbit_info_line(oe, detail) \
+        if not is_editorial else html.Div()
 
     # Assemble accordion sections.
     #
@@ -6323,6 +6355,19 @@ def _build_mpec_detail(detail, section_state=None, in_recent=True):
                                "color": "var(--subtext-color, #888)",
                                "marginBottom": "6px"},
                     ) if identification_title else None,
+                    # Satellite subtitle (e.g. "Satellite of Jupiter") —
+                    # makes the natural identity of the object explicit,
+                    # since satellites share no structural cues with
+                    # heliocentric minor bodies.
+                    html.Div(
+                        f"Satellite of {detail.get('satellite_of', '')}"
+                        if detail.get('satellite_of') else "",
+                        style={"fontFamily": "sans-serif",
+                               "fontSize": "15px", "fontStyle": "italic",
+                               "color": "var(--subtext-color, #888)",
+                               "marginBottom": "6px"},
+                    ) if mpec_type == "satellite"
+                      and detail.get("satellite_of") else None,
                     # Line 2: MPEC ID (linked) + date
                     html.Div(children=[
                         mpec_id_el,
@@ -6376,7 +6421,7 @@ def _build_mpec_detail(detail, section_state=None, in_recent=True):
                 html.A("ADES",
                        href=f"https://neofixerapi.arizona.edu/obs/?object={link_packed}&format=xml",
                        target="_blank", style=_link_btn_style()),
-            ] if link_packed else []),
+            ] if link_packed and is_minor_body else []),
         ) if links else html.Div(),
     ])
 
