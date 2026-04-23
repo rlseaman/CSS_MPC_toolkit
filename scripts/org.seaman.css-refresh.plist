@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>org.seaman.css-refresh</string>
+
+    <key>Program</key>
+    <string>/Users/seaman/Desktop/Claude/code/CSS_MPC_toolkit/scripts/refresh_cron.sh</string>
+
+    <!-- Fire daily at 05:30 local time -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>5</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+
+    <!-- Never run on load/login — scheduled fires only -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- launchd's own stdout/stderr; refresh_cron.sh also writes a
+         per-run log under ~/Claude/mpc_sbn/logs/ -->
+    <key>StandardOutPath</key>
+    <string>/Users/seaman/Claude/mpc_sbn/logs/launchd.out</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/seaman/Claude/mpc_sbn/logs/launchd.err</string>
+
+    <!-- Work from the project dir so relative paths resolve -->
+    <key>WorkingDirectory</key>
+    <string>/Users/seaman/Desktop/Claude/code/CSS_MPC_toolkit</string>
+
+    <!-- Don't steal CPU from interactive work -->
+    <key>Nice</key>
+    <integer>10</integer>
+
+    <!-- Ensure PATH includes Homebrew + standard locations when
+         launched outside a login shell -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>
