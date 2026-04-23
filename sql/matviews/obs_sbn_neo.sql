@@ -50,8 +50,16 @@
 --   Anything JSONB — can join back to obs_sbn on obsid if needed.
 
 -- ---------------------------------------------------------------------
--- 1. Build
+-- Make psql print wall-clock times for every statement and announce
+-- each phase. No-ops when executed via a non-psql client.
 -- ---------------------------------------------------------------------
+\timing on
+\pset border 2
+
+\echo
+\echo '#############################################'
+\echo '# 1. Build obs_sbn_neo (expect 10-20 min on Gizmo)'
+\echo '#############################################'
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS obs_sbn_neo AS
 WITH neo_provids AS (
@@ -95,9 +103,10 @@ WHERE obs.provid IN (SELECT key FROM neo_provids)
 -- plain heap. Build indexes separately — CREATE INDEX CONCURRENTLY
 -- is not supported inside the CREATE MATERIALIZED VIEW statement.
 
--- ---------------------------------------------------------------------
--- 2. Indexes
--- ---------------------------------------------------------------------
+\echo
+\echo '#############################################'
+\echo '# 2. Indexes (7 total — seconds to low-minutes each)'
+\echo '#############################################'
 
 -- UNIQUE index on `id` — required for REFRESH CONCURRENTLY.
 -- Also happens to be the canonical row identity.
@@ -118,12 +127,23 @@ CREATE INDEX IF NOT EXISTS obs_sbn_neo_disc_permid_idx
 CREATE INDEX IF NOT EXISTS obs_sbn_neo_disc_provid_idx
     ON obs_sbn_neo (provid) WHERE disc = '*';
 
--- Gather stats so the planner picks good plans from the start.
+\echo
+\echo '#############################################'
+\echo '# 3. ANALYZE + size report'
+\echo '#############################################'
+
 ANALYZE obs_sbn_neo;
+
+SELECT 'obs_sbn_neo (matview)' AS object,
+       (SELECT count(*) FROM obs_sbn_neo) AS rows,
+       pg_size_pretty(pg_relation_size('obs_sbn_neo'))       AS heap,
+       pg_size_pretty(pg_indexes_size('obs_sbn_neo'))        AS indexes,
+       pg_size_pretty(pg_total_relation_size('obs_sbn_neo')) AS total;
 
 
 -- ---------------------------------------------------------------------
--- 3. Refresh (for reference; run on a schedule)
+-- 4. REFRESH command (for reference; run on a schedule, NOT as part
+-- of this initial-build script)
 -- ---------------------------------------------------------------------
 
 -- REFRESH MATERIALIZED VIEW CONCURRENTLY obs_sbn_neo;
@@ -131,7 +151,7 @@ ANALYZE obs_sbn_neo;
 
 
 -- ---------------------------------------------------------------------
--- 4. Rewritten LOAD_SQL using obs_sbn_neo
+-- 5. Rewritten LOAD_SQL using obs_sbn_neo
 -- ---------------------------------------------------------------------
 --
 -- Identical to app/discovery_stats.py::LOAD_SQL (lines 508-646) except
@@ -202,14 +222,14 @@ ANALYZE obs_sbn_neo;
 
 
 -- ---------------------------------------------------------------------
--- 5. Teardown (for re-running / cleanup)
+-- 6. Teardown (for re-running / cleanup)
 -- ---------------------------------------------------------------------
 --
 -- DROP MATERIALIZED VIEW IF EXISTS obs_sbn_neo;
 
 
 -- ---------------------------------------------------------------------
--- 6. Evaluation checklist (before committing to deploy)
+-- 7. Evaluation checklist (before committing to deploy)
 -- ---------------------------------------------------------------------
 --
 -- [ ] Run the CREATE MATERIALIZED VIEW above on Gizmo. Capture build
