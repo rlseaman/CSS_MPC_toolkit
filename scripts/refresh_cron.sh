@@ -26,7 +26,7 @@ DEPLOY_SCRIPT="$PROJECT_DIR/scripts/deploy_to_mini.sh"
 SANITY_SCRIPT="$PROJECT_DIR/scripts/sanity_check.py"
 VENV_PY="$PROJECT_DIR/venv/bin/python"
 
-STATE_DIR="$HOME/Claude/mpc_sbn"
+STATE_DIR="$HOME/Projects/.state/CSS_MPC_toolkit"
 LOG_ROOT="$STATE_DIR/logs"
 STATUS_FILE="$STATE_DIR/last_refresh_status.json"
 MANIFEST_FILE="$STATE_DIR/cache_manifest.json"

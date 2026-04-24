@@ -6,7 +6,7 @@
     <string>org.seaman.css-refresh</string>
 
     <key>Program</key>
-    <string>/Users/seaman/Desktop/Claude/code/CSS_MPC_toolkit/scripts/refresh_cron.sh</string>
+    <string>/Users/seaman/Projects/CSS_MPC_toolkit/scripts/refresh_cron.sh</string>
 
     <!-- Fire daily at 05:30 local time -->
     <key>StartCalendarInterval</key>
@@ -22,15 +22,15 @@
     <false/>
 
     <!-- launchd's own stdout/stderr; refresh_cron.sh also writes a
-         per-run log under ~/Claude/mpc_sbn/logs/ -->
+         per-run log under ~/Projects/.state/CSS_MPC_toolkit/logs/ -->
     <key>StandardOutPath</key>
-    <string>/Users/seaman/Claude/mpc_sbn/logs/launchd.out</string>
+    <string>/Users/seaman/Projects/.state/CSS_MPC_toolkit/logs/launchd.out</string>
     <key>StandardErrorPath</key>
-    <string>/Users/seaman/Claude/mpc_sbn/logs/launchd.err</string>
+    <string>/Users/seaman/Projects/.state/CSS_MPC_toolkit/logs/launchd.err</string>
 
     <!-- Work from the project dir so relative paths resolve -->
     <key>WorkingDirectory</key>
-    <string>/Users/seaman/Desktop/Claude/code/CSS_MPC_toolkit</string>
+    <string>/Users/seaman/Projects/CSS_MPC_toolkit</string>
 
     <!-- Don't steal CPU from interactive work -->
     <key>Nice</key>
