@@ -131,13 +131,23 @@ Stations are mapped to project groups via `STATION_TO_PROJECT`:
 
 ### Architecture
 - **Three SQL queries** cached to Parquet (1-day auto-invalidation,
-  falls back to legacy CSV if Parquet not yet generated):
-  - `LOAD_SQL` — discovery data + tracklet circumstances
-    (~43K NEOs, 6 extra columns for RA/Dec/Vmag/rate/PA, ~1 min)
+  falls back to legacy CSV if Parquet not yet generated). Scan sources
+  and timings differ between hosts; numbers below are DB-only wall
+  clocks measured 2026-04-24:
+  - `LOAD_SQL` — discovery data + tracklet circumstances (~43K NEOs).
+    Scans `obs_sbn_neo` (matview) on Gizmo: **~0.4 s**. Raw `obs_sbn`
+    on Sibyl: ~1 min.
   - `APPARITION_SQL` — station-level observations within +/-200 days
-    of discovery (~362K station rows, ~1 min)
-  - `BOXSCORE_SQL` — full mpc_orbits catalog with classification
-    (~1.5M rows, all object classes, ~13 min)
+    of discovery (~370K station rows). Scans `obs_sbn_neo` on Gizmo:
+    **~4:40**. Raw `obs_sbn` on Sibyl: ~55 s. (LATERAL probes don't
+    fully fit in Gizmo's 16 GB even after the matview shrink — Sibyl's
+    251 GB RAM still wins for this shape.)
+  - `BOXSCORE_SQL` — full mpc_orbits + numbered_identifications JOIN
+    (~1.5M rows, all object classes). Doesn't touch obs_sbn. Gizmo
+    NVMe: **~0.7 s**. Sibyl: **~3 s**. (CLAUDE.md prior to 2026-04-24
+    quoted "~13 min" for Sibyl — that was either a cold-cache reading
+    or wall-clock for the full Python cache-rebuild including the
+    SBDB MOID API call; the DB query itself is seconds.)
 - **NEA.txt H magnitude override** (`lib/nea_catalog.py`): downloads
   the MPC's curated NEA catalog, resolves designations via
   `numbered_identifications` and `mpc_designation`, and overrides
