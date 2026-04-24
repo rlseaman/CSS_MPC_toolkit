@@ -61,24 +61,46 @@
 \echo '# 1. Build obs_sbn_neo (expect 10-20 min on Gizmo)'
 \echo '#############################################'
 
+-- Designation resolution follows the codebase's proven pattern (see
+-- docs/previous/designation_resolution_analysis.md and the three-branch
+-- UNION in sql/discovery_tracklets.sql:97-125). An observation in
+-- obs_sbn can be keyed by any of:
+--   (1) the object's permanent number (obs.permid) — for numbered objs
+--   (2) the object's primary packed provisional designation (obs.provid)
+--   (3) ANY secondary packed provisional designation the object has
+--       accumulated through identification/linkage events
+-- Walking only (1)+(2) misses observations from multi-apparition NEOs
+-- whose earlier apparitions were submitted under a different
+-- provisional before the objects were linked.
+
 CREATE MATERIALIZED VIEW IF NOT EXISTS obs_sbn_neo AS
-WITH neo_provids AS (
-    -- All NEO objects by their packed primary provisional designation.
-    -- ~41K rows, fits in one hash table.
-    SELECT DISTINCT mo.packed_primary_provisional_designation AS key
+WITH neo_primary AS (
+    -- The authoritative NEO set: mpc_orbits.q <= 1.30 (matches LOAD_SQL
+    -- and every other NEO filter in the repo). Known caveat: this
+    -- disagrees with MPC NEA.txt + JPL SBDB unions by ~800 boundary
+    -- objects; see docs/neo_list_reconciliation.md for the tradeoff.
+    SELECT mo.packed_primary_provisional_designation AS packed_prim
     FROM mpc_orbits mo
     WHERE mo.q <= 1.30
 ),
+neo_provids AS (
+    -- All packed provisional designations (primary + every secondary
+    -- alias from current_identifications) that belong to an NEO.
+    SELECT packed_prim AS key FROM neo_primary
+    UNION
+    SELECT ci.packed_secondary_provisional_designation
+    FROM current_identifications ci
+    JOIN neo_primary np
+         ON np.packed_prim = ci.packed_primary_provisional_designation
+    WHERE ci.packed_secondary_provisional_designation IS NOT NULL
+),
 neo_permids AS (
-    -- The subset of NEOs that are numbered; we need permid for
-    -- obs_sbn.permid = neo.asteroid_number joins.
-    SELECT DISTINCT ni.permid AS key
-    FROM mpc_orbits mo
-    JOIN numbered_identifications ni
-      ON ni.packed_primary_provisional_designation
-       = mo.packed_primary_provisional_designation
-    WHERE mo.q <= 1.30
-      AND ni.permid IS NOT NULL
+    -- Permanent numbers for numbered NEOs (via numbered_identifications)
+    SELECT ni.permid AS key
+    FROM numbered_identifications ni
+    JOIN neo_primary np
+         ON np.packed_prim = ni.packed_primary_provisional_designation
+    WHERE ni.permid IS NOT NULL
 )
 SELECT obs.id,
        obs.obsid,
@@ -139,6 +161,27 @@ SELECT 'obs_sbn_neo (matview)' AS object,
        pg_size_pretty(pg_relation_size('obs_sbn_neo'))       AS heap,
        pg_size_pretty(pg_indexes_size('obs_sbn_neo'))        AS indexes,
        pg_size_pretty(pg_total_relation_size('obs_sbn_neo')) AS total;
+
+-- Diagnostic: how are rows keyed? (Sanity-checks designation resolution.)
+SELECT count(*) AS total,
+       count(*) FILTER (WHERE permid IS NOT NULL AND permid <> '') AS with_permid,
+       count(*) FILTER (WHERE provid IS NOT NULL AND provid <> '') AS with_provid,
+       count(DISTINCT permid) FILTER (WHERE permid IS NOT NULL AND permid <> '') AS distinct_permids,
+       count(DISTINCT provid) FILTER (WHERE provid IS NOT NULL AND provid <> '') AS distinct_provids
+FROM obs_sbn_neo;
+
+-- Famous-NEO spot checks (row counts should roughly match obs_sbn totals).
+SELECT 'apophis (99942)' AS object,
+       (SELECT count(*) FROM obs_sbn_neo WHERE permid = '99942') AS matview,
+       (SELECT count(*) FROM obs_sbn      WHERE permid = '99942') AS source
+UNION ALL
+SELECT 'eros (433)',
+       (SELECT count(*) FROM obs_sbn_neo WHERE permid = '433'),
+       (SELECT count(*) FROM obs_sbn      WHERE permid = '433')
+UNION ALL
+SELECT 'bennu (101955)',
+       (SELECT count(*) FROM obs_sbn_neo WHERE permid = '101955'),
+       (SELECT count(*) FROM obs_sbn      WHERE permid = '101955');
 
 
 -- ---------------------------------------------------------------------
