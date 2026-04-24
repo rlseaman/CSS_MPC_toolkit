@@ -257,3 +257,121 @@ See `sql/matviews/obs_sbn_neo.sql` for the initial prototype: a wide
 NEO-scoped materialized view, the indexes to put on it, a rewritten
 version of LOAD_SQL that uses it, and a comparison scaffold for timing
 it against the current query.
+
+## 7. Measured results (2026-04-23)
+
+The matview was prototyped and benchmarked on Gizmo. Three notable
+discoveries during the build process before the final run:
+
+**Prerequisite: `css_utilities.classify_orbit` needed to be installed
+on Gizmo.** The function existed only on Sibyl. The install script
+`sql/install_classify_orbit.sql` assumes the `css_utilities` schema
+already exists — `CREATE SCHEMA IF NOT EXISTS css_utilities;` had to
+be run first (as `robertseaman`, who is the DB superuser on Gizmo).
+Not strictly required for the matview filter (which uses `q <= 1.30`
+directly), but available now for any future classification-based
+queries that need to recover the ~35% of rows where top-level
+`orbit_type_int` is NULL.
+
+**Bug found and fixed: `obs_sbn.provid` stores UNPACKED designations,
+not packed.** The first two matview iterations joined against
+`mpc_orbits.packed_primary_provisional_designation`, which silently
+matched zero rows and produced a matview with **only numbered-NEO
+observations** (2,603,942 rows keyed on `permid`, zero rows keyed
+only on `provid`). The third iteration switched to
+`mpc_orbits.unpacked_primary_provisional_designation` — matching
+LOAD_SQL at `app/discovery_stats.py:536` — and picked up the missing
+2,444,296 observations of the ~38,000 unnumbered NEOs. Final size:
+**5,048,238 rows, 758 MB heap, 362 MB indexes, 1.1 GB total.**
+Documented in `sql/matviews/obs_sbn_neo.sql` comments so the
+packed-vs-unpacked gotcha is discoverable next time.
+
+**Designation resolution expanded to three sources.** `neo_provids`
+CTE now unions:
+- `mpc_orbits.unpacked_primary_provisional_designation` (the NEO's
+  own primary)
+- `current_identifications.unpacked_secondary_provisional_designation`
+  for every alias of a primary NEO (multi-apparition linkings)
+- `numbered_identifications.unpacked_primary_provisional_designation`
+  (the historical provisional form of numbered NEOs, which some
+  pre-numbering obs are still tagged with)
+
+### The benchmark itself
+
+`sql/matviews/bench_load_sql_via_matview.sql` runs the full LOAD_SQL
+from `app/discovery_stats.py:508-646`, substituting `obs_sbn_neo`
+for `obs_sbn` everywhere. Three passes: a pure wall-time run (rows
+discarded via `\o /dev/null`), a minimal count-of-distinct-NEOs sanity
+check, and an `EXPLAIN (ANALYZE, BUFFERS, TIMING, SETTINGS)` for per-
+node detail.
+
+**Headline:**
+
+| Run | Wall time | Result rows |
+|---|---:|---:|
+| LOAD_SQL against raw `obs_sbn` (baseline, 2026-04-23) | 934.6 s | 41,688 NEOs |
+| LOAD_SQL against `obs_sbn_neo` | **1.745 s** | 41,692 NEOs |
+| **Speedup** | **535×** | — |
+
+(The 4-row discrepancy between 41,688 and 41,692 is within the
+expected noise from live replication between the two measurements.)
+
+### Why it worked — the plan tells the story
+
+From the EXPLAIN output: `Buffers: shared hit=711107` at the top of
+the plan. **Every page came from shared_buffers; zero reads hit
+disk.** The matview's 1.1 GB total fits comfortably inside Gizmo's
+4 GB `shared_buffers` + 12 GB effective cache. Contrast with raw
+`obs_sbn`: 213 GB heap + 55 GB indexes meant 88% of probes missed
+cache and hit NVMe.
+
+The partial `disc = '*'` indexes on `obs_sbn_neo` carry most of the
+load — they're tiny (1 MB-ish each), always cached, and the three
+LOAD_SQL branches become:
+
+| LOAD_SQL branch | Index used | Rows | Time |
+|---|---|---:|---:|
+| numbered (`obs.permid = neo.asteroid_number`) | `obs_sbn_neo_disc_permid_idx` | 4,111 | 2.4 ms |
+| unnumbered (`obs.provid = neo.provisional_desig`) | `obs_sbn_neo_disc_provid_idx` | 37,881 | 113 ms |
+| num_provid (`obs.provid = neo.num_provid`) | `obs_sbn_neo_disc_provid_idx` | 3,815 | 34 ms |
+
+The tracklet expansion step (`obs.trkid = di.trkid` with ±12 h
+window) runs in 233 ms via `obs_sbn_neo_trkid_idx`, 41,689 nested-loop
+iterations each doing 3.74 rows on average from an index scan.
+
+### Status of deployment
+
+The matview exists on Gizmo (unrefreshed since the 2026-04-23 initial
+build) and is not yet referenced by application code. Remaining work:
+
+1. **Decide where to schedule `REFRESH MATERIALIZED VIEW CONCURRENTLY
+   obs_sbn_neo`.** Options: Gizmo-local launchd (3 min daily, keeps
+   the replica self-sufficient); or a post-rsync hook in the MBP's
+   `scripts/refresh_cron.sh` that SSHes the REFRESH.
+2. **Decide whether to modify `app/discovery_stats.py` LOAD_SQL** in
+   place. Two sub-options: (i) drop-in substitute `obs_sbn_neo` for
+   `obs_sbn` and require the matview to exist on every replica —
+   which means creating it on Sibyl too (cheap, one-time ~3 min); or
+   (ii) conditional on the connection target.
+3. **Rewrite APPARITION_SQL** to use `obs_sbn_neo` analogously.
+   Same problem shape, probably gets a similar speedup.
+
+### Corrections to the "suggested sequence" (section 4)
+
+Items (B) partial `disc='*'` indexes and (D) BRIN were not shipped
+separately — the matview (A) carries partial `disc='*'` indexes of
+its own on the subsetted table, which is strictly better than
+partials on the full table (smaller, always cached). BRIN on
+`obs_sbn` remains unbuilt and can be deferred indefinitely — the
+matview's `trkid`/`permid`/`provid` indexes cover the dashboard's
+query shapes. (C) covering indexes are obviated for the LOAD_SQL
+path by the matview.
+
+### Files of record
+
+| File | Role |
+|---|---|
+| `sql/matviews/obs_sbn_neo.sql` | Matview DDL + indexes + diagnostics + refresh recipe |
+| `sql/matviews/bench_load_sql_via_matview.sql` | Benchmark that produced the 1.745 s number |
+| `logs/bench_load_sql_matview_*.log` (on Gizmo) | Full EXPLAIN output (not in repo) |
+| Commits `68dce6b`, `11df94c`, `763bc48`, `c9cf692`, `e59c93e` | Eval doc + matview DDL iterations + benchmark |
