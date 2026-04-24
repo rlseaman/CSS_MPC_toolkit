@@ -528,17 +528,17 @@ WITH neo_list AS (
 discovery_obs_all AS (
     SELECT neo.unpacked_desig, obs.stn, obs.obsid, obs.trkid, obs.obstime
     FROM neo_list neo
-    INNER JOIN obs_sbn obs ON obs.permid = neo.asteroid_number
+    INNER JOIN obs_sbn_neo obs ON obs.permid = neo.asteroid_number
     WHERE neo.is_numbered AND obs.disc = '*'
     UNION ALL
     SELECT neo.unpacked_desig, obs.stn, obs.obsid, obs.trkid, obs.obstime
     FROM neo_list neo
-    INNER JOIN obs_sbn obs ON obs.provid = neo.provisional_desig
+    INNER JOIN obs_sbn_neo obs ON obs.provid = neo.provisional_desig
     WHERE NOT neo.is_numbered AND obs.disc = '*'
     UNION ALL
     SELECT neo.unpacked_desig, obs.stn, obs.obsid, obs.trkid, obs.obstime
     FROM neo_list neo
-    INNER JOIN obs_sbn obs ON obs.provid = neo.num_provid
+    INNER JOIN obs_sbn_neo obs ON obs.provid = neo.num_provid
     WHERE neo.num_provid IS NOT NULL AND obs.disc = '*'
 ),
 discovery_info AS (
@@ -550,13 +550,13 @@ discovery_info AS (
 tracklet_obs_all AS (
     SELECT di.unpacked_desig, obs.obstime, obs.ra, obs.dec, obs.mag, obs.band
     FROM discovery_info di
-    INNER JOIN obs_sbn obs ON obs.trkid = di.trkid
+    INNER JOIN obs_sbn_neo obs ON obs.trkid = di.trkid
     WHERE di.trkid IS NOT NULL
       AND ABS(EXTRACT(EPOCH FROM (obs.obstime - di.obstime))) / 3600.0 <= 12.0
     UNION ALL
     SELECT di.unpacked_desig, obs.obstime, obs.ra, obs.dec, obs.mag, obs.band
     FROM discovery_info di
-    INNER JOIN obs_sbn obs ON obs.obsid = di.obsid
+    INNER JOIN obs_sbn_neo obs ON obs.obsid = di.obsid
     WHERE di.trkid IS NULL
 ),
 discovery_tracklet_stats AS (
@@ -665,17 +665,17 @@ WITH neo_list AS MATERIALIZED (
 discovery_obs_all AS (
     SELECT neo.unpacked_desig, obs.stn, obs.obstime
     FROM neo_list neo
-    INNER JOIN obs_sbn obs ON obs.permid = neo.asteroid_number
+    INNER JOIN obs_sbn_neo obs ON obs.permid = neo.asteroid_number
     WHERE neo.is_numbered AND obs.disc = '*'
     UNION ALL
     SELECT neo.unpacked_desig, obs.stn, obs.obstime
     FROM neo_list neo
-    INNER JOIN obs_sbn obs ON obs.provid = neo.provisional_desig
+    INNER JOIN obs_sbn_neo obs ON obs.provid = neo.provisional_desig
     WHERE NOT neo.is_numbered AND obs.disc = '*'
     UNION ALL
     SELECT neo.unpacked_desig, obs.stn, obs.obstime
     FROM neo_list neo
-    INNER JOIN obs_sbn obs ON obs.provid = neo.num_provid
+    INNER JOIN obs_sbn_neo obs ON obs.provid = neo.num_provid
     WHERE neo.num_provid IS NOT NULL AND obs.disc = '*'
 ),
 discovery_info AS (
@@ -701,7 +701,7 @@ CROSS JOIN LATERAL (
            MIN(obstime) AS first_obs,
            MIN(CASE WHEN obstime >= nd.disc_obstime
                     THEN obstime END) AS first_post_disc
-    FROM obs_sbn
+    FROM obs_sbn_neo
     WHERE (permid = nd.asteroid_number OR provid = nd.provid_key)
       AND obstime BETWEEN nd.disc_obstime - INTERVAL '200 days'
                     AND nd.disc_obstime + INTERVAL '200 days'
