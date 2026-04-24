@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>org.seaman.gizmo-refresh</string>
+
+    <key>Program</key>
+    <string>/Users/robertseaman/CSS_MPC_toolkit/scripts/refresh_matview_gizmo.sh</string>
+
+    <!-- Fire daily at 06:00 local time (Arizona = MST year-round) -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>6</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <!-- Never run on load/login — scheduled fires only -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- launchd's own stdout/stderr; refresh_matview_gizmo.sh writes a
+         per-run log under ~/Claude/mpc_sbn/matview/logs/ -->
+    <key>StandardOutPath</key>
+    <string>/Users/robertseaman/Claude/mpc_sbn/matview/launchd.out</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/robertseaman/Claude/mpc_sbn/matview/launchd.err</string>
+
+    <!-- Work from the project dir so relative paths resolve -->
+    <key>WorkingDirectory</key>
+    <string>/Users/robertseaman/CSS_MPC_toolkit</string>
+
+    <!-- Don't steal CPU from interactive work or dashboard -->
+    <key>Nice</key>
+    <integer>10</integer>
+
+    <!-- PATH for a launchd-started process: Homebrew (psql) + standard dirs -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>
