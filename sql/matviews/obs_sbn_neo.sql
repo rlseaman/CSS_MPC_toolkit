@@ -61,17 +61,21 @@
 \echo '# 1. Build obs_sbn_neo (expect 10-20 min on Gizmo)'
 \echo '#############################################'
 
--- Designation resolution follows the codebase's proven pattern (see
--- docs/previous/designation_resolution_analysis.md and the three-branch
--- UNION in sql/discovery_tracklets.sql:97-125). An observation in
--- obs_sbn can be keyed by any of:
---   (1) the object's permanent number (obs.permid) — for numbered objs
---   (2) the object's primary packed provisional designation (obs.provid)
---   (3) ANY secondary packed provisional designation the object has
---       accumulated through identification/linkage events
--- Walking only (1)+(2) misses observations from multi-apparition NEOs
--- whose earlier apparitions were submitted under a different
--- provisional before the objects were linked.
+-- Designation resolution. Critical subtlety: obs_sbn.provid stores the
+-- UNPACKED primary provisional designation (verified by LOAD_SQL at
+-- app/discovery_stats.py:536, which joins obs.provid to
+-- mo.unpacked_primary_provisional_designation). An earlier version of
+-- this matview used the PACKED form and silently matched zero
+-- unnumbered-NEO observations.
+--
+-- An observation of an NEO in obs_sbn is keyed by ONE of:
+--   (1) the object's permanent number, in obs.permid (numbered objects)
+--   (2) the object's unpacked primary provisional, in obs.provid
+--       (unnumbered objects; also numbered objects whose earlier obs
+--       were submitted pre-numbering)
+--   (3) an unpacked secondary provisional alias, in obs.provid
+--       (multi-apparition linkings from current_identifications)
+-- We build (1) as neo_permids and (2)+(3) combined as neo_provids.
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS obs_sbn_neo AS
 WITH neo_primary AS (
@@ -79,23 +83,38 @@ WITH neo_primary AS (
     -- and every other NEO filter in the repo). Known caveat: this
     -- disagrees with MPC NEA.txt + JPL SBDB unions by ~800 boundary
     -- objects; see docs/neo_list_reconciliation.md for the tradeoff.
-    SELECT mo.packed_primary_provisional_designation AS packed_prim
+    -- Keeps packed form for join to current_identifications /
+    -- numbered_identifications (those index on the packed column).
+    SELECT mo.packed_primary_provisional_designation   AS packed_prim,
+           mo.unpacked_primary_provisional_designation AS unpacked_prim
     FROM mpc_orbits mo
     WHERE mo.q <= 1.30
 ),
 neo_provids AS (
-    -- All packed provisional designations (primary + every secondary
-    -- alias from current_identifications) that belong to an NEO.
-    SELECT packed_prim AS key FROM neo_primary
+    -- Every UNPACKED provisional designation associated with an NEO:
+    --   (a) its own primary provisional
+    --   (b) any unpacked secondary provisional alias via
+    --       current_identifications (multi-apparition linkings)
+    --   (c) the unpacked primary provisional from
+    --       numbered_identifications — the historical designation of
+    --       numbered NEOs, the form their pre-numbering obs are tagged
+    --       with in obs_sbn.provid
+    SELECT unpacked_prim AS key FROM neo_primary
     UNION
-    SELECT ci.packed_secondary_provisional_designation
+    SELECT ci.unpacked_secondary_provisional_designation
     FROM current_identifications ci
     JOIN neo_primary np
          ON np.packed_prim = ci.packed_primary_provisional_designation
-    WHERE ci.packed_secondary_provisional_designation IS NOT NULL
+    WHERE ci.unpacked_secondary_provisional_designation IS NOT NULL
+    UNION
+    SELECT ni.unpacked_primary_provisional_designation
+    FROM numbered_identifications ni
+    JOIN neo_primary np
+         ON np.packed_prim = ni.packed_primary_provisional_designation
+    WHERE ni.unpacked_primary_provisional_designation IS NOT NULL
 ),
 neo_permids AS (
-    -- Permanent numbers for numbered NEOs (via numbered_identifications)
+    -- Permanent numbers for numbered NEOs
     SELECT ni.permid AS key
     FROM numbered_identifications ni
     JOIN neo_primary np
@@ -163,9 +182,12 @@ SELECT 'obs_sbn_neo (matview)' AS object,
        pg_size_pretty(pg_total_relation_size('obs_sbn_neo')) AS total;
 
 -- Diagnostic: how are rows keyed? (Sanity-checks designation resolution.)
+-- Expect both numbered-object rows (permid populated) and unnumbered-
+-- object rows (permid NULL, provid populated). If the unnumbered bucket
+-- is empty, the provid branch is miswired (packed vs unpacked mismatch).
 SELECT count(*) AS total,
        count(*) FILTER (WHERE permid IS NOT NULL AND permid <> '') AS with_permid,
-       count(*) FILTER (WHERE provid IS NOT NULL AND provid <> '') AS with_provid,
+       count(*) FILTER (WHERE (permid IS NULL OR permid = '') AND provid IS NOT NULL AND provid <> '') AS only_provid,
        count(DISTINCT permid) FILTER (WHERE permid IS NOT NULL AND permid <> '') AS distinct_permids,
        count(DISTINCT provid) FILTER (WHERE provid IS NOT NULL AND provid <> '') AS distinct_provids
 FROM obs_sbn_neo;
