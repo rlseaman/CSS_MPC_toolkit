@@ -124,10 +124,11 @@ After the 06:00 MST refresh, verify:
 ssh robertseaman@192.168.0.157 cat ~/Claude/mpc_sbn/matview/last_refresh_status.json
 ```
 
-Expected: `"status": "OK"`, fresh `ts`, `elapsed_s` in the 200–400 s
-range (stage 1 dominates at ~216 s; stage 2 adds 10–60 s depending on
-APPARITION_SQL whose rewrite is still pending).
+Expected: `"status": "OK"`, fresh `ts`, `elapsed_s` around 450–550 s,
+broken down as `stage1_s` ≈ 170–220 (matview REFRESH CONCURRENTLY),
+`stage2_s` ≈ 280–320 (`--refresh-only`: LOAD_SQL + NEA.txt resolve +
+APPARITION_SQL + BOXSCORE + SBDB MOID API + PHA.txt).
 
-An OK status with `elapsed_s` well outside that range (say >600 s) is a
-soft warning — probably a cache-cold stage 1, possibly worth
-investigating.
+An OK status with `elapsed_s` well outside that range (say >900 s) is a
+soft warning — probably a cache-cold stage 1 or a replication-catchup
+spike, worth investigating.
