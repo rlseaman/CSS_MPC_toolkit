@@ -24,10 +24,12 @@ if _ROOT not in sys.path:
 
 from lib.neo_consensus import connect_consensus
 from lib.neo_consensus_mpc import ingest_mpc
+from lib.neo_consensus_cneos import ingest_cneos
 
 
 INGESTORS = {
     "mpc": ingest_mpc,
+    "cneos": ingest_cneos,
 }
 
 
