@@ -6,22 +6,24 @@ observational-priority service. Its target list for site code 500
 
     https://neofixerapi.arizona.edu/targets/?site=500&q-max=1.3
 
-The ``q-max=1.3`` filter is important. CSS intentionally includes a
-thin shell of Mars Crossers in its operational target list (orbits
-that may evolve toward q ≤ 1.3 AU as fit precision improves), so
-without ``q-max`` we'd ingest those too. The user's stated intent is
-"NEOs only" — q ≤ 1.3.
-
 NEOfixer is paradigmatically distinct from the other three sources:
-its underlying orbit-fitting pipeline is independent (separate from
-MPC, JPL, ESA), and the list also tracks NEOCP candidates that
-haven't received a formal MPC designation yet. Those NEOCP
-candidates carry NEOfixer-internal packed designations (e.g.
-``"P22mVBC"``) which ``mpc-designation`` cannot parse — for those we
-record a "weak" membership row (``desig_parsed=FALSE``, ``primary_desig``
-set to the raw packed form). They show up as NEOfixer-only entries
-in cross-source queries, which is accurate: they ARE genuinely
-NEOfixer-only until MPC ingests them.
+its underlying orbit-fitting pipeline (find_orb) is independent of
+MPC, JPL, and ESA. Two important content-filtering steps are needed
+to make the NEOfixer list comparable to MPC/CNEOS/NEOCC:
+
+  1. NEOfixer mixes formally-designated NEOs with NEOCP candidates
+     (per https://www.minorplanetcenter.net/iau/NEO/toconfirm_tabular.html).
+     NEOCP candidates carry survey-internal temporary designations
+     (e.g. "P22mVBC") that mpc-designation cannot parse and that
+     don't yet correspond to a formal MPC designation. Each row
+     carries a `neocp` boolean; we drop rows where `neocp=True`.
+
+  2. The `q-max=1.3` URL parameter is *advisory*, not strictly
+     enforced — empirically ~760 / ~42,400 rows leak through with
+     `q > 1.3` (Mars Crossers, plausibly because NEOfixer's find_orb
+     q for them is ≤ 1.3 in some recent fit but the response carries
+     a different epoch's value). We therefore enforce `q ≤ 1.3`
+     client-side using the per-row `q` field that find_orb populates.
 
 Source identifier in ``source_membership.source``: ``'neofixer'``.
 """
@@ -74,32 +76,32 @@ def _download_neofixer_list(cache_dir: str) -> str:
     return path
 
 
-def _parse_neofixer_list(path: str) -> List[str]:
-    """Return the list of packed designations from the cached JSON-RPC response."""
+def _parse_neofixer_list(path: str) -> Tuple[List[str], int, int]:
+    """Return ``(packed_designations, n_dropped_neocp, n_dropped_q)``.
+
+    Walks the cached JSON-RPC response, applying the two filters:
+    drop NEOCP candidates (``neocp=True``); drop rows where
+    NEOfixer's own find_orb q exceeds 1.3 AU. Returns the packed
+    designations of survivors plus per-filter drop counts for the
+    run log.
+    """
     with open(path) as f:
         data = json.load(f)
     result = data.get("result", {})
-    return list(result.get("ids", []))
-
-
-def _weak_canonical(raw: str) -> Canonical:
-    """Last-resort Canonical when mpc-designation can't parse the input.
-
-    Used for NEOCP-style packings (e.g. ``"P22mVBC"``) that NEOfixer
-    tracks pre-MPC-designation. The row joins MPC/CNEOS/NEOCC only by
-    coincidence (different sources would have to use the same packed
-    string), which they essentially never do — so these land as
-    NEOfixer-only members, accurately.
-    """
-    return Canonical(
-        primary_desig=raw,
-        packed_desig=None,
-        permid=None,
-        raw_string=raw,
-        desig_parsed=False,
-        orbit_in_mpc=False,
-        is_comet=False,
-    )
+    objects = result.get("objects", {})
+    survivors: List[str] = []
+    n_dropped_neocp = 0
+    n_dropped_q = 0
+    for packed, obj in objects.items():
+        if obj.get("neocp"):
+            n_dropped_neocp += 1
+            continue
+        q = obj.get("q")
+        if q is None or q > 1.3:
+            n_dropped_q += 1
+            continue
+        survivors.append(packed)
+    return survivors, n_dropped_neocp, n_dropped_q
 
 
 def ingest_neofixer(conn, cache_dir: str) -> Tuple[int, int]:
@@ -113,34 +115,32 @@ def ingest_neofixer(conn, cache_dir: str) -> Tuple[int, int]:
     started_at = begin_run(conn, SOURCE)
     try:
         path = _download_neofixer_list(cache_dir)
-        ids = _parse_neofixer_list(path)
-        print(f"Parsed {len(ids):,} NEOfixer ids")
+        ids, n_dropped_neocp, n_dropped_q = _parse_neofixer_list(path)
+        print(f"NEOfixer: {len(ids):,} after filters "
+              f"(dropped {n_dropped_neocp} NEOCP candidates, "
+              f"{n_dropped_q} with q > 1.3 AU)")
 
         canonicals: List[Canonical] = []
-        n_weak = 0
+        n_unresolved = 0
         for raw in ids:
             c = canonicalize(raw, conn)
             if c is None:
-                c = _weak_canonical(raw)
-                n_weak += 1
+                # After dropping NEOCP candidates, any remaining
+                # parse failure is genuinely anomalous — log and skip.
+                n_unresolved += 1
+                continue
             canonicals.append(c)
-        if n_weak:
-            print(f"Weak (desig_parsed=False) rows: {n_weak} "
-                  f"— typically NEOCP candidates not yet in MPC")
 
         now = datetime.now(tz=timezone.utc)
         n_upserted = upsert_membership(conn, SOURCE, canonicals, now=now)
         conn.commit()
 
-        # The schema's `n_unresolved` slot was designed for parser-rejected
-        # rows; for NEOfixer we don't *reject*, we record weakly. Reuse the
-        # field to surface the weak count so v_source_health stays useful.
         finish_run(
             conn, SOURCE, started_at, status="ok",
-            n_rows=n_upserted, n_unresolved=n_weak,
+            n_rows=n_upserted, n_unresolved=n_unresolved,
         )
         conn.commit()
-        return n_upserted, n_weak
+        return n_upserted, n_unresolved
     except Exception as e:
         conn.rollback()
         finish_run(
