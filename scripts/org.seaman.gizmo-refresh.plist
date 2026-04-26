@@ -36,6 +36,14 @@
     <key>Nice</key>
     <integer>10</integer>
 
+    <!-- Stage 3 of refresh_matview_gizmo.sh launches the Dash process
+         in the background. Without AbandonProcessGroup, launchd reaps
+         the entire process group when the script exits — including
+         the freshly-started Dash. Setting this to true lets the new
+         Dash escape launchd's tree and keep serving. -->
+    <key>AbandonProcessGroup</key>
+    <true/>
+
     <!-- PATH for a launchd-started process: Homebrew (psql) + standard dirs -->
     <key>EnvironmentVariables</key>
     <dict>
