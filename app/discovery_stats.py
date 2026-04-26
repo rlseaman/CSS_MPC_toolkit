@@ -3016,7 +3016,8 @@ app.layout = html.Div(
                                         style={"alignSelf": "flex-end",
                                                "display": "flex",
                                                "flexDirection": "column",
-                                               "gap": "8px"},
+                                               "gap": "8px",
+                                               "minWidth": "230px"},
                                         children=[
                                             html.Button(
                                                 "All-six consensus",
@@ -3033,6 +3034,20 @@ app.layout = html.Div(
                                                 id="consensus-reset",
                                                 n_clicks=0,
                                                 style=DOWNLOAD_BTN_STYLE),
+                                            dcc.Checklist(
+                                                id="consensus-filter",
+                                                options=[
+                                                    {"label":
+                                                     " Hide all-six-agree "
+                                                     "(disagreements only)",
+                                                     "value": "hide_all"},
+                                                ],
+                                                value=[],
+                                                labelStyle={
+                                                    **RADIO_LABEL_STYLE,
+                                                    "fontSize": "12px"},
+                                                style={"marginTop": "6px"},
+                                            ),
                                         ],
                                     ),
                                 ],
@@ -9269,10 +9284,15 @@ def update_survey_dropdown(group_mode, current_value):
 # ---------------------------------------------------------------------------
 
 
-def _consensus_query(include, exclude, limit=_CONSENSUS_TABLE_LIMIT):
+def _consensus_query(include, exclude, hide_all_agree=False,
+                     limit=_CONSENSUS_TABLE_LIMIT):
     """Query css_neo_consensus.v_membership_wide for objects matching the
     include/exclude source filters, joined to mpc_orbits and
     numbered_identifications for context columns.
+
+    `hide_all_agree=True` adds a "NOT all six are TRUE" clause — the
+    primary way to surface disagreements (objects where at least one
+    source is missing the membership).
 
     Returns (df, total_match_count). df is capped at `limit`; the count
     is the unbounded match count (so the UI can advise when results
@@ -9285,6 +9305,9 @@ def _consensus_query(include, exclude, limit=_CONSENSUS_TABLE_LIMIT):
 
     parts = [f"in_{s}" for s in include]
     parts += [f"NOT in_{s}" for s in exclude]
+    if hide_all_agree:
+        all_six = " AND ".join(f"in_{s}" for s in _CONSENSUS_SOURCES)
+        parts.append(f"NOT ({all_six})")
     where_clause = " AND ".join(parts) if parts else "TRUE"
 
     # Two queries: one for the (paginated) detail rows, one for the
@@ -9362,20 +9385,34 @@ def _consensus_table(df):
         sort_action="native",
         filter_action="native",
         style_table={"overflowX": "auto"},
+        # Theme-aware: backgrounds and text use the same CSS variables
+        # the rest of the dashboard uses. This avoids the dark-mode
+        # "light text on light table cell" problem that hardcoded
+        # white-and-black falls into.
         style_cell={
             "fontFamily": "sans-serif",
             "fontSize": "12px",
             "padding": "4px 8px",
             "textAlign": "left",
+            "backgroundColor": "transparent",
+            "color": "inherit",
+            "borderColor": "var(--hr-color, #ccc)",
         },
         style_header={
             "fontWeight": "600",
-            "backgroundColor": "var(--header-bg, #f0f0f0)",
+            "backgroundColor": "var(--paper-bg, #f5f5f5)",
+            "color": "inherit",
+            "borderBottom": "2px solid var(--hr-color, #999)",
+        },
+        style_filter={
+            "backgroundColor": "transparent",
+            "color": "inherit",
         },
         style_data_conditional=[
-            # Highlight the in_X "✓" cells subtly.
+            # Highlight the in_X "✓" cells subtly. Same opacity in
+            # both themes — green-tinted overlay over the page bg.
             {"if": {"column_id": col, "filter_query": f"{{{col}}} = '✓'"},
-             "backgroundColor": "rgba(70, 140, 70, 0.10)"}
+             "backgroundColor": "rgba(70, 140, 70, 0.18)"}
             for col in ["in_mpc", "in_mpc_orbits", "in_cneos",
                         "in_neocc", "in_neofixer", "in_lowell"]
         ],
@@ -9387,10 +9424,13 @@ def _consensus_table(df):
     Output("consensus-table-container", "children"),
     Input("consensus-include", "value"),
     Input("consensus-exclude", "value"),
+    Input("consensus-filter", "value"),
 )
-def update_consensus(include, exclude):
+def update_consensus(include, exclude, filter_value):
+    hide_all_agree = "hide_all" in (filter_value or [])
     try:
-        df, n_total = _consensus_query(include, exclude)
+        df, n_total = _consensus_query(include, exclude,
+                                       hide_all_agree=hide_all_agree)
     except Exception as e:
         return (f"Query failed: {type(e).__name__}: {e}",
                 html.Div("(no results)", className="subtext"))
@@ -9410,6 +9450,7 @@ def update_consensus(include, exclude):
 @app.callback(
     Output("consensus-include", "value", allow_duplicate=True),
     Output("consensus-exclude", "value", allow_duplicate=True),
+    Output("consensus-filter", "value", allow_duplicate=True),
     Input("consensus-reset", "n_clicks"),
     Input("consensus-preset-all", "n_clicks"),
     prevent_initial_call=True,
@@ -9417,9 +9458,9 @@ def update_consensus(include, exclude):
 def reset_consensus_selection(_reset_clicks, _all_clicks):
     triggered = ctx.triggered_id
     if triggered == "consensus-reset":
-        return list(_CONSENSUS_SOURCES), []
+        return list(_CONSENSUS_SOURCES), [], []
     if triggered == "consensus-preset-all":
-        return list(_CONSENSUS_SOURCES), []
+        return list(_CONSENSUS_SOURCES), [], []
     raise PreventUpdate
 
 
