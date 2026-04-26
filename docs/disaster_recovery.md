@@ -17,6 +17,10 @@ All three data paths are native to **Gizmo**:
      `python app/discovery_stats.py --refresh-only` (~5 min)
   3. Restarts the Dash process so it loads the freshly-written
      caches into memory (~5 s gap of 502s during rebind).
+  4. Refreshes all five `css_neo_consensus` source-membership tables
+     (mpc, cneos, neocc, neofixer, mpc_orbits — best-effort, ~25 s
+     total). Per-source success/failure logged in
+     `css_neo_consensus.source_runs` and surfaced in the status JSON.
 - **Dashboard:** `start-dashboard.sh` loads the parquets at startup.
 
 The stage-3 restart is a deliberate bridge: Dash holds caches in memory
@@ -144,12 +148,18 @@ After the 06:00 MST refresh, verify:
 ssh robertseaman@192.168.0.157 cat ~/Claude/mpc_sbn/matview/last_refresh_status.json
 ```
 
-Expected: `"status": "OK"`, fresh `ts`, `elapsed_s` around 460–560 s,
+Expected: `"status": "OK"`, fresh `ts`, `elapsed_s` around 490–590 s,
 broken down as `stage1_s` ≈ 170–230 (matview REFRESH CONCURRENTLY),
 `stage2_s` ≈ 280–320 (`--refresh-only`: LOAD_SQL + NEA.txt resolve +
 APPARITION_SQL + BOXSCORE + SBDB MOID API + PHA.txt), `stage3_s` ≈
-6–15 (Dash kill + restart). The status JSON also carries
-`new_dash_pid` when stage 3 succeeds.
+6–15 (Dash kill + restart), `stage4_s` ≈ 20–30 (NEO consensus, all 5
+sources). The status JSON also carries `new_dash_pid` when stage 3
+succeeds and a `consensus` map of `{source: "ok"|"fail"}` after stage 4.
+
+Per-source consensus failures (e.g. NEOCC outage) don't fail the
+overall job — stage 4 is best-effort. Inspect
+`css_neo_consensus.source_runs` for details when a source's status is
+`fail`, and watch `v_source_health.time_since_last_ok` for staleness.
 
 Spot-check the dashboard's actual freshness by visiting
 hotwireduniverse.org and reading the "Caches refreshed" label in the

@@ -174,8 +174,46 @@ fi
 STAGE3_ELAPSED=$(( $(date +%s) - START ))
 log "stage 3: elapsed=${STAGE3_ELAPSED}s"
 
+# -- Stage 4: NEO consensus ingest (5 sources, best-effort) --
+# Refresh the css_neo_consensus.source_membership rows from each
+# source. Best-effort per source: a NEOCC outage or a NEOfixer API
+# blip should not fail this script — each ingestor records its own
+# success/failure into css_neo_consensus.source_runs, queryable via
+# v_source_health, so we don't need to abort. Total cold-cache time
+# across all five is ~25 s; negligible vs the matview/cache window.
+log "--- stage 4: NEO consensus refresh (5 sources, best-effort) ---"
+START=$(date +%s)
+INGEST_SCRIPT="$PROJECT_DIR/scripts/ingest_neo_consensus.py"
+CONSENSUS_OK=0
+CONSENSUS_FAIL=0
+CONSENSUS_RESULTS=""
+
+if [[ ! -f "$INGEST_SCRIPT" ]]; then
+    log "WARN: $INGEST_SCRIPT not found — skipping consensus stage"
+    CONSENSUS_RESULTS="\"stage4_warn\": \"ingest_neo_consensus.py not found\""
+else
+    for src in mpc cneos neocc neofixer mpc_orbits; do
+        SRC_START=$(date +%s)
+        if "$VENV_PY" "$INGEST_SCRIPT" "$src"; then
+            SRC_RC=0
+            SRC_STATUS_JSON='"ok"'
+            CONSENSUS_OK=$((CONSENSUS_OK + 1))
+        else
+            SRC_RC=$?
+            SRC_STATUS_JSON='"fail"'
+            CONSENSUS_FAIL=$((CONSENSUS_FAIL + 1))
+        fi
+        SRC_ELAPSED=$(( $(date +%s) - SRC_START ))
+        log "  consensus[$src]: rc=$SRC_RC elapsed=${SRC_ELAPSED}s"
+        CONSENSUS_RESULTS+="\"$src\": $SRC_STATUS_JSON, "
+    done
+    CONSENSUS_RESULTS="\"consensus\": {${CONSENSUS_RESULTS%, }}"
+fi
+STAGE4_ELAPSED=$(( $(date +%s) - START ))
+log "stage 4: elapsed=${STAGE4_ELAPSED}s ok=$CONSENSUS_OK fail=$CONSENSUS_FAIL"
+
 TOTAL=$(( $(date +%s) - START_ALL ))
-log "SUCCESS total ${TOTAL}s (stage1=${STAGE1_ELAPSED}s stage2=${STAGE2_ELAPSED}s stage3=${STAGE3_ELAPSED}s)"
+log "SUCCESS total ${TOTAL}s (stage1=${STAGE1_ELAPSED}s stage2=${STAGE2_ELAPSED}s stage3=${STAGE3_ELAPSED}s stage4=${STAGE4_ELAPSED}s)"
 
 # Record cache file sizes as a sanity-check proxy.
 CACHE_SIZES=""
@@ -188,8 +226,9 @@ for prefix in neo_cache apparition_cache boxscore_cache; do
 done
 CACHE_SIZES="${CACHE_SIZES%, }"
 
-EXTRA="\"stage1_s\": $STAGE1_ELAPSED, \"stage2_s\": $STAGE2_ELAPSED, \"stage3_s\": $STAGE3_ELAPSED, \"cache_sizes\": {${CACHE_SIZES}}"
+EXTRA="\"stage1_s\": $STAGE1_ELAPSED, \"stage2_s\": $STAGE2_ELAPSED, \"stage3_s\": $STAGE3_ELAPSED, \"stage4_s\": $STAGE4_ELAPSED, \"cache_sizes\": {${CACHE_SIZES}}"
 [[ -n "$STAGE3_NOTE" ]] && EXTRA+=", $STAGE3_NOTE"
+[[ -n "$CONSENSUS_RESULTS" ]] && EXTRA+=", $CONSENSUS_RESULTS"
 write_status OK "$TOTAL" "$EXTRA"
 log "=== gizmo refresh end — OK ==="
 exit 0
