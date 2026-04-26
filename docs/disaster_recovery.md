@@ -23,11 +23,19 @@ The stage-3 restart is a deliberate bridge: Dash holds caches in memory
 once loaded, so without it the on-disk refresh has no effect on what
 hotwireduniverse.org serves. This was discovered 2026-04-26 when the
 "Caches refreshed" UI label was found to be 3 days stale despite the
-daily refresh succeeding. Long-term fix per
-`memory/dashboard_hardening_backlog.md` #1: put Dash under its own
-launchd agent so stage 3 becomes `launchctl kickstart -k`. Even
-longer-term per #3: in-process cache reload via SIGHUP or interval
-polling, eliminating the restart gap entirely.
+daily refresh succeeding.
+
+**Critical detail in the plist:** `AbandonProcessGroup=true` is
+required. Without it, launchd reaps the freshly-started Dash the
+moment the refresh script exits — first-pass commissioning hit this
+and left the site at 502 until manual recovery. See
+`memory/feedback_launchd_abandonprocessgroup.md`.
+
+Long-term fix per `memory/dashboard_hardening_backlog.md` #1: put
+Dash under its own launchd agent so stage 3 becomes
+`launchctl kickstart -k`. Even longer-term per #3: in-process cache
+reload via SIGHUP or interval polling, eliminating the restart gap
+entirely.
 
 Gizmo is a single point of failure for the public dashboard in this
 configuration. That trade was made consciously because the alternative
