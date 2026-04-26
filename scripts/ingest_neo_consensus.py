@@ -26,12 +26,14 @@ from lib.neo_consensus import connect_consensus
 from lib.neo_consensus_mpc import ingest_mpc
 from lib.neo_consensus_cneos import ingest_cneos
 from lib.neo_consensus_neocc import ingest_neocc
+from lib.neo_consensus_neofixer import ingest_neofixer
 
 
 INGESTORS = {
     "mpc": ingest_mpc,
     "cneos": ingest_cneos,
     "neocc": ingest_neocc,
+    "neofixer": ingest_neofixer,
 }
 
 
