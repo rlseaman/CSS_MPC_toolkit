@@ -29,7 +29,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.io as pio
 import dash
-from dash import ALL, Dash, Input, Output, State, ctx, dcc, html, no_update
+from dash import (ALL, Dash, Input, Output, State, ctx, dash_table, dcc,
+                  html, no_update)
 from dash.dcc import send_data_frame
 from dash.exceptions import PreventUpdate
 from plotly.subplots import make_subplots
@@ -2505,6 +2506,34 @@ DOWNLOAD_BTN_STYLE = {
 }
 
 # ---------------------------------------------------------------------------
+# NEO Consensus tab (R&D-only via --rnd)
+# ---------------------------------------------------------------------------
+# Source identifiers correspond to css_neo_consensus.source_membership.source.
+# Order is the column order of v_membership_wide's bool columns and what we
+# show the user.
+_CONSENSUS_SOURCES = (
+    "mpc",
+    "mpc_orbits",
+    "cneos",
+    "neocc",
+    "neofixer",
+    "lowell",
+)
+_CONSENSUS_SOURCE_LABELS = {
+    "mpc":        "MPC (NEA.txt)",
+    "mpc_orbits": "mpc_orbits q ≤ 1.3",
+    "cneos":      "JPL CNEOS",
+    "neocc":      "ESA NEOCC",
+    "neofixer":   "NEOfixer",
+    "lowell":     "Lowell astorb",
+}
+_CONSENSUS_SOURCE_OPTIONS = [
+    {"label": " " + _CONSENSUS_SOURCE_LABELS[s], "value": s}
+    for s in _CONSENSUS_SOURCES
+]
+_CONSENSUS_TABLE_LIMIT = 5000
+
+# ---------------------------------------------------------------------------
 # Observatory site buttons — sites known to work with NEOfixer ephemeris API
 # ---------------------------------------------------------------------------
 
@@ -2919,9 +2948,8 @@ app.layout = html.Div(
                     ],
                 ),
                 # ━━━ Tab: NEO Consensus (R&D-only, --rnd) ━━━━━━━━━━━━
-                # Placeholder. Real content is being built incrementally
-                # against css_neo_consensus.* on the dev instance only.
-                # See docs/neo_consensus.md for the data-layer contract.
+                # Reads css_neo_consensus.v_membership_wide live (no
+                # parquet cache). See docs/neo_consensus.md.
                 *([dcc.Tab(
                     label="NEO Consensus",
                     value="tab-consensus",
@@ -2935,22 +2963,90 @@ app.layout = html.Div(
                                     style={"fontSize": "20px",
                                            "fontWeight": "600",
                                            "marginBottom": "4px"}),
-                            html.Div("Multi-source NEO membership "
-                                     "tracking across MPC, JPL CNEOS, "
-                                     "ESA NEOCC, NEOfixer, the broader "
-                                     "mpc_orbits q≤1.3 query, and Lowell "
-                                     "Observatory's astorb. Schema and "
-                                     "data layer are live in "
-                                     "css_neo_consensus; UI surface is "
-                                     "under construction.",
-                                     className="subtext",
-                                     style={"fontSize": "13px",
-                                            "marginBottom": "18px"}),
-                            html.Div("See docs/neo_consensus.md for the "
-                                     "data-layer contract and current "
-                                     "snapshot disagreement signals.",
-                                     className="subtext",
-                                     style={"fontSize": "13px"}),
+                            html.Div(
+                                "Cross-source NEO membership across MPC "
+                                "(NEA.txt), the broader mpc_orbits q ≤ "
+                                "1.3 view, JPL CNEOS, ESA NEOCC, "
+                                "NEOfixer, and Lowell Observatory's "
+                                "astorb. Pick sources to include / "
+                                "exclude; the table shows objects "
+                                "matching the selection. See "
+                                "docs/neo_consensus.md for what each "
+                                "source's filter actually means.",
+                                className="subtext",
+                                style={"fontSize": "13px",
+                                       "marginBottom": "18px"}),
+
+                            # Controls row
+                            html.Div(
+                                style={"display": "flex", "gap": "30px",
+                                       "marginBottom": "16px",
+                                       "flexWrap": "wrap"},
+                                children=[
+                                    html.Div(children=[
+                                        html.Label(
+                                            "Include in",
+                                            style={**LABEL_STYLE,
+                                                   "fontWeight": "600"}),
+                                        dcc.Checklist(
+                                            id="consensus-include",
+                                            options=_CONSENSUS_SOURCE_OPTIONS,
+                                            value=list(
+                                                _CONSENSUS_SOURCES),
+                                            inline=False,
+                                            labelStyle=RADIO_LABEL_STYLE,
+                                            style=RADIO_STYLE,
+                                        ),
+                                    ]),
+                                    html.Div(children=[
+                                        html.Label(
+                                            "Exclude from",
+                                            style={**LABEL_STYLE,
+                                                   "fontWeight": "600"}),
+                                        dcc.Checklist(
+                                            id="consensus-exclude",
+                                            options=_CONSENSUS_SOURCE_OPTIONS,
+                                            value=[],
+                                            inline=False,
+                                            labelStyle=RADIO_LABEL_STYLE,
+                                            style=RADIO_STYLE,
+                                        ),
+                                    ]),
+                                    html.Div(
+                                        style={"alignSelf": "flex-end",
+                                               "display": "flex",
+                                               "flexDirection": "column",
+                                               "gap": "8px"},
+                                        children=[
+                                            html.Button(
+                                                "All-six consensus",
+                                                id="consensus-preset-all",
+                                                n_clicks=0,
+                                                style=DOWNLOAD_BTN_STYLE,
+                                                title=(
+                                                    "Include all six "
+                                                    "sources, exclude "
+                                                    "none → strict "
+                                                    "all-agree set")),
+                                            html.Button(
+                                                "Reset to defaults",
+                                                id="consensus-reset",
+                                                n_clicks=0,
+                                                style=DOWNLOAD_BTN_STYLE),
+                                        ],
+                                    ),
+                                ],
+                            ),
+
+                            # Live count
+                            html.Div(
+                                id="consensus-count",
+                                style={"fontSize": "16px",
+                                       "fontWeight": "600",
+                                       "marginBottom": "12px"}),
+
+                            # Result table
+                            html.Div(id="consensus-table-container"),
                         ]),
                     ],
                 )] if _RND else []),
@@ -9162,6 +9258,168 @@ def update_survey_dropdown(group_mode, current_value):
     # Cap at 3 selections
     if current_value and len(current_value) > 3:
         return no_update, current_value[:3]
+    raise PreventUpdate
+
+
+# ---------------------------------------------------------------------------
+# NEO Consensus tab — query helper and callbacks (R&D-only).
+# Active only when --rnd was passed; the layout doesn't include the
+# tab otherwise, but the callbacks register unconditionally because Dash
+# resolves them by component id.
+# ---------------------------------------------------------------------------
+
+
+def _consensus_query(include, exclude, limit=_CONSENSUS_TABLE_LIMIT):
+    """Query css_neo_consensus.v_membership_wide for objects matching the
+    include/exclude source filters, joined to mpc_orbits and
+    numbered_identifications for context columns.
+
+    Returns (df, total_match_count). df is capped at `limit`; the count
+    is the unbounded match count (so the UI can advise when results
+    were truncated).
+    """
+    # Validate against whitelist (defends against any stray callback
+    # value getting interpolated into SQL).
+    include = [s for s in include or [] if s in _CONSENSUS_SOURCES]
+    exclude = [s for s in exclude or [] if s in _CONSENSUS_SOURCES]
+
+    parts = [f"in_{s}" for s in include]
+    parts += [f"NOT in_{s}" for s in exclude]
+    where_clause = " AND ".join(parts) if parts else "TRUE"
+
+    # Two queries: one for the (paginated) detail rows, one for the
+    # total count. They could be combined via window functions but two
+    # queries are simpler and both are sub-second on this scale.
+    count_sql = f"""
+        SELECT count(*) AS n
+          FROM css_neo_consensus.v_membership_wide v
+         WHERE {where_clause}
+    """
+    detail_sql = f"""
+        SELECT
+            v.primary_desig,
+            v.permid,
+            ni.iau_name,
+            v.in_mpc, v.in_mpc_orbits, v.in_cneos,
+            v.in_neocc, v.in_neofixer, v.in_lowell,
+            mo.q::float AS q,
+            mo.e::float AS e,
+            mo.i::float AS i,
+            mo.h::float AS h,
+            mo.arc_length_total::int AS arc,
+            mo.nobs_total::int AS nobs
+          FROM css_neo_consensus.v_membership_wide v
+          LEFT JOIN public.numbered_identifications ni
+            ON ni.packed_primary_provisional_designation = v.packed_desig
+          LEFT JOIN public.mpc_orbits mo
+            ON mo.packed_primary_provisional_designation = v.packed_desig
+         WHERE {where_clause}
+         ORDER BY v.primary_desig
+         LIMIT {int(limit)}
+    """
+    with connect() as conn:
+        n_total = pd.read_sql(count_sql, conn).iloc[0, 0]
+        df = pd.read_sql(detail_sql, conn)
+    return df, int(n_total)
+
+
+def _consensus_table(df):
+    """Build the dash_table.DataTable for a query result frame."""
+    # Boolean columns rendered as ✓ / blank for compactness.
+    display_df = df.copy()
+    bool_cols = ["in_mpc", "in_mpc_orbits", "in_cneos",
+                 "in_neocc", "in_neofixer", "in_lowell"]
+    for col in bool_cols:
+        display_df[col] = display_df[col].map({True: "✓", False: ""})
+    # Round numeric columns for legibility.
+    for col, fmt in [("q", "%.4f"), ("e", "%.4f"),
+                     ("i", "%.2f"), ("h", "%.2f")]:
+        display_df[col] = display_df[col].apply(
+            lambda v, f=fmt: f % v if pd.notna(v) else "")
+
+    columns = [
+        {"name": "Designation",   "id": "primary_desig"},
+        {"name": "Permid",        "id": "permid"},
+        {"name": "Name",          "id": "iau_name"},
+        {"name": "MPC",           "id": "in_mpc"},
+        {"name": "mpc_orbits",    "id": "in_mpc_orbits"},
+        {"name": "CNEOS",         "id": "in_cneos"},
+        {"name": "NEOCC",         "id": "in_neocc"},
+        {"name": "NEOfixer",      "id": "in_neofixer"},
+        {"name": "Lowell",        "id": "in_lowell"},
+        {"name": "q (AU)",        "id": "q"},
+        {"name": "e",             "id": "e"},
+        {"name": "i (°)",         "id": "i"},
+        {"name": "H",             "id": "h"},
+        {"name": "arc (d)",       "id": "arc"},
+        {"name": "n_obs",         "id": "nobs"},
+    ]
+    return dash_table.DataTable(
+        id="consensus-table",
+        columns=columns,
+        data=display_df.to_dict("records"),
+        page_size=50,
+        sort_action="native",
+        filter_action="native",
+        style_table={"overflowX": "auto"},
+        style_cell={
+            "fontFamily": "sans-serif",
+            "fontSize": "12px",
+            "padding": "4px 8px",
+            "textAlign": "left",
+        },
+        style_header={
+            "fontWeight": "600",
+            "backgroundColor": "var(--header-bg, #f0f0f0)",
+        },
+        style_data_conditional=[
+            # Highlight the in_X "✓" cells subtly.
+            {"if": {"column_id": col, "filter_query": f"{{{col}}} = '✓'"},
+             "backgroundColor": "rgba(70, 140, 70, 0.10)"}
+            for col in ["in_mpc", "in_mpc_orbits", "in_cneos",
+                        "in_neocc", "in_neofixer", "in_lowell"]
+        ],
+    )
+
+
+@app.callback(
+    Output("consensus-count", "children"),
+    Output("consensus-table-container", "children"),
+    Input("consensus-include", "value"),
+    Input("consensus-exclude", "value"),
+)
+def update_consensus(include, exclude):
+    try:
+        df, n_total = _consensus_query(include, exclude)
+    except Exception as e:
+        return (f"Query failed: {type(e).__name__}: {e}",
+                html.Div("(no results)", className="subtext"))
+
+    if n_total == 0:
+        count_text = "No NEOs match the selection."
+    elif n_total <= len(df):
+        count_text = f"{n_total:,} matching NEOs"
+    else:
+        count_text = (f"{n_total:,} matching NEOs "
+                      f"(showing first {len(df):,}; "
+                      f"narrow the selection to see them all)")
+
+    return count_text, _consensus_table(df)
+
+
+@app.callback(
+    Output("consensus-include", "value", allow_duplicate=True),
+    Output("consensus-exclude", "value", allow_duplicate=True),
+    Input("consensus-reset", "n_clicks"),
+    Input("consensus-preset-all", "n_clicks"),
+    prevent_initial_call=True,
+)
+def reset_consensus_selection(_reset_clicks, _all_clicks):
+    triggered = ctx.triggered_id
+    if triggered == "consensus-reset":
+        return list(_CONSENSUS_SOURCES), []
+    if triggered == "consensus-preset-all":
+        return list(_CONSENSUS_SOURCES), []
     raise PreventUpdate
 
 
