@@ -192,7 +192,7 @@ if [[ ! -f "$INGEST_SCRIPT" ]]; then
     log "WARN: $INGEST_SCRIPT not found — skipping consensus stage"
     CONSENSUS_RESULTS="\"stage4_warn\": \"ingest_neo_consensus.py not found\""
 else
-    for src in mpc cneos neocc neofixer mpc_orbits; do
+    for src in mpc cneos neocc neofixer mpc_orbits lowell; do
         SRC_START=$(date +%s)
         if "$VENV_PY" "$INGEST_SCRIPT" "$src"; then
             SRC_RC=0
