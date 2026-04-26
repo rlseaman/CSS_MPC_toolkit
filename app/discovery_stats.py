@@ -2639,12 +2639,15 @@ app.layout = html.Div(
                         ),
                         html.Div(
                             _cache_refresh_label(),
+                            id="cache-refresh-label",
                             className="subtext",
                             style={"fontFamily": "sans-serif",
                                    "fontSize": "11px",
                                    "opacity": "0.65",
                                    "marginTop": "1px"},
                         ),
+                        dcc.Interval(id="cache-refresh-poll",
+                                     interval=300_000, n_intervals=0),
                         html.Div(id="service-health-bar"),
                     ],
                 ),
@@ -4543,6 +4546,17 @@ _RESET_ORDER = [
     "tool-cln-date", "tool-cln-offset", "tool-cln-tz",
     "group-by", "plot-height",
 ]
+
+
+@app.callback(
+    Output("cache-refresh-label", "children"),
+    Input("cache-refresh-poll", "n_intervals"),
+)
+def update_cache_refresh_label(_n):
+    # Re-reads parquet mtimes so a long-open tab picks up the daily
+    # 06:00 refresh without a manual reload. Cheap enough to fire
+    # every 5 minutes (interval=300_000 ms).
+    return _cache_refresh_label()
 
 
 @app.callback(
