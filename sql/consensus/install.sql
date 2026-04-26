@@ -90,7 +90,12 @@ CREATE TABLE IF NOT EXISTS css_neo_consensus.source_runs (
 -- Wide pivot. One row per asteroid recognized as an NEO by any source,
 -- with one boolean per source. Comets filtered out by default; query
 -- source_membership directly to include them.
-CREATE OR REPLACE VIEW css_neo_consensus.v_membership_wide AS
+--
+-- DROP+CREATE rather than CREATE OR REPLACE because Postgres rejects
+-- column-list reordering / additions in REPLACE; this lets new sources
+-- be added cleanly at re-install time.
+DROP VIEW IF EXISTS css_neo_consensus.v_membership_wide;
+CREATE VIEW css_neo_consensus.v_membership_wide AS
 SELECT primary_desig,
        MAX(packed_desig) AS packed_desig,
        MAX(permid)       AS permid,
