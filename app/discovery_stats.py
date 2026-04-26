@@ -2531,7 +2531,16 @@ _CONSENSUS_SOURCE_OPTIONS = [
     {"label": " " + _CONSENSUS_SOURCE_LABELS[s], "value": s}
     for s in _CONSENSUS_SOURCES
 ]
-_CONSENSUS_TABLE_LIMIT = 5000
+_CONSENSUS_TABLE_LIMIT = 50000  # well above the ~42K total population
+
+# MPC orbit_type_int → short label, for the consensus tab's "class"
+# column. Same encoding as memory/MEMORY.md "MPC orbit_type_int mapping".
+_ORBIT_TYPE_LABELS = {
+    0: "Atira", 1: "Aten", 2: "Apollo", 3: "Amor", 9: "InOth",
+    10: "MarsX", 11: "MB", 12: "JT", 19: "MidOth", 20: "JC",
+    21: "NepTr", 22: "Cent", 23: "TNO", 30: "Hyper", 31: "Para",
+    99: "Oth",
+}
 
 # ---------------------------------------------------------------------------
 # Observatory site buttons — sites known to work with NEOfixer ephemeris API
@@ -2970,11 +2979,23 @@ app.layout = html.Div(
                                 "NEOfixer, and Lowell Observatory's "
                                 "astorb. Pick sources to include / "
                                 "exclude; the table shows objects "
-                                "matching the selection. See "
-                                "docs/neo_consensus.md for what each "
-                                "source's filter actually means.",
+                                "matching the selection.",
                                 className="subtext",
                                 style={"fontSize": "13px",
+                                       "marginBottom": "6px"}),
+                            html.Div(
+                                "Orbit columns (q, e, i, H, u, nopp, "
+                                "class, MOID, MPC fit) come from "
+                                "mpc_orbits — i.e. MPC's current orbit "
+                                "fit on Gizmo's replica. Per-source "
+                                "fits are not surfaced here (would "
+                                "require a standardized epoch). Name "
+                                "populates only for the ~1,000 numbered "
+                                "NEOs that have IAU names; sort by Name "
+                                "desc to surface them.",
+                                className="subtext",
+                                style={"fontSize": "11px",
+                                       "fontStyle": "italic",
                                        "marginBottom": "18px"}),
 
                             # Controls row
@@ -3042,7 +3063,12 @@ app.layout = html.Div(
                                                      "(disagreements only)",
                                                      "value": "hide_all"},
                                                 ],
-                                                value=[],
+                                                # Default ON — the
+                                                # disagreements ARE the
+                                                # interesting data; the
+                                                # all-six set is the
+                                                # null hypothesis.
+                                                value=["hide_all"],
                                                 labelStyle={
                                                     **RADIO_LABEL_STYLE,
                                                     "fontSize": "12px"},
@@ -9329,8 +9355,13 @@ def _consensus_query(include, exclude, hide_all_agree=False,
             mo.e::float AS e,
             mo.i::float AS i,
             mo.h::float AS h,
+            mo.u_param,
+            mo.nopp,
+            mo.orbit_type_int,
+            mo.earth_moid::float AS moid,
             mo.arc_length_total::int AS arc,
-            mo.nobs_total::int AS nobs
+            mo.nobs_total::int AS nobs,
+            to_char(mo.updated_at, 'YYYY-MM-DD') AS mpc_updated
           FROM css_neo_consensus.v_membership_wide v
           LEFT JOIN public.numbered_identifications ni
             ON ni.packed_primary_provisional_designation = v.packed_desig
@@ -9356,9 +9387,20 @@ def _consensus_table(df):
         display_df[col] = display_df[col].map({True: "✓", False: ""})
     # Round numeric columns for legibility.
     for col, fmt in [("q", "%.4f"), ("e", "%.4f"),
-                     ("i", "%.2f"), ("h", "%.2f")]:
+                     ("i", "%.2f"), ("h", "%.2f"),
+                     ("moid", "%.4f")]:
         display_df[col] = display_df[col].apply(
             lambda v, f=fmt: f % v if pd.notna(v) else "")
+    # MPC orbit_type_int → short label.
+    display_df["class"] = display_df["orbit_type_int"].map(
+        _ORBIT_TYPE_LABELS).fillna("")
+    # Replace NaN with empty string so the table doesn't render "nan".
+    for col in ["iau_name", "permid", "u_param", "nopp", "arc", "nobs",
+                "mpc_updated"]:
+        display_df[col] = display_df[col].fillna("").astype(object)
+        if col in ("u_param", "nopp", "arc", "nobs"):
+            display_df[col] = display_df[col].apply(
+                lambda v: int(v) if v != "" else "")
 
     columns = [
         {"name": "Designation",   "id": "primary_desig"},
@@ -9370,12 +9412,17 @@ def _consensus_table(df):
         {"name": "NEOCC",         "id": "in_neocc"},
         {"name": "NEOfixer",      "id": "in_neofixer"},
         {"name": "Lowell",        "id": "in_lowell"},
+        {"name": "class",         "id": "class"},
         {"name": "q (AU)",        "id": "q"},
         {"name": "e",             "id": "e"},
         {"name": "i (°)",         "id": "i"},
         {"name": "H",             "id": "h"},
+        {"name": "MOID",          "id": "moid"},
+        {"name": "u",             "id": "u_param"},
+        {"name": "nopp",          "id": "nopp"},
         {"name": "arc (d)",       "id": "arc"},
         {"name": "n_obs",         "id": "nobs"},
+        {"name": "MPC fit",       "id": "mpc_updated"},
     ]
     return dash_table.DataTable(
         id="consensus-table",
@@ -9384,6 +9431,9 @@ def _consensus_table(df):
         page_size=50,
         sort_action="native",
         filter_action="native",
+        # virtualization off because we use page_size; on large result
+        # sets pagination keeps the DOM small without forcing a fixed
+        # row height.
         style_table={"overflowX": "auto"},
         # Theme-aware: backgrounds and text use the same CSS variables
         # the rest of the dashboard uses. This avoids the dark-mode
@@ -9458,8 +9508,11 @@ def update_consensus(include, exclude, filter_value):
 def reset_consensus_selection(_reset_clicks, _all_clicks):
     triggered = ctx.triggered_id
     if triggered == "consensus-reset":
-        return list(_CONSENSUS_SOURCES), [], []
+        # Default landing experience: all six included, no exclusions,
+        # disagreements-only filter on (the interesting view).
+        return list(_CONSENSUS_SOURCES), [], ["hide_all"]
     if triggered == "consensus-preset-all":
+        # Strict all-six-agree set: include all, no toggle.
         return list(_CONSENSUS_SOURCES), [], []
     raise PreventUpdate
 
