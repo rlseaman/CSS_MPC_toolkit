@@ -14,8 +14,20 @@ All three data paths are native to **Gizmo**:
   MST runs `scripts/refresh_matview_gizmo.sh`, which:
   1. `REFRESH MATERIALIZED VIEW CONCURRENTLY obs_sbn_neo` (~3.6 min)
   2. Rebuilds all three parquet caches via
-     `python app/discovery_stats.py --refresh-only` (~1 min)
+     `python app/discovery_stats.py --refresh-only` (~5 min)
+  3. Restarts the Dash process so it loads the freshly-written
+     caches into memory (~5 s gap of 502s during rebind).
 - **Dashboard:** `start-dashboard.sh` loads the parquets at startup.
+
+The stage-3 restart is a deliberate bridge: Dash holds caches in memory
+once loaded, so without it the on-disk refresh has no effect on what
+hotwireduniverse.org serves. This was discovered 2026-04-26 when the
+"Caches refreshed" UI label was found to be 3 days stale despite the
+daily refresh succeeding. Long-term fix per
+`memory/dashboard_hardening_backlog.md` #1: put Dash under its own
+launchd agent so stage 3 becomes `launchctl kickstart -k`. Even
+longer-term per #3: in-process cache reload via SIGHUP or interval
+polling, eliminating the restart gap entirely.
 
 Gizmo is a single point of failure for the public dashboard in this
 configuration. That trade was made consciously because the alternative
@@ -124,10 +136,19 @@ After the 06:00 MST refresh, verify:
 ssh robertseaman@192.168.0.157 cat ~/Claude/mpc_sbn/matview/last_refresh_status.json
 ```
 
-Expected: `"status": "OK"`, fresh `ts`, `elapsed_s` around 450–550 s,
-broken down as `stage1_s` ≈ 170–220 (matview REFRESH CONCURRENTLY),
+Expected: `"status": "OK"`, fresh `ts`, `elapsed_s` around 460–560 s,
+broken down as `stage1_s` ≈ 170–230 (matview REFRESH CONCURRENTLY),
 `stage2_s` ≈ 280–320 (`--refresh-only`: LOAD_SQL + NEA.txt resolve +
-APPARITION_SQL + BOXSCORE + SBDB MOID API + PHA.txt).
+APPARITION_SQL + BOXSCORE + SBDB MOID API + PHA.txt), `stage3_s` ≈
+6–15 (Dash kill + restart). The status JSON also carries
+`new_dash_pid` when stage 3 succeeds.
+
+Spot-check the dashboard's actual freshness by visiting
+hotwireduniverse.org and reading the "Caches refreshed" label in the
+upper left — it should match the stage-2 cache mtime, i.e. last
+fired window. If it's older, stage 3 likely warned and the launch
+failed silently; check `launchd.err` and the dashboard log under
+`~/Claude/mpc_sbn/logs/dashboard_*.log`.
 
 An OK status with `elapsed_s` well outside that range (say >900 s) is a
 soft warning — probably a cache-cold stage 1 or a replication-catchup
