@@ -27,6 +27,7 @@ from lib.neo_consensus_mpc import ingest_mpc
 from lib.neo_consensus_cneos import ingest_cneos
 from lib.neo_consensus_neocc import ingest_neocc
 from lib.neo_consensus_neofixer import ingest_neofixer
+from lib.neo_consensus_mpc_orbits import ingest_mpc_orbits
 
 
 INGESTORS = {
@@ -34,6 +35,7 @@ INGESTORS = {
     "cneos": ingest_cneos,
     "neocc": ingest_neocc,
     "neofixer": ingest_neofixer,
+    "mpc_orbits": ingest_mpc_orbits,
 }
 
 

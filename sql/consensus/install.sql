@@ -94,14 +94,16 @@ CREATE OR REPLACE VIEW css_neo_consensus.v_membership_wide AS
 SELECT primary_desig,
        MAX(packed_desig) AS packed_desig,
        MAX(permid)       AS permid,
-       bool_or(source = 'mpc')      AS in_mpc,
-       bool_or(source = 'cneos')    AS in_cneos,
-       bool_or(source = 'neocc')    AS in_neocc,
-       bool_or(source = 'neofixer') AS in_neofixer,
-       MAX(last_refreshed) FILTER (WHERE source='mpc')      AS mpc_refreshed_at,
-       MAX(last_refreshed) FILTER (WHERE source='cneos')    AS cneos_refreshed_at,
-       MAX(last_refreshed) FILTER (WHERE source='neocc')    AS neocc_refreshed_at,
-       MAX(last_refreshed) FILTER (WHERE source='neofixer') AS neofixer_refreshed_at
+       bool_or(source = 'mpc')        AS in_mpc,
+       bool_or(source = 'cneos')      AS in_cneos,
+       bool_or(source = 'neocc')      AS in_neocc,
+       bool_or(source = 'neofixer')   AS in_neofixer,
+       bool_or(source = 'mpc_orbits') AS in_mpc_orbits,
+       MAX(last_refreshed) FILTER (WHERE source='mpc')        AS mpc_refreshed_at,
+       MAX(last_refreshed) FILTER (WHERE source='cneos')      AS cneos_refreshed_at,
+       MAX(last_refreshed) FILTER (WHERE source='neocc')      AS neocc_refreshed_at,
+       MAX(last_refreshed) FILTER (WHERE source='neofixer')   AS neofixer_refreshed_at,
+       MAX(last_refreshed) FILTER (WHERE source='mpc_orbits') AS mpc_orbits_refreshed_at
   FROM css_neo_consensus.source_membership
  WHERE NOT is_comet
  GROUP BY primary_desig;
