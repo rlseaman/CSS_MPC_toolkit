@@ -41,7 +41,7 @@ University of Arizona.
 
 ```
 app/                          # Interactive Dash web application
-  discovery_stats.py          #   NEO discovery explorer (5 tabs, ~3000 lines)
+  discovery_stats.py          #   NEO discovery explorer (8 tabs, ~9100 lines)
   assets/                     #   CSS, logo, static files
 lib/                          # Python library layer
   db.py                       #   DB connections, timed queries, QueryLog
@@ -70,7 +70,22 @@ sandbox/                      # Analysis notes, exploratory outputs
 
 ## Interactive App (`app/discovery_stats.py`)
 
-Dash web application at http://127.0.0.1:8050/ with five tabbed pages:
+Dash web application at http://127.0.0.1:8050/ with eight tabbed pages:
+
+### Tab 0: MPEC Browser
+- Searchable list of recent Minor Planet Electronic Circulars
+  (designation- or MPEC-ID-based search) plus a viewer panel showing
+  the full text of the selected MPEC.
+- Per-MPEC enrichment cards pull live metadata: JPL SBDB orbit, JPL
+  Sentry impact risk, NEOfixer orbit + ephemeris + ADES, ESA NEOCC
+  risk list. Outbound calls throttled to 5 req/s in
+  `lib/mpec_parser.py::_mpc_throttle`.
+- MPEC list itself is fetched live from MPC each time the tab opens;
+  individual MPEC bodies are memoized to disk under
+  `app/.mpec_cache/` (one `.txt` + `.nav` per MPEC, populated on
+  first access). The on-disk cache is NOT touched by the daily
+  refresh — it grows monotonically as users browse.
+- Data: live; not part of the parquet-cache pipeline.
 
 ### Tab 1: Discoveries by Year
 - Stacked bar chart of NEO discoveries by year/survey
@@ -112,6 +127,36 @@ Dash web application at http://127.0.0.1:8050/ with five tabbed pages:
 - Controls: year range, size class filter, color by (survey/size/year)
 - Data: `tracklet_obs_all` and `discovery_tracklet_stats` CTEs added
   to `LOAD_SQL`; same ~44K rows, 6 new columns
+
+### Tab 6: Asteroid Classes
+- Cross-tabulation of the full `mpc_orbits` catalog (~1.5M objects,
+  all classes — not just NEOs) by orbit type and selected attributes.
+- Class grouping: Fine (21), Standard (17), Coarse (7) MPC orbit
+  type bins.
+- Filters: NEO-only, PHA-only, retrograde-only, and an H-magnitude
+  range slider (5–32).
+- Charts: H distribution histogram and a–e (semi-major axis vs.
+  eccentricity) scatter, both rendered with the active filter set.
+- Per-tab CSV download.
+- Data: `boxscore_cache` (`BOXSCORE_SQL` — full mpc_orbits + numbered
+  identifications join). Same ~1.5M rows that drive boxscore-class
+  callbacks elsewhere.
+
+### Tab 7: Tools
+- Standalone calculators and converters for planetary-defense work.
+  No data dependencies; all pure Python computation via `lib/`.
+- Currently 10 cards:
+  - Pack Designation, Unpack Designation, Validate Designation
+    (`lib/mpc_convert.py`)
+  - H Magnitude ↔ Diameter
+  - Tisserand Parameter, Orbit Classification
+    (`lib/orbit_classes.py`)
+  - Parse obs80 Line (`lib/mpc_convert.py`)
+  - Date Converter, CLN ↔ UTC, Airmass ↔ Altitude
+- Inputs are debounced; outputs render in the same card. Useful as
+  outreach utilities and as a sanity-check surface for the same
+  conversion primitives the SQL `css_utilities` schema exposes
+  server-side.
 
 ### Survey Groupings
 Stations are mapped to project groups via `STATION_TO_PROJECT`:

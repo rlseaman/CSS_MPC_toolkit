@@ -1,5 +1,12 @@
 # CSS MPC Toolkit — Project Overview
 
+> **Note (2026-04-26):** the narrative below describes the dashboard as
+> having "five tabs" — it now has eight (MPEC Browser, Discoveries by
+> Year, Size Distribution, Multi-survey Comparison, Follow-up Timing,
+> Discovery Circumstances, Asteroid Classes, Tools). The five-tab story
+> in §"Architecture" needs a more thoughtful rewrite than a single number
+> swap; deferred. See `CLAUDE.md` for the current per-tab summary.
+
 ## Intent
 
 This project — **CSS MPC Toolkit** — exists to extract,

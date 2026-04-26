@@ -153,7 +153,7 @@ directly since Dash wraps Flask.  The existing `app.run_server(...)`
 call stays in place as a dev-only path.  Pair with item #1 so launchd
 invokes waitress, not python directly.
 
-**Effort:** 30–60 minutes including a sweep of all five tabs under
+**Effort:** 30–60 minutes including a sweep of all eight tabs under
 multi-threaded serving (look for module-global state that assumes
 single-threaded access — there shouldn't be any, but worth verifying).
 
