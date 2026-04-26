@@ -753,6 +753,16 @@ if _SERVE_ONLY:
 _DEBUG = "--debug" in sys.argv
 if _DEBUG:
     sys.argv.remove("--debug")
+_PORT = 8050
+if "--port" in sys.argv:
+    idx = sys.argv.index("--port")
+    _PORT = int(sys.argv[idx + 1])
+    del sys.argv[idx:idx + 2]
+# --rnd enables R&D-only surfaces (the consensus tab, etc.) without
+# affecting the prod instance running on the same code base.
+_RND = "--rnd" in sys.argv
+if _RND:
+    sys.argv.remove("--rnd")
 _MAINTENANCE_MSG = None
 if "--maintenance" in sys.argv:
     idx = sys.argv.index("--maintenance")
@@ -2908,6 +2918,43 @@ app.layout = html.Div(
                         ),
                     ],
                 ),
+                # ━━━ Tab: NEO Consensus (R&D-only, --rnd) ━━━━━━━━━━━━
+                # Placeholder. Real content is being built incrementally
+                # against css_neo_consensus.* on the dev instance only.
+                # See docs/neo_consensus.md for the data-layer contract.
+                *([dcc.Tab(
+                    label="NEO Consensus",
+                    value="tab-consensus",
+                    className="nav-tab",
+                    selected_className="nav-tab--selected",
+                    children=[
+                        html.Div(style={"paddingTop": "15px",
+                                        "fontFamily": "sans-serif"},
+                                 children=[
+                            html.H2("NEO Consensus (R&D)",
+                                    style={"fontSize": "20px",
+                                           "fontWeight": "600",
+                                           "marginBottom": "4px"}),
+                            html.Div("Multi-source NEO membership "
+                                     "tracking across MPC, JPL CNEOS, "
+                                     "ESA NEOCC, NEOfixer, the broader "
+                                     "mpc_orbits q≤1.3 query, and Lowell "
+                                     "Observatory's astorb. Schema and "
+                                     "data layer are live in "
+                                     "css_neo_consensus; UI surface is "
+                                     "under construction.",
+                                     className="subtext",
+                                     style={"fontSize": "13px",
+                                            "marginBottom": "18px"}),
+                            html.Div("See docs/neo_consensus.md for the "
+                                     "data-layer contract and current "
+                                     "snapshot disagreement signals.",
+                                     className="subtext",
+                                     style={"fontSize": "13px"}),
+                        ]),
+                    ],
+                )] if _RND else []),
+
                 # ━━━ Tab 1: Discovery by Year ━━━━━━━━━━━━━━━━━━━━━━━━
                 dcc.Tab(
                     label="Discoveries by Year",
@@ -9123,7 +9170,8 @@ def update_survey_dropdown(group_mode, current_value):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    print(f"\nStarting Dash server at http://{_HOST}:8050/")
+    print(f"\nStarting Dash server at http://{_HOST}:{_PORT}/"
+          + ("   (--rnd: R&D surfaces enabled)" if _RND else ""))
     print("Data loading in background..." if not _data_ready.is_set()
           else "Data ready.")
-    app.run(host=_HOST, debug=_DEBUG, use_reloader=False)
+    app.run(host=_HOST, port=_PORT, debug=_DEBUG, use_reloader=False)

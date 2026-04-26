@@ -124,15 +124,43 @@ fi
 # reload (C). See docs/dashboard_hardening_backlog.md.
 log "--- stage 3: restart Dash so the new caches actually serve ---"
 START=$(date +%s)
+PROD_LABEL="com.rlseaman.dashboard"
+RND_LABEL="com.rlseaman.dashboard-rnd"
 START_DASHBOARD="$HOME/Claude/mpc_sbn/start-dashboard.sh"
 STAGE3_NOTE=""
 
-if [[ ! -x "$START_DASHBOARD" ]]; then
+if launchctl print "gui/$UID/$PROD_LABEL" >/dev/null 2>&1; then
+    # Preferred path: prod (and possibly rnd) are launchd-managed.
+    # `kickstart -k` SIGTERMs the running process and lets the agent's
+    # KeepAlive=true respawn it cleanly with the same launchd identity.
+    log "stage 3: prod is launchd-managed; using launchctl kickstart"
+    launchctl kickstart -k "gui/$UID/$PROD_LABEL"
+    if launchctl print "gui/$UID/$RND_LABEL" >/dev/null 2>&1; then
+        launchctl kickstart -k "gui/$UID/$RND_LABEL"
+        log "stage 3: $RND_LABEL also kickstarted"
+    else
+        log "stage 3: $RND_LABEL not loaded, skipping rnd restart"
+    fi
+    # Give Dash a few seconds to rebind, then verify by checking
+    # who's listening on port 8050 (the prod port).
+    sleep 5
+    PROD_PID=$(lsof -ti :8050 -sTCP:LISTEN 2>/dev/null | head -1)
+    if [[ -n "$PROD_PID" ]]; then
+        log "stage 3: prod listening on :8050, PID=$PROD_PID"
+        STAGE3_NOTE="\"new_dash_pid\": $PROD_PID"
+    else
+        log "WARN: nothing listening on :8050 after kickstart"
+        STAGE3_NOTE="\"stage3_warn\": \"prod port 8050 not listening\""
+    fi
+elif [[ ! -x "$START_DASHBOARD" ]]; then
     log "WARN: $START_DASHBOARD not found or not executable — skipping restart"
     STAGE3_NOTE="\"stage3_warn\": \"start-dashboard.sh not found\""
 else
-    # Find the live dashboard PIDs. Exclude any --refresh-only invocation
-    # that may still be reaping (shouldn't be, but defensive).
+    # Legacy fallback path: prod runs under nohup, not launchd.
+    # Kept for the transition period and as defensive plumbing if the
+    # launchd plist is ever bootout'd. Once prod has been launchd-
+    # managed for a while this branch can be deleted.
+    log "stage 3: launchd label $PROD_LABEL not loaded — falling back to kill+nohup"
     DASH_PIDS=$(pgrep -f 'app/discovery_stats.py' 2>/dev/null | xargs -I {} sh -c \
         "ps -o pid,command -p {} 2>/dev/null | awk '/discovery_stats.py/ && !/--refresh-only/ {print \$1}'" \
         | tr '\n' ' ')
@@ -141,7 +169,6 @@ else
     if [[ -n "$DASH_PIDS" ]]; then
         log "stopping Dash (PIDs: $DASH_PIDS)"
         kill -TERM $DASH_PIDS 2>/dev/null
-        # Wait up to 10 s for graceful exit
         for _ in 1 2 3 4 5 6 7 8 9 10; do
             sleep 1
             STILL=$(ps -o pid= -p $DASH_PIDS 2>/dev/null | xargs)
@@ -160,7 +187,6 @@ else
     nohup "$START_DASHBOARD" </dev/null >/dev/null 2>&1 &
     disown 2>/dev/null || true
 
-    # Give it a few seconds to bind and start serving, then verify.
     sleep 5
     NEW_PID=$(pgrep -f 'app/discovery_stats.py' 2>/dev/null | head -1)
     if [[ -n "$NEW_PID" ]]; then

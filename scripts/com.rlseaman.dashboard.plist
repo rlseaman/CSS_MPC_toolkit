@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.rlseaman.dashboard</string>
+
+    <!-- Production Dash dashboard, port 8050.
+         Invokes the existing Gizmo-local start-dashboard.sh. -->
+    <key>Program</key>
+    <string>/Users/robertseaman/Claude/mpc_sbn/start-dashboard.sh</string>
+
+    <!-- Start at login and restart automatically on crash. -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Detach from the launchd process group so children
+         (the start-dashboard.sh process and its `exec`-d Python)
+         survive the script's own exec, and so any nohup / & patterns
+         in start-dashboard.sh aren't reaped. Defensive — start-dashboard.sh
+         uses `exec` already so the pid stays the same, but harmless. -->
+    <key>AbandonProcessGroup</key>
+    <true/>
+
+    <!-- Don't steal CPU from interactive work. -->
+    <key>Nice</key>
+    <integer>5</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/robertseaman/Claude/mpc_sbn/logs/dashboard-launchd.out</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/robertseaman/Claude/mpc_sbn/logs/dashboard-launchd.err</string>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/robertseaman/CSS_MPC_toolkit</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>

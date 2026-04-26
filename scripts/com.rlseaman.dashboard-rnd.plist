@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.rlseaman.dashboard-rnd</string>
+
+    <!-- R&D Dash dashboard, port 8051. Same code as prod plus --rnd
+         so the consensus and other R&D-only tabs are visible. -->
+    <key>Program</key>
+    <string>/Users/robertseaman/CSS_MPC_toolkit/scripts/start-dashboard-rnd.sh</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>AbandonProcessGroup</key>
+    <true/>
+
+    <key>Nice</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/robertseaman/Claude/mpc_sbn/logs/dashboard-rnd-launchd.out</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/robertseaman/Claude/mpc_sbn/logs/dashboard-rnd-launchd.err</string>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/robertseaman/CSS_MPC_toolkit</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>
