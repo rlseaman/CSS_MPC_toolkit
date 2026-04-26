@@ -86,7 +86,13 @@ def canonicalize(raw: str, conn) -> Optional[Canonical]:
         fmt = detect_format(s)
     except MPCDesignationError:
         return None
-    is_comet = fmt["type"].startswith("comet")
+    # A/ and I/ designations carry comet-style syntax but are physically
+    # asteroids (objects on cometary orbits without a coma; or interstellar
+    # objects). mpc-designation flags them with type='comet_full' but the
+    # subtype contains 'asteroid'. Don't conflate with real comets (C/, P/,
+    # D/), which v_membership_wide deliberately filters out for v1.
+    is_comet = (fmt["type"].startswith("comet")
+                and "asteroid" not in fmt.get("subtype", ""))
 
     if fmt["type"] == "permanent":
         # Numbered object: DB lookup to recover the provisional.
