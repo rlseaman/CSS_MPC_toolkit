@@ -2531,16 +2531,11 @@ _CONSENSUS_SOURCE_OPTIONS = [
     {"label": " " + _CONSENSUS_SOURCE_LABELS[s], "value": s}
     for s in _CONSENSUS_SOURCES
 ]
-# Cap the detail table at 5,000 rows. The expensive part of
-# _consensus_query is the per-target LATERAL aggregate against
-# obs_sbn (526M rows): ~5 ms per target × 41K all-six-agree targets ≈
-# 3+ minutes, plus shipping ~5 MB of JSON to the browser. At 5K rows
-# that drops to ~25 s and the table renders responsively. When the
-# matching set exceeds the cap we tell the user in the count line.
-# Use the Download designations button (which queries
-# v_membership_wide directly, no LATERAL, no orbit columns) to
-# retrieve the full match set.
-_CONSENSUS_TABLE_LIMIT = 5000
+# Cap is high enough to fit the entire population (~42K) but bounded
+# so a future bug couldn't ship a runaway result. Obs aggregates come
+# from the css_neo_consensus.obs_summary matview (daily refresh), so
+# the query is a plain join — sub-second regardless of cap.
+_CONSENSUS_TABLE_LIMIT = 50000
 
 # MPC orbit_type_int → short label, for the consensus tab's "class"
 # column. Same encoding as memory/MEMORY.md "MPC orbit_type_int mapping".
@@ -9488,11 +9483,12 @@ def _consensus_query(include, exclude, hide_all_agree=False,
           FROM css_neo_consensus.v_membership_wide v
          WHERE {where_clause}
     """
-    # Use a CTE so the LATERAL obs-aggregate fires only for the
-    # paginated set, not the full 41K. classify_orbit() is applied as
-    # a fallback for the ~77% of NEOs whose orbit_type_int is NULL in
-    # mpc_orbits. arc/first_obs/last_obs come from obs_sbn_neo because
-    # mpc_orbits.arc_length_total is NULL for ~88% of NEOs.
+    # obs columns come from css_neo_consensus.obs_summary, a daily-
+    # refreshed matview that pre-aggregates obs_sbn by primary_desig.
+    # Without it the per-target LATERAL ran ~5 ms × N — fine for 100s
+    # of targets, but ~3 minutes for the all-six-agree set (~41K).
+    # classify_orbit() is the fallback for the ~77% of NEOs whose
+    # orbit_type_int is NULL in mpc_orbits.
     detail_sql = f"""
         WITH targets AS (
             SELECT primary_desig, permid, packed_desig
@@ -9528,22 +9524,8 @@ def _consensus_query(include, exclude, hide_all_agree=False,
             ON ni.packed_primary_provisional_designation = t.packed_desig
           LEFT JOIN public.mpc_orbits mo
             ON mo.packed_primary_provisional_designation = t.packed_desig
-          LEFT JOIN LATERAL (
-              -- obs_sbn (not obs_sbn_neo) for two reasons: (a) ~200x
-              -- faster on this LATERAL pattern empirically, because
-              -- obs_sbn's index set + planner handle the (permid =
-              -- ... OR provid = ...) better; (b) covers Mars-Crossers
-              -- and other non-NEO-in-mpc_orbits cases that obs_sbn_neo
-              -- excludes by definition.
-              SELECT min(obstime)::date AS first_obs,
-                     max(obstime)::date AS last_obs,
-                     EXTRACT(EPOCH FROM (max(obstime) - min(obstime)))
-                         / 86400.0 AS arc_days,
-                     count(*) AS nobs
-                FROM public.obs_sbn
-               WHERE (permid IS NOT NULL AND permid = t.permid)
-                  OR provid = t.primary_desig
-          ) obs ON TRUE
+          LEFT JOIN css_neo_consensus.obs_summary obs
+            ON obs.primary_desig = t.primary_desig
          ORDER BY t.primary_desig
     """
     with connect() as conn:
