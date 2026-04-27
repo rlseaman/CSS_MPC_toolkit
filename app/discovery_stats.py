@@ -1113,6 +1113,104 @@ def load_apparition_data():
 
 
 # ---------------------------------------------------------------------------
+# Consensus membership cache — small per-NEO booleans for the banner-
+# level source selector.
+# ---------------------------------------------------------------------------
+
+CONSENSUS_MEMBERSHIP_SQL = """
+SELECT primary_desig,
+       packed_desig,
+       permid,
+       in_mpc, in_mpc_orbits, in_cneos,
+       in_neocc, in_neofixer, in_lowell,
+       (in_mpc AND in_mpc_orbits AND in_cneos
+        AND in_neocc AND in_neofixer AND in_lowell) AS all_six_agree
+  FROM css_neo_consensus.v_membership_wide
+"""
+
+
+def load_consensus_membership():
+    """Load per-NEO source-membership booleans from
+    css_neo_consensus.v_membership_wide. Returns a small DataFrame
+    (~42K rows × 10 cols, ~400 KB parquet) keyed on primary_desig
+    (which matches df.designation and df_apparition.designation).
+
+    Cached as `.consensus_membership_<hash>.parquet` with the same
+    1-day TTL pattern as the other caches. Returns an empty
+    DataFrame on failure so the rest of the app still loads (the
+    banner filter just falls back to "all NEOs"."""
+    try:
+        result, _ = _load_cached_query(
+            CONSENSUS_MEMBERSHIP_SQL,
+            "consensus_membership",
+            "consensus membership")
+        return result
+    except Exception as e:
+        print(f"Warning: consensus membership load failed: {e}")
+        return pd.DataFrame(columns=[
+            "primary_desig", "packed_desig", "permid",
+            "in_mpc", "in_mpc_orbits", "in_cneos",
+            "in_neocc", "in_neofixer", "in_lowell",
+            "all_six_agree",
+        ])
+
+
+def _attach_source_membership(df_in, membership):
+    """Left-join the 6 in_X booleans + all_six_agree onto a NEO
+    DataFrame keyed on `designation`. Missing rows (NEOs that no
+    source claims) get False on every flag, treated as "not in any
+    catalog"."""
+    if df_in is None or df_in.empty or membership is None or membership.empty:
+        return df_in
+    cols = ["primary_desig", "in_mpc", "in_mpc_orbits", "in_cneos",
+            "in_neocc", "in_neofixer", "in_lowell", "all_six_agree"]
+    m = membership[cols].rename(columns={"primary_desig": "designation"})
+    out = df_in.merge(m, on="designation", how="left")
+    bool_cols = ["in_mpc", "in_mpc_orbits", "in_cneos",
+                 "in_neocc", "in_neofixer", "in_lowell",
+                 "all_six_agree"]
+    for c in bool_cols:
+        out[c] = out[c].fillna(False).astype(bool)
+    return out
+
+
+_NEO_SOURCE_FILTER_OPTIONS = [
+    {"label": "All known NEOs (any source)",       "value": "any"},
+    {"label": "All-six consensus",                 "value": "all_six"},
+    {"label": "MPC NEA.txt",                       "value": "mpc"},
+    {"label": "mpc_orbits q ≤ 1.3",                "value": "mpc_orbits"},
+    {"label": "JPL CNEOS",                         "value": "cneos"},
+    {"label": "ESA NEOCC",                         "value": "neocc"},
+    {"label": "CSS NEOfixer",                      "value": "neofixer"},
+    {"label": "Lowell astorb",                     "value": "lowell"},
+    {"label": "Disagreements only (NOT all six)",  "value": "disagreements"},
+]
+_NEO_SOURCE_FILTER_VALID = {opt["value"] for opt in _NEO_SOURCE_FILTER_OPTIONS}
+
+
+def _apply_source_filter(df_in, source):
+    """Slice a NEO DataFrame by the banner source filter. Whitelist-
+    validated; falls through to the unfiltered df for unknown values
+    so a stray callback value can't crash a tab."""
+    if df_in is None or df_in.empty:
+        return df_in
+    if source not in _NEO_SOURCE_FILTER_VALID or source == "any":
+        return df_in
+    if source == "all_six":
+        if "all_six_agree" not in df_in.columns:
+            return df_in
+        return df_in[df_in["all_six_agree"]]
+    if source == "disagreements":
+        if "all_six_agree" not in df_in.columns:
+            return df_in
+        return df_in[~df_in["all_six_agree"]]
+    col = f"in_{source}"
+    if col not in df_in.columns:
+        return df_in
+    return df_in[df_in[col]]
+
+
+# ---------------------------------------------------------------------------
 # Boxscore: object catalog loader
 # ---------------------------------------------------------------------------
 
@@ -2471,6 +2569,7 @@ if _REFRESH_ONLY:
     df, query_timestamp = load_data()
     df_apparition = load_apparition_data()
     load_boxscore_data()
+    load_consensus_membership()
     print("Cache refresh complete.")
     sys.exit(0)
 
@@ -2484,7 +2583,9 @@ _data_error = None
 
 
 def _load_all_data():
-    """Load both datasets in a background thread."""
+    """Load both datasets in a background thread, then attach per-NEO
+    source-membership booleans so the banner-level source filter has
+    something to slice on."""
     global df, df_apparition, query_timestamp, year_min, year_max, _data_error
     try:
         df, query_timestamp = load_data()
@@ -2493,6 +2594,15 @@ def _load_all_data():
         year_max = int(df["disc_year"].max())
         print(f"Data ready: {len(df):,} NEOs, "
               f"{len(df_apparition):,} apparition rows")
+        membership = load_consensus_membership()
+        if not membership.empty:
+            df = _attach_source_membership(df, membership)
+            df_apparition = _attach_source_membership(
+                df_apparition, membership)
+            n_any = int(df["in_mpc"].any() or df["all_six_agree"].any())
+            print(f"Source membership attached: {len(membership):,} "
+                  f"v_membership_wide rows; df all-six count = "
+                  f"{int(df['all_six_agree'].sum()):,}")
     except Exception as e:
         _data_error = str(e)
         print(f"ERROR loading data: {e}")
@@ -3095,6 +3205,53 @@ app.layout = html.Div(
                                     "cursor": "pointer",
                                 },
                             ),
+                        ],
+                    ),
+                ]),
+                # Banner-level NEO source filter (R&D-only). Filters
+                # every NEO-aware tab (Discoveries, Size dist, Multi-
+                # survey, Follow-up, Circumstances) by source
+                # membership from css_neo_consensus.v_membership_wide.
+                # Hidden on the Consensus tab (which has its own
+                # richer filter set). Always present in the layout so
+                # callbacks can reference its id; container hides via
+                # the tabs.value callback.
+                *([html.Div(
+                    id="neo-source-filter-container",
+                    children=[
+                        html.Label("NEO source filter",
+                                   style=LABEL_STYLE),
+                        dcc.Dropdown(
+                            id="neo-source-filter",
+                            options=_NEO_SOURCE_FILTER_OPTIONS,
+                            value="any",
+                            clearable=False,
+                            style={"width": "230px",
+                                   "fontSize": "12px"},
+                        ),
+                        html.Div(
+                            id="neo-source-filter-caption",
+                            className="subtext",
+                            style={"fontSize": "11px",
+                                   "marginTop": "2px",
+                                   "minHeight": "13px"},
+                        ),
+                    ],
+                )] if _RND else [
+                    # Non-rnd: hidden Dropdown so callback Inputs
+                    # binding to it still resolve (returns "any").
+                    html.Div(
+                        style={"display": "none"},
+                        children=[
+                            dcc.Dropdown(
+                                id="neo-source-filter",
+                                options=_NEO_SOURCE_FILTER_OPTIONS,
+                                value="any",
+                            ),
+                            html.Div(
+                                id="neo-source-filter-caption"),
+                            html.Div(
+                                id="neo-source-filter-container"),
                         ],
                     ),
                 ]),
@@ -5277,6 +5434,42 @@ def update_cache_refresh_label(_n):
     return _cache_refresh_label()
 
 
+# ── Banner-level NEO source filter ─────────────────────────────────
+# Show the dropdown only on tabs whose plots actually slice df by
+# source. Hide on MPEC Browser, Asteroid Classes (full mpc_orbits),
+# Tools (calculators), and the Consensus tab (which has its own
+# richer filter set). The hidden state preserves the dropdown's
+# value so users don't lose their pick when navigating elsewhere.
+_NEO_SOURCE_FILTER_TABS = {
+    "tab-discovery", "tab-neomod", "tab-comparison",
+    "tab-followup", "tab-circumstances",
+}
+
+
+@app.callback(
+    Output("neo-source-filter-container", "style"),
+    Input("tabs", "value"),
+)
+def _toggle_source_filter_visibility(active_tab):
+    if active_tab in _NEO_SOURCE_FILTER_TABS:
+        return {"display": "block"}
+    return {"display": "none"}
+
+
+@app.callback(
+    Output("neo-source-filter-caption", "children"),
+    Input("neo-source-filter", "value"),
+)
+def _update_source_filter_caption(source):
+    if df is None:
+        return ""
+    total = len(df)
+    matched = len(_apply_source_filter(df, source))
+    if source == "any" or matched == total:
+        return f"{total:,} NEOs (no filter)"
+    return f"{matched:,} of {total:,} matched"
+
+
 @app.callback(
     [Output(k, "value", allow_duplicate=True) for k in _RESET_ORDER],
     Input("reset-tab-btn", "n_clicks"),
@@ -5314,14 +5507,16 @@ def reset_controls(_tab_clicks, _all_clicks, active_tab):
     Input("theme-toggle", "value"),
     Input("plot-height", "value"),
     Input("tabs", "value"),
+    Input("neo-source-filter", "value"),
 )
 def update_charts(year_range, group_by, size_filter, view_mode, theme_name,
-                  plot_height, _tab):
+                  plot_height, _tab, neo_source):
     if df is None:
         raise PreventUpdate
     t = theme(theme_name)
     y0, y1 = year_range
-    filtered = df[(df["disc_year"] >= y0) & (df["disc_year"] <= y1)]
+    df_view = _apply_source_filter(df, neo_source)
+    filtered = df_view[(df_view["disc_year"] >= y0) & (df_view["disc_year"] <= y1)]
 
     if size_filter not in ("all", "split"):
         filtered = filtered[filtered["size_class"] == size_filter]
@@ -5500,10 +5695,11 @@ def update_charts(year_range, group_by, size_filter, view_mode, theme_name,
     Input("theme-toggle", "value"),
     Input("plot-height", "value"),
     Input("tabs", "value"),
+    Input("neo-source-filter", "value"),
 )
 def update_h_distribution(h_year_range, group_by, h_range, yscale, h_mode,
                           size_mapping, comp_labels, theme_name, plot_height,
-                          _tab):
+                          _tab, neo_source):
     if df is None:
         raise PreventUpdate
     t = theme(theme_name)
@@ -5511,7 +5707,8 @@ def update_h_distribution(h_year_range, group_by, h_range, yscale, h_mode,
     # Snap slider values to nearest bin center to avoid floating-point drift
     h_lo = round(h_range[0] * 4) / 4  # snap to 0.25 grid
     h_hi = round(h_range[1] * 4) / 4
-    filtered = df[(df["disc_year"] >= hy0) & (df["disc_year"] <= hy1)]
+    df_view = _apply_source_filter(df, neo_source)
+    filtered = df_view[(df_view["disc_year"] >= hy0) & (df_view["disc_year"] <= hy1)]
 
     # Only rows with valid H in the bin range
     valid = filtered[
@@ -5845,13 +6042,15 @@ def update_h_distribution(h_year_range, group_by, h_range, yscale, h_mode,
     Input("h-year-range", "value"),
     Input("theme-toggle", "value"),
     Input("tabs", "value"),
+    Input("neo-source-filter", "value"),
 )
-def update_neomod3_table(h_year_range, theme_name, _tab):
+def update_neomod3_table(h_year_range, theme_name, _tab, neo_source):
     if df is None:
         raise PreventUpdate
     t = theme(theme_name)
     hy0, hy1 = h_year_range
-    filtered = df[(df["disc_year"] >= hy0) & (df["disc_year"] <= hy1)]
+    df_view = _apply_source_filter(df, neo_source)
+    filtered = df_view[(df_view["disc_year"] >= hy0) & (df_view["disc_year"] <= hy1)]
 
     # Count discovered NEOs per half-magnitude bin
     valid = filtered[
@@ -5935,10 +6134,11 @@ def update_neomod3_table(h_year_range, theme_name, _tab):
     Input("theme-toggle", "value"),
     Input("plot-height", "value"),
     Input("tabs", "value"),
+    Input("neo-source-filter", "value"),
 )
 def update_comparison(year_range, size_filter, survey_select,
                       precovery, window_days, group_mode, venn_labels,
-                      theme_name, plot_height, active_tab):
+                      theme_name, plot_height, active_tab, neo_source):
     if active_tab != "tab-comparison" or df is None or df_apparition is None:
         raise PreventUpdate
 
@@ -5951,8 +6151,10 @@ def update_comparison(year_range, size_filter, survey_select,
     color_map = (STATION_COLORS if group_mode == "station"
                  else PROJECT_COLORS)
 
+    df_view = _apply_source_filter(df, neo_source)
+    df_app_view = _apply_source_filter(df_apparition, neo_source)
     survey_sets, eligible = build_survey_sets(
-        df, df_apparition, year_range, size_filter, exclude_precovery,
+        df_view, df_app_view, year_range, size_filter, exclude_precovery,
         window_days, group_col)
 
     eligible_total = len(eligible)
@@ -6058,10 +6260,11 @@ def update_station_dropdown(survey_select, current_value):
     Input("theme-toggle", "value"),
     Input("plot-height", "value"),
     Input("tabs", "value"),
+    Input("neo-source-filter", "value"),
 )
 def update_station_overlap(station_select, year_range, size_filter,
                            precovery, window_days, venn_labels,
-                           theme_name, plot_height, active_tab):
+                           theme_name, plot_height, active_tab, neo_source):
     if active_tab != "tab-comparison" or df is None or df_apparition is None:
         raise PreventUpdate
 
@@ -6077,8 +6280,10 @@ def update_station_overlap(station_select, year_range, size_filter,
     exclude_precovery = precovery == "post_only"
     window_days = int(window_days or 200)
 
+    df_view = _apply_source_filter(df, neo_source)
+    df_app_view = _apply_source_filter(df_apparition, neo_source)
     fig = _make_annual_overlap(
-        df, df_apparition, stations_sel, year_range,
+        df_view, df_app_view, stations_sel, year_range,
         size_filter, exclude_precovery, venn_labels, t, height,
         window_days, group_col="station_code",
         color_map=STATION_COLORS)
@@ -6102,17 +6307,20 @@ def update_station_overlap(station_select, year_range, size_filter,
     Input("theme-toggle", "value"),
     Input("plot-height", "value"),
     Input("tabs", "value"),
+    Input("neo-source-filter", "value"),
 )
 def update_followup(year_range, size_filter, max_days, theme_name,
-                    plot_height, active_tab):
+                    plot_height, active_tab, neo_source):
     if active_tab != "tab-followup" or df is None or df_apparition is None:
         raise PreventUpdate
 
     t = theme(theme_name)
     height = int(plot_height)
 
+    df_view = _apply_source_filter(df, neo_source)
+    df_app_view = _apply_source_filter(df_apparition, neo_source)
     fu_data, total = build_followup_data(
-        df, df_apparition, year_range, size_filter)
+        df_view, df_app_view, year_range, size_filter)
 
     if total == 0 or len(fu_data) == 0:
         empty = _empty_figure(
@@ -6144,9 +6352,10 @@ def update_followup(year_range, size_filter, max_days, theme_name,
     Input("theme-toggle", "value"),
     Input("plot-height", "value"),
     Input("tabs", "value"),
+    Input("neo-source-filter", "value"),
 )
 def update_circumstances(year_range, size_filter, color_by, group_by,
-                          theme_name, plot_height, active_tab):
+                          theme_name, plot_height, active_tab, neo_source):
     if active_tab != "tab-circumstances" or df is None:
         raise PreventUpdate
 
@@ -6154,7 +6363,8 @@ def update_circumstances(year_range, size_filter, color_by, group_by,
     height = int(plot_height)
     y0, y1 = year_range
 
-    filtered = df[(df["disc_year"] >= y0) & (df["disc_year"] <= y1)]
+    df_view = _apply_source_filter(df, neo_source)
+    filtered = df_view[(df_view["disc_year"] >= y0) & (df_view["disc_year"] <= y1)]
     if size_filter != "all":
         filtered = filtered[filtered["size_class"] == size_filter]
 

@@ -341,13 +341,26 @@ These are noted but not implemented:
   `css_neo_consensus.manual_annotations` table for human-curated
   notes (aliases, overrides, comments). Deferred until there's a
   concrete first use case.
-- **Banner-level "NEO source" selector** — once the consensus tab is
-  stable, the next step is a global control that filters every
-  NEO-aware tab (Discoveries by Year, Multi-survey Comparison,
-  Follow-up Timing, Discovery Circumstances) by source. Requires
-  expanding LOAD_SQL/APPARITION_SQL to carry per-source `in_X`
-  boolean columns drawn from `v_membership_wide`. Discussed but
-  intentionally deferred until the consensus tab itself proves out.
+- **Banner-level "NEO source" selector** — **shipped 2026-04-27**
+  (R&D-only via --rnd). A dropdown in the banner with nine options
+  (any / all-six / each of the 6 sources / disagreements-only)
+  filters the four NEO-aware tabs (Discoveries by Year, Size
+  Distribution, Multi-survey Comparison, Follow-up Timing,
+  Discovery Circumstances). Membership data comes from a small
+  parquet cache (`.consensus_membership_<hash>.parquet`, ~400 KB)
+  built from `v_membership_wide` and left-joined into `df` and
+  `df_apparition` at app startup. Per-tab callbacks gain one
+  Input + a `_apply_source_filter()` slice early in the function
+  body. The filter is hidden on tabs that don't slice df by NEO
+  source (MPEC Browser, Asteroid Classes, Tools, Consensus). One
+  known limitation: the membership cache rebuilds during stage 2
+  of the daily refresh, which runs *before* stage 4's consensus
+  source ingest, so today's ingest is visible to the banner filter
+  tomorrow morning. The Consensus tab itself queries
+  `v_membership_wide` live, so its data stays current. Fixing
+  the lag requires the in-process cache reload backlog item
+  (SIGHUP or interval polling) — see
+  `dashboard_hardening_backlog.md`.
 - **UpSet plot + pairwise Jaccard heatmap** — single chart showing
   the 14 populated 4-way buckets sorted by count, plus a 6×6 grid
   of pairwise Jaccard coefficients. Would replace or complement the
