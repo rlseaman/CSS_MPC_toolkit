@@ -14,6 +14,7 @@ Then open http://127.0.0.1:8050/ in a browser.
 
 import hashlib
 import os
+import re
 import sys
 import threading
 import time
@@ -2567,8 +2568,8 @@ _CONSENSUS_TABLE_COLUMNS = [
     {"name": "e",             "id": "e"},
     {"name": "i (°)",         "id": "i"},
     {"name": "H",             "id": "h"},
-    {"name": "u",             "id": "u_param"},
-    {"name": "nopp",          "id": "nopp"},
+    {"name": "U",             "id": "u_param"},
+    {"name": "Nopp",          "id": "nopp"},
     {"name": "first_obs",     "id": "first_obs"},
     {"name": "last_obs",      "id": "last_obs"},
     {"name": "arc (d)",       "id": "arc"},
@@ -2611,6 +2612,125 @@ def _consensus_source_row(source_key, label):
                             "fontSize": "12px"},
                 inputStyle={"marginRight": "3px"},
             ),
+        ],
+    )
+
+
+# Class radios. Classes are mutually exclusive (one orbit_type_int per
+# row) so the SQL semantics differ from the source radios:
+#   - Include = OR-among-includes (row's class IN {includes})
+#   - Exclude = NOT-IN-excludes  (row's class NOT IN {excludes})
+# Source radios stay AND-combined (each source is an independent flag).
+# Numbered is a normal three-way (permid IS NOT NULL).
+_CONSENSUS_CLASSES = (
+    (0,  "Atira"),
+    (1,  "Aten"),
+    (2,  "Apollo"),
+    (3,  "Amor"),
+    (10, "MarsX"),
+)
+_CONSENSUS_CLASS_KEYS = tuple(str(c) for c, _ in _CONSENSUS_CLASSES)
+
+
+def _consensus_class_row(class_int, label):
+    """Three-way radio for one orbit class. Same shape as
+    _consensus_source_row; different ID prefix to keep the callback
+    routing trivial."""
+    return html.Div(
+        style={"display": "flex", "alignItems": "center",
+               "gap": "12px", "marginBottom": "4px"},
+        children=[
+            html.Span(label,
+                      style={**LABEL_STYLE, "minWidth": "100px"}),
+            dcc.RadioItems(
+                id=f"consensus-class-{class_int}",
+                options=_CONSENSUS_RADIO_OPTIONS,
+                value="any",
+                inline=True,
+                labelStyle={**RADIO_LABEL_STYLE,
+                            "marginRight": "10px",
+                            "fontSize": "12px"},
+                inputStyle={"marginRight": "3px"},
+            ),
+        ],
+    )
+
+
+# Numeric range filters. (key, label, min, max, step) — min/max are the
+# bounds of the input widget itself (not the SQL filter); empty inputs
+# mean "no constraint". Step is purely UI, doesn't affect the value.
+_CONSENSUS_NUM_RANGES = (
+    ("q",       "q (AU)",  0.0,    1.5,   0.01),
+    ("e",       "e",       0.0,    1.0,   0.01),
+    ("i",       "i (°)",   0.0,    180.0, 0.1),
+    ("h",       "H",       5.0,    35.0,  0.1),
+    ("u_param", "U",       0,      9,     1),
+    ("nopp",    "Nopp",    1,      999,   1),
+)
+
+
+def _consensus_num_range(key, label, lo, hi, step):
+    """Inline label + min input + 'to' + max input."""
+    inp_style = {
+        "width": "70px",
+        "fontSize": "12px",
+        "padding": "3px 6px",
+        "backgroundColor": "var(--paper-bg, white)",
+        "color": "inherit",
+        "border": "1px solid var(--hr-color, #ccc)",
+        "borderRadius": "4px",
+    }
+    return html.Div(
+        style={"display": "flex", "alignItems": "center",
+               "gap": "6px", "marginBottom": "4px"},
+        children=[
+            html.Span(label,
+                      style={**LABEL_STYLE, "minWidth": "60px"}),
+            dcc.Input(id=f"consensus-{key}-min", type="number",
+                      min=lo, max=hi, step=step, debounce=True,
+                      placeholder="min", style=inp_style),
+            html.Span("to", style={"fontSize": "11px",
+                                    "color": "var(--subtext-color)"}),
+            dcc.Input(id=f"consensus-{key}-max", type="number",
+                      min=lo, max=hi, step=step, debounce=True,
+                      placeholder="max", style=inp_style),
+        ],
+    )
+
+
+# Date range filters (first_obs, last_obs). Use plain text inputs
+# accepting YYYY-MM-DD; that's lighter than dcc.DatePickerSingle and
+# typing a date is faster than the calendar widget for our users.
+_CONSENSUS_DATE_RANGES = (
+    ("first_obs", "first_obs"),
+    ("last_obs",  "last_obs"),
+)
+
+
+def _consensus_date_range(key, label):
+    inp_style = {
+        "width": "110px",
+        "fontSize": "12px",
+        "padding": "3px 6px",
+        "backgroundColor": "var(--paper-bg, white)",
+        "color": "inherit",
+        "border": "1px solid var(--hr-color, #ccc)",
+        "borderRadius": "4px",
+    }
+    return html.Div(
+        style={"display": "flex", "alignItems": "center",
+               "gap": "6px", "marginBottom": "4px"},
+        children=[
+            html.Span(label,
+                      style={**LABEL_STYLE, "minWidth": "80px"}),
+            dcc.Input(id=f"consensus-{key}-min", type="text",
+                      debounce=True, placeholder="YYYY-MM-DD",
+                      style=inp_style),
+            html.Span("to", style={"fontSize": "11px",
+                                    "color": "var(--subtext-color)"}),
+            dcc.Input(id=f"consensus-{key}-max", type="text",
+                      debounce=True, placeholder="YYYY-MM-DD",
+                      style=inp_style),
         ],
     )
 
@@ -3053,54 +3173,36 @@ app.layout = html.Div(
                                 "astorb. For each source pick Include, "
                                 "Exclude, or Any — the table shows "
                                 "matching objects with diagnostic "
-                                "columns. "
-                                "Orbit columns (q, e, i, H, u, nopp) "
-                                "come from MPC's mpc_orbits; class "
-                                "falls back to css_utilities."
-                                "classify_orbit when MPC's "
-                                "orbit_type_int is NULL. "
+                                "columns. Orbit columns (q, e, i, H, U, "
+                                "Nopp) come from MPC's mpc_orbits; "
+                                "class is always derived from css_"
+                                "utilities.classify_orbit(q, e, i). "
                                 "first_obs / last_obs / arc / n_obs "
-                                "are aggregated from obs_sbn.",
+                                "come from the daily-refreshed "
+                                "obs_summary matview.",
                                 className="subtext",
                                 style={"fontSize": "14px",
                                        "marginBottom": "18px"}),
 
-                            # Filter controls. One three-way radio per
-                            # source (Include / Exclude / Either). This
-                            # is structurally cleaner than the prior
-                            # two-checkbox-grid, which let the user put
-                            # the same source in Include AND Exclude.
+                            # Filter controls. Buttons + the "Hide all-
+                            # six-agree" toggle group on the LEFT;
+                            # per-source three-way radios in the middle
+                            # column; per-class radios + the Numbered
+                            # boolean on the right. Numeric and date
+                            # range inputs go in their own row below.
                             html.Div(
                                 style={"display": "flex", "gap": "30px",
                                        "marginBottom": "16px",
                                        "flexWrap": "wrap",
                                        "alignItems": "flex-start"},
                                 children=[
-                                    html.Div(
-                                        style={"flex": "1 1 380px",
-                                               "minWidth": "380px"},
-                                        children=[
-                                            html.Label(
-                                                "Filter by source",
-                                                style={**LABEL_STYLE,
-                                                       "fontWeight":
-                                                           "600"}),
-                                            *(
-                                                _consensus_source_row(
-                                                    s,
-                                                    _CONSENSUS_SOURCE_LABELS[s])
-                                                for s in
-                                                _CONSENSUS_SOURCES
-                                            ),
-                                        ],
-                                    ),
+                                    # ── Left column: buttons + filter toggle
                                     html.Div(
                                         style={"alignSelf": "flex-start",
                                                "display": "flex",
                                                "flexDirection": "column",
                                                "gap": "8px",
-                                               "minWidth": "230px",
-                                               "marginTop": "20px"},
+                                               "minWidth": "230px"},
                                         children=[
                                             html.Button(
                                                 "All-six consensus",
@@ -3121,8 +3223,11 @@ app.layout = html.Div(
                                                 n_clicks=0,
                                                 style=DOWNLOAD_BTN_STYLE,
                                                 title=(
-                                                    "All sources back "
-                                                    "to Either and the "
+                                                    "All filters back "
+                                                    "to defaults: "
+                                                    "every radio Any, "
+                                                    "every range "
+                                                    "empty, "
                                                     "disagreements "
                                                     "filter on.")),
                                             dcc.Checklist(
@@ -3140,6 +3245,103 @@ app.layout = html.Div(
                                                 style={"marginTop": "6px"},
                                             ),
                                         ],
+                                    ),
+                                    # ── Middle column: source radios
+                                    html.Div(
+                                        style={"flex": "0 1 380px",
+                                               "minWidth": "380px"},
+                                        children=[
+                                            html.Label(
+                                                "Filter by source",
+                                                style={**LABEL_STYLE,
+                                                       "fontWeight":
+                                                           "600"}),
+                                            *(
+                                                _consensus_source_row(
+                                                    s,
+                                                    _CONSENSUS_SOURCE_LABELS[s])
+                                                for s in
+                                                _CONSENSUS_SOURCES
+                                            ),
+                                        ],
+                                    ),
+                                    # ── Right column: class radios + Numbered
+                                    html.Div(
+                                        style={"flex": "0 1 320px",
+                                               "minWidth": "320px"},
+                                        children=[
+                                            html.Label(
+                                                "Filter by class",
+                                                style={**LABEL_STYLE,
+                                                       "fontWeight":
+                                                           "600"}),
+                                            *(
+                                                _consensus_class_row(
+                                                    c, label)
+                                                for c, label in
+                                                _CONSENSUS_CLASSES
+                                            ),
+                                            html.Div(
+                                                style={"display": "flex",
+                                                       "alignItems":
+                                                           "center",
+                                                       "gap": "12px",
+                                                       "marginTop":
+                                                           "10px"},
+                                                children=[
+                                                    html.Span(
+                                                        "Numbered",
+                                                        style={
+                                                            **LABEL_STYLE,
+                                                            "minWidth":
+                                                                "100px"}),
+                                                    dcc.RadioItems(
+                                                        id="consensus-numbered",
+                                                        options=_CONSENSUS_RADIO_OPTIONS,
+                                                        value="any",
+                                                        inline=True,
+                                                        labelStyle={
+                                                            **RADIO_LABEL_STYLE,
+                                                            "marginRight":
+                                                                "10px",
+                                                            "fontSize":
+                                                                "12px"},
+                                                        inputStyle={
+                                                            "marginRight":
+                                                                "3px"},
+                                                    ),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+
+                            # Numeric range row (q, e, i, H, U, Nopp) and
+                            # date range row (first_obs, last_obs).
+                            # Empty inputs mean "no constraint" on that
+                            # side.
+                            html.Div(
+                                style={"display": "flex",
+                                       "flexWrap": "wrap",
+                                       "gap": "20px",
+                                       "marginBottom": "10px"},
+                                children=[
+                                    *(
+                                        _consensus_num_range(*spec)
+                                        for spec in _CONSENSUS_NUM_RANGES
+                                    ),
+                                ],
+                            ),
+                            html.Div(
+                                style={"display": "flex",
+                                       "flexWrap": "wrap",
+                                       "gap": "20px",
+                                       "marginBottom": "16px"},
+                                children=[
+                                    *(
+                                        _consensus_date_range(*spec)
+                                        for spec in _CONSENSUS_DATE_RANGES
                                     ),
                                 ],
                             ),
@@ -9449,84 +9651,146 @@ def update_survey_dropdown(group_mode, current_value):
 # ---------------------------------------------------------------------------
 
 
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_CONSENSUS_NUM_FIELD_SQL = {
+    "q":       "mo.q::float",
+    "e":       "mo.e::float",
+    "i":       "mo.i::float",
+    "h":       "mo.h::float",
+    "u_param": "mo.u_param",
+    "nopp":    "mo.nopp",
+}
+_CONSENSUS_DATE_FIELD_SQL = {
+    "first_obs": "obs.first_obs",
+    "last_obs":  "obs.last_obs",
+}
+_CONSENSUS_VALID_CLASSES = {c for c, _ in _CONSENSUS_CLASSES}
+
+
 def _consensus_query(include, exclude, hide_all_agree=False,
+                     class_includes=None, class_excludes=None,
+                     numbered="any",
+                     num_ranges=None, date_ranges=None,
                      limit=_CONSENSUS_TABLE_LIMIT):
-    """Query css_neo_consensus.v_membership_wide for objects matching the
-    include/exclude source filters, joined to mpc_orbits and
-    numbered_identifications for context columns.
+    """Query the consensus view + mpc_orbits + obs_summary, filtered
+    by the dashboard's full set of controls.
 
-    `hide_all_agree=True` adds a "NOT all six are TRUE" clause — the
-    primary way to surface disagreements (objects where at least one
-    source is missing the membership).
+    Filter semantics:
+      - `include` / `exclude` (source lists): AND across the boolean
+        columns (in_mpc, in_cneos, ...). Each source is independent.
+      - `hide_all_agree`: NOT (in_mpc AND ... AND in_lowell).
+      - `class_includes`: row's classify_orbit ∈ class_includes (OR).
+      - `class_excludes`: row's classify_orbit ∉ class_excludes (or
+        IS NULL — NULL classify means "not classified", so a NULL row
+        is not in the excluded set).
+      - `numbered`: 'include' = permid IS NOT NULL, 'exclude' = IS NULL.
+      - `num_ranges`: {field: (min_or_None, max_or_None)} for q, e, i,
+        h, u_param, nopp; each side optional.
+      - `date_ranges`: {field: (min_str_or_None, max_str_or_None)} for
+        first_obs, last_obs; strings validated YYYY-MM-DD.
 
-    Returns (df, total_match_count). df is capped at `limit`; the count
-    is the unbounded match count (so the UI can advise when results
-    were truncated).
+    All values that could carry user input are validated against
+    whitelists (sources, classes, fields) or coerced (floats / ints)
+    or regex-checked (dates) before being interpolated into SQL.
+
+    Returns (df, total_match_count). df is capped at `limit`; the
+    count is the unbounded match count.
     """
-    # Validate against whitelist (defends against any stray callback
-    # value getting interpolated into SQL).
-    include = [s for s in include or [] if s in _CONSENSUS_SOURCES]
-    exclude = [s for s in exclude or [] if s in _CONSENSUS_SOURCES]
+    include = [s for s in (include or []) if s in _CONSENSUS_SOURCES]
+    exclude = [s for s in (exclude or []) if s in _CONSENSUS_SOURCES]
+    class_includes = [int(c) for c in (class_includes or [])
+                      if int(c) in _CONSENSUS_VALID_CLASSES]
+    class_excludes = [int(c) for c in (class_excludes or [])
+                      if int(c) in _CONSENSUS_VALID_CLASSES]
+    num_ranges = num_ranges or {}
+    date_ranges = date_ranges or {}
 
-    parts = [f"in_{s}" for s in include]
-    parts += [f"NOT in_{s}" for s in exclude]
+    parts = []
+    parts += [f"v.in_{s}" for s in include]
+    parts += [f"NOT v.in_{s}" for s in exclude]
     if hide_all_agree:
-        all_six = " AND ".join(f"in_{s}" for s in _CONSENSUS_SOURCES)
-        parts.append(f"NOT ({all_six})")
+        parts.append("NOT (" + " AND ".join(f"v.in_{s}" for s in
+                     _CONSENSUS_SOURCES) + ")")
+
+    if class_includes:
+        ids = ",".join(str(c) for c in class_includes)
+        parts.append(
+            f"css_utilities.classify_orbit(mo.q, mo.e, mo.i) IN ({ids})")
+    if class_excludes:
+        ids = ",".join(str(c) for c in class_excludes)
+        parts.append(
+            "(css_utilities.classify_orbit(mo.q, mo.e, mo.i) IS NULL "
+            f"OR css_utilities.classify_orbit(mo.q, mo.e, mo.i) "
+            f"NOT IN ({ids}))")
+
+    if numbered == "include":
+        parts.append("v.permid IS NOT NULL")
+    elif numbered == "exclude":
+        parts.append("v.permid IS NULL")
+
+    for field, bounds in num_ranges.items():
+        if field not in _CONSENSUS_NUM_FIELD_SQL or not bounds:
+            continue
+        lo, hi = bounds
+        col = _CONSENSUS_NUM_FIELD_SQL[field]
+        if lo is not None and lo != "":
+            parts.append(f"{col} >= {float(lo)}")
+        if hi is not None and hi != "":
+            parts.append(f"{col} <= {float(hi)}")
+
+    for field, bounds in date_ranges.items():
+        if field not in _CONSENSUS_DATE_FIELD_SQL or not bounds:
+            continue
+        lo, hi = bounds
+        col = _CONSENSUS_DATE_FIELD_SQL[field]
+        if lo and _DATE_RE.match(str(lo)):
+            parts.append(f"{col} >= DATE '{lo}'")
+        if hi and _DATE_RE.match(str(hi)):
+            parts.append(f"{col} <= DATE '{hi}'")
+
     where_clause = " AND ".join(parts) if parts else "TRUE"
 
-    # Two queries: one for the (paginated) detail rows, one for the
-    # total count. They could be combined via window functions but two
-    # queries are simpler and both are sub-second on this scale.
-    count_sql = f"""
-        SELECT count(*) AS n
-          FROM css_neo_consensus.v_membership_wide v
-         WHERE {where_clause}
-    """
-    # obs columns come from css_neo_consensus.obs_summary, a daily-
-    # refreshed matview that pre-aggregates obs_sbn by primary_desig.
-    # Without it the per-target LATERAL ran ~5 ms × N — fine for 100s
-    # of targets, but ~3 minutes for the all-six-agree set (~41K).
-    # classify_orbit() is the fallback for the ~77% of NEOs whose
-    # orbit_type_int is NULL in mpc_orbits.
-    detail_sql = f"""
-        WITH targets AS (
-            SELECT primary_desig, permid, packed_desig
-              FROM css_neo_consensus.v_membership_wide
+    # Shared base CTE: v_membership_wide × mpc_orbits × obs_summary,
+    # one row per primary_desig (joins are 1:1 on packed_desig /
+    # primary_desig). Both the count and the detail query share this
+    # CTE so they apply the same filters.
+    base_cte = f"""
+        WITH base AS (
+            SELECT
+                v.primary_desig,
+                v.permid,
+                v.packed_desig,
+                v.in_mpc, v.in_mpc_orbits, v.in_cneos,
+                v.in_neocc, v.in_neofixer, v.in_lowell,
+                css_utilities.classify_orbit(mo.q, mo.e, mo.i)
+                    AS orbit_type_int,
+                mo.q::float       AS q,
+                mo.e::float       AS e,
+                mo.i::float       AS i,
+                mo.h::float       AS h,
+                mo.u_param,
+                mo.nopp,
+                obs.first_obs,
+                obs.last_obs,
+                obs.arc_days::int AS arc,
+                obs.nobs::int     AS nobs
+              FROM css_neo_consensus.v_membership_wide v
+              LEFT JOIN public.mpc_orbits mo
+                ON mo.packed_primary_provisional_designation = v.packed_desig
+              LEFT JOIN css_neo_consensus.obs_summary obs
+                ON obs.primary_desig = v.primary_desig
              WHERE {where_clause}
-             ORDER BY primary_desig
-             LIMIT {int(limit)}
         )
-        SELECT
-            t.primary_desig,
-            t.permid,
-            ni.iau_name,
-            v.in_mpc, v.in_mpc_orbits, v.in_cneos,
-            v.in_neocc, v.in_neofixer, v.in_lowell,
-            COALESCE(mo.orbit_type_int,
-                     css_utilities.classify_orbit(mo.q, mo.e, mo.i)
-            ) AS orbit_type_int,
-            mo.q::float AS q,
-            mo.e::float AS e,
-            mo.i::float AS i,
-            mo.h::float AS h,
-            mo.u_param,
-            mo.nopp,
-            obs.first_obs,
-            obs.last_obs,
-            obs.arc_days::int AS arc,
-            obs.nobs::int AS nobs,
-            t.packed_desig AS packed_desig
-          FROM targets t
-          JOIN css_neo_consensus.v_membership_wide v
-            USING (primary_desig)
+    """
+
+    count_sql = base_cte + "SELECT count(*) AS n FROM base"
+    detail_sql = base_cte + f"""
+        SELECT b.*, ni.iau_name
+          FROM base b
           LEFT JOIN public.numbered_identifications ni
-            ON ni.packed_primary_provisional_designation = t.packed_desig
-          LEFT JOIN public.mpc_orbits mo
-            ON mo.packed_primary_provisional_designation = t.packed_desig
-          LEFT JOIN css_neo_consensus.obs_summary obs
-            ON obs.primary_desig = t.primary_desig
-         ORDER BY t.primary_desig
+            ON ni.packed_primary_provisional_designation = b.packed_desig
+         ORDER BY b.primary_desig
+         LIMIT {int(limit)}
     """
     with connect() as conn:
         n_total = pd.read_sql(count_sql, conn).iloc[0, 0]
@@ -9566,25 +9830,46 @@ def _format_table_rows(df):
 # Buttons → radios + filter, run entirely in the browser. We tried
 # doing this server-side (one callback with the radios as both Input
 # AND Output) and observed Dash firing the callback once per Output
-# write, with partially-updated radio state, producing intermediate
-# counts and the final radio values reverting. Clientside avoids the
-# loop: the browser settles all 7 props locally, then the server-side
-# update_consensus callback fires once on the new Inputs.
+# write, with partially-updated radio state. Clientside avoids the
+# loop: the browser settles all the props locally in one tick, then
+# the server-side update_consensus callback fires once on the new
+# Inputs.
+#
+# Reset → all radios "any", numeric / date inputs cleared, hide_all on.
+# Preset → all source radios "include", everything else cleared,
+#          hide_all off (so the all-six-agree set surfaces).
+#
+# Outputs in this order: 6 source radios, 5 class radios, numbered,
+# 6 numeric ranges × 2 (min/max), 2 date ranges × 2, hide_all checklist.
+# Total: 6 + 5 + 1 + 12 + 4 + 1 = 29 outputs.
 app.clientside_callback(
     """
     function(reset_clicks, preset_clicks) {
         const ctx = window.dash_clientside.callback_context;
         if (!ctx.triggered || ctx.triggered.length === 0) {
-            return Array(7).fill(window.dash_clientside.no_update);
+            return Array(29).fill(window.dash_clientside.no_update);
         }
         const trig = ctx.triggered[0].prop_id.split('.')[0];
+        const empty_ranges = Array(16).fill(null);
         if (trig === 'consensus-reset') {
-            return ['any','any','any','any','any','any', ['hide_all']];
+            return [
+                'any','any','any','any','any','any',         // 6 source radios
+                'any','any','any','any','any',                 // 5 class radios
+                'any',                                          // numbered
+                ...empty_ranges,                                // 12 num + 4 date
+                ['hide_all']
+            ];
         }
         if (trig === 'consensus-preset-all') {
-            return ['include','include','include','include','include','include', []];
+            return [
+                'include','include','include','include','include','include',
+                'any','any','any','any','any',
+                'any',
+                ...empty_ranges,
+                []
+            ];
         }
-        return Array(7).fill(window.dash_clientside.no_update);
+        return Array(29).fill(window.dash_clientside.no_update);
     }
     """,
     Output("consensus-radio-mpc", "value"),
@@ -9593,6 +9878,28 @@ app.clientside_callback(
     Output("consensus-radio-neocc", "value"),
     Output("consensus-radio-neofixer", "value"),
     Output("consensus-radio-lowell", "value"),
+    Output("consensus-class-0",  "value"),
+    Output("consensus-class-1",  "value"),
+    Output("consensus-class-2",  "value"),
+    Output("consensus-class-3",  "value"),
+    Output("consensus-class-10", "value"),
+    Output("consensus-numbered", "value"),
+    Output("consensus-q-min", "value"),
+    Output("consensus-q-max", "value"),
+    Output("consensus-e-min", "value"),
+    Output("consensus-e-max", "value"),
+    Output("consensus-i-min", "value"),
+    Output("consensus-i-max", "value"),
+    Output("consensus-h-min", "value"),
+    Output("consensus-h-max", "value"),
+    Output("consensus-u_param-min", "value"),
+    Output("consensus-u_param-max", "value"),
+    Output("consensus-nopp-min", "value"),
+    Output("consensus-nopp-max", "value"),
+    Output("consensus-first_obs-min", "value"),
+    Output("consensus-first_obs-max", "value"),
+    Output("consensus-last_obs-min", "value"),
+    Output("consensus-last_obs-max", "value"),
     Output("consensus-filter", "value"),
     Input("consensus-reset", "n_clicks"),
     Input("consensus-preset-all", "n_clicks"),
@@ -9610,25 +9917,78 @@ app.clientside_callback(
     Input("consensus-radio-neocc", "value"),
     Input("consensus-radio-neofixer", "value"),
     Input("consensus-radio-lowell", "value"),
+    Input("consensus-class-0", "value"),
+    Input("consensus-class-1", "value"),
+    Input("consensus-class-2", "value"),
+    Input("consensus-class-3", "value"),
+    Input("consensus-class-10", "value"),
+    Input("consensus-numbered", "value"),
+    Input("consensus-q-min", "value"),
+    Input("consensus-q-max", "value"),
+    Input("consensus-e-min", "value"),
+    Input("consensus-e-max", "value"),
+    Input("consensus-i-min", "value"),
+    Input("consensus-i-max", "value"),
+    Input("consensus-h-min", "value"),
+    Input("consensus-h-max", "value"),
+    Input("consensus-u_param-min", "value"),
+    Input("consensus-u_param-max", "value"),
+    Input("consensus-nopp-min", "value"),
+    Input("consensus-nopp-max", "value"),
+    Input("consensus-first_obs-min", "value"),
+    Input("consensus-first_obs-max", "value"),
+    Input("consensus-last_obs-min", "value"),
+    Input("consensus-last_obs-max", "value"),
     Input("consensus-filter", "value"),
 )
 def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
-                     r_lowell, filter_value):
-    states = {
+                     r_lowell,
+                     c_atira, c_aten, c_apollo, c_amor, c_marsx,
+                     numbered,
+                     q_min, q_max, e_min, e_max, i_min, i_max,
+                     h_min, h_max, u_min, u_max, nopp_min, nopp_max,
+                     first_min, first_max, last_min, last_max,
+                     filter_value):
+    sources = {
         "mpc": r_mpc, "mpc_orbits": r_mpc_orbits, "cneos": r_cneos,
         "neocc": r_neocc, "neofixer": r_neofixer, "lowell": r_lowell,
     }
-    include = [s for s, v in states.items() if v == "include"]
-    exclude = [s for s, v in states.items() if v == "exclude"]
+    include = [s for s, v in sources.items() if v == "include"]
+    exclude = [s for s, v in sources.items() if v == "exclude"]
+    classes = {0: c_atira, 1: c_aten, 2: c_apollo, 3: c_amor,
+               10: c_marsx}
+    class_includes = [c for c, v in classes.items() if v == "include"]
+    class_excludes = [c for c, v in classes.items() if v == "exclude"]
     hide_all_agree = "hide_all" in (filter_value or [])
+    num_ranges = {
+        "q":       (q_min, q_max),
+        "e":       (e_min, e_max),
+        "i":       (i_min, i_max),
+        "h":       (h_min, h_max),
+        "u_param": (u_min, u_max),
+        "nopp":    (nopp_min, nopp_max),
+    }
+    date_ranges = {
+        "first_obs": (first_min, first_max),
+        "last_obs":  (last_min, last_max),
+    }
 
-    print(f"[consensus] include={include!r} exclude={exclude!r} "
-          f"hide_all={hide_all_agree} trig={ctx.triggered_id}",
+    print(f"[consensus] inc={include!r} exc={exclude!r} "
+          f"cinc={class_includes!r} cexc={class_excludes!r} "
+          f"num={numbered!r} hide_all={hide_all_agree} "
+          f"trig={ctx.triggered_id}",
           flush=True)
 
     try:
-        df, n_total = _consensus_query(include, exclude,
-                                       hide_all_agree=hide_all_agree)
+        df, n_total = _consensus_query(
+            include, exclude,
+            hide_all_agree=hide_all_agree,
+            class_includes=class_includes,
+            class_excludes=class_excludes,
+            numbered=numbered,
+            num_ranges=num_ranges,
+            date_ranges=date_ranges,
+        )
     except Exception as e:
         return (f"Query failed: {type(e).__name__}: {e}", [], 0)
     print(f"[consensus] -> n_total={n_total} returned_rows={len(df)}",
