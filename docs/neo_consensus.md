@@ -230,3 +230,20 @@ These are noted but not implemented:
 - **Comet support (NECs)** — currently `is_comet=TRUE` rows are
   filtered from `v_membership_wide`. NEOfixer carries 164 NECs;
   enabling them is a view edit. Defer until there's a concrete need.
+- **Alias merging at canonicalization** — 15 designations in non-MPC
+  sources resolve to MPC primaries that start with `P/` (i.e., MPC
+  classifies the object as a periodic comet but other sources keep the
+  asteroid-style provisional). E.g. `2025 NR197` (CNEOS/NEOCC/Lowell)
+  ↔ MPC `P/1818 W1` (Pons-Brooks). `lib/neo_consensus.py::canonicalize`
+  could follow `current_identifications` and rewrite secondary→primary
+  before upsert; would merge these into single rows in
+  `v_membership_wide` with `is_comet=TRUE` (and so filtered from the
+  default view by design).
+- **Fast Earth MOID utility** — for both this dashboard column and the
+  toolkit at large. `mpc_orbits.earth_moid` is NULL for ~62% of NEOs.
+  JPL SBDB has fuller coverage (overlaid in other dashboard tabs via
+  `lib/sbdb_moid.py`). A fast in-process MOID computation from
+  orbital elements would close the gap and be a useful
+  `css_utilities` function generally — Sitarski (1968) or Gronchi
+  (2002) iterative methods are the standard references. Not present
+  in the codebase today.
