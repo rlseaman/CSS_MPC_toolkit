@@ -2542,6 +2542,39 @@ _ORBIT_TYPE_LABELS = {
     99: "Oth",
 }
 
+# Static columns for the consensus DataTable. Defined once at module
+# load so the table component can live in the layout permanently
+# (instead of being re-created by every update_consensus call). The
+# update callback then only updates `data` and `page_current` props,
+# which is the recommended Dash pattern for tables whose schema is
+# stable across queries.
+_CONSENSUS_TABLE_COLUMNS = [
+    {"name": "Designation",   "id": "primary_desig"},
+    {"name": "Permid",        "id": "permid"},
+    {"name": "Name",          "id": "iau_name"},
+    {"name": "MPC",           "id": "in_mpc"},
+    {"name": "mpc_orbits",    "id": "in_mpc_orbits"},
+    {"name": "CNEOS",         "id": "in_cneos"},
+    {"name": "NEOCC",         "id": "in_neocc"},
+    {"name": "NEOfixer",      "id": "in_neofixer"},
+    {"name": "Lowell",        "id": "in_lowell"},
+    {"name": "class",         "id": "class"},
+    {"name": "q (AU)",        "id": "q"},
+    {"name": "e",             "id": "e"},
+    {"name": "i (°)",         "id": "i"},
+    {"name": "H",             "id": "h"},
+    {"name": "u",             "id": "u_param"},
+    {"name": "nopp",          "id": "nopp"},
+    {"name": "first_obs",     "id": "first_obs"},
+    {"name": "last_obs",      "id": "last_obs"},
+    {"name": "arc (d)",       "id": "arc"},
+    {"name": "n_obs",         "id": "nobs"},
+]
+_CONSENSUS_TABLE_BOOL_COLS = [
+    "in_mpc", "in_mpc_orbits", "in_cneos",
+    "in_neocc", "in_neofixer", "in_lowell",
+]
+
 # ---------------------------------------------------------------------------
 # Observatory site buttons — sites known to work with NEOfixer ephemeris API
 # ---------------------------------------------------------------------------
@@ -3115,8 +3148,52 @@ app.layout = html.Div(
                             ),
                             dcc.Download(id="consensus-download"),
 
-                            # Result table
-                            html.Div(id="consensus-table-container"),
+                            # Result table — declared once in the
+                            # layout so updates only mutate `data` and
+                            # `page_current` props, never replace the
+                            # component. Avoids React-reconciliation
+                            # weirdness where a "new" DataTable with
+                            # the same id retains stale client state.
+                            dash_table.DataTable(
+                                id="consensus-table",
+                                columns=_CONSENSUS_TABLE_COLUMNS,
+                                data=[],
+                                page_size=50,
+                                page_current=0,
+                                sort_action="native",
+                                filter_action="native",
+                                style_table={"overflowX": "auto"},
+                                style_cell={
+                                    "fontFamily": "sans-serif",
+                                    "fontSize": "12px",
+                                    "padding": "4px 8px",
+                                    "textAlign": "left",
+                                    "backgroundColor": "transparent",
+                                    "color": "inherit",
+                                    "borderColor":
+                                        "var(--hr-color, #ccc)",
+                                },
+                                style_header={
+                                    "fontWeight": "600",
+                                    "backgroundColor":
+                                        "var(--paper-bg, #f5f5f5)",
+                                    "color": "inherit",
+                                    "borderBottom":
+                                        "2px solid var(--hr-color, #999)",
+                                },
+                                style_filter={
+                                    "backgroundColor": "transparent",
+                                    "color": "inherit",
+                                },
+                                style_data_conditional=[
+                                    {"if": {"column_id": col,
+                                            "filter_query":
+                                                f"{{{col}}} = '✓'"},
+                                     "backgroundColor":
+                                         "rgba(70, 140, 70, 0.18)"}
+                                    for col in _CONSENSUS_TABLE_BOOL_COLS
+                                ],
+                            ),
                         ]),
                     ],
                 )] if _RND else []),
@@ -9437,13 +9514,16 @@ def _consensus_query(include, exclude, hide_all_agree=False,
     return df, int(n_total)
 
 
-def _consensus_table(df):
-    """Build the dash_table.DataTable for a query result frame."""
-    # Boolean columns rendered as ✓ / blank for compactness.
+def _format_table_rows(df):
+    """Build the list-of-records data payload for the consensus DataTable.
+
+    Returns a list of dicts ready to assign to dash_table.DataTable.data.
+    The DataTable component itself lives permanently in the layout — we
+    only update the data prop, not the whole component.
+    """
     display_df = df.copy()
-    bool_cols = ["in_mpc", "in_mpc_orbits", "in_cneos",
-                 "in_neocc", "in_neofixer", "in_lowell"]
-    for col in bool_cols:
+    # Boolean columns rendered as ✓ / blank for compactness.
+    for col in _CONSENSUS_TABLE_BOOL_COLS:
         display_df[col] = display_df[col].map({True: "✓", False: ""})
     # Round numeric columns for legibility.
     for col, fmt in [("q", "%.4f"), ("e", "%.4f"),
@@ -9460,84 +9540,13 @@ def _consensus_table(df):
         if col in ("u_param", "nopp", "arc", "nobs"):
             display_df[col] = display_df[col].apply(
                 lambda v: int(v) if v != "" else "")
-
-    columns = [
-        {"name": "Designation",   "id": "primary_desig"},
-        {"name": "Permid",        "id": "permid"},
-        {"name": "Name",          "id": "iau_name"},
-        {"name": "MPC",           "id": "in_mpc"},
-        {"name": "mpc_orbits",    "id": "in_mpc_orbits"},
-        {"name": "CNEOS",         "id": "in_cneos"},
-        {"name": "NEOCC",         "id": "in_neocc"},
-        {"name": "NEOfixer",      "id": "in_neofixer"},
-        {"name": "Lowell",        "id": "in_lowell"},
-        {"name": "class",         "id": "class"},
-        {"name": "q (AU)",        "id": "q"},
-        {"name": "e",             "id": "e"},
-        {"name": "i (°)",         "id": "i"},
-        {"name": "H",             "id": "h"},
-        {"name": "u",             "id": "u_param"},
-        {"name": "nopp",          "id": "nopp"},
-        {"name": "first_obs",     "id": "first_obs"},
-        {"name": "last_obs",      "id": "last_obs"},
-        {"name": "arc (d)",       "id": "arc"},
-        {"name": "n_obs",         "id": "nobs"},
-    ]
-    return dash_table.DataTable(
-        id="consensus-table",
-        columns=columns,
-        data=display_df.to_dict("records"),
-        page_size=50,
-        # Reset pagination on every callback firing. Without this,
-        # Dash preserves page_current across re-renders (since the
-        # id is unchanged), and a user who was on page 5 of a 250-row
-        # result sees an empty page when the filter narrows to 30
-        # rows. Forcing page_current=0 makes the table jump to the
-        # top when the filter changes.
-        page_current=0,
-        sort_action="native",
-        filter_action="native",
-        # virtualization off because we use page_size; on large result
-        # sets pagination keeps the DOM small without forcing a fixed
-        # row height.
-        style_table={"overflowX": "auto"},
-        # Theme-aware: backgrounds and text use the same CSS variables
-        # the rest of the dashboard uses. This avoids the dark-mode
-        # "light text on light table cell" problem that hardcoded
-        # white-and-black falls into.
-        style_cell={
-            "fontFamily": "sans-serif",
-            "fontSize": "12px",
-            "padding": "4px 8px",
-            "textAlign": "left",
-            "backgroundColor": "transparent",
-            "color": "inherit",
-            "borderColor": "var(--hr-color, #ccc)",
-        },
-        style_header={
-            "fontWeight": "600",
-            "backgroundColor": "var(--paper-bg, #f5f5f5)",
-            "color": "inherit",
-            "borderBottom": "2px solid var(--hr-color, #999)",
-        },
-        style_filter={
-            "backgroundColor": "transparent",
-            "color": "inherit",
-        },
-        style_data_conditional=[
-            # Highlight the in_X "✓" cells subtly. Same opacity in
-            # both themes — green-tinted overlay over the page bg.
-            {"if": {"column_id": col, "filter_query": f"{{{col}}} = '✓'"},
-             "backgroundColor": "rgba(70, 140, 70, 0.18)"}
-            for col in ["in_mpc", "in_mpc_orbits", "in_cneos",
-                        "in_neocc", "in_neofixer", "in_lowell"]
-        ],
-    )
+    return display_df.to_dict("records")
 
 
 @app.callback(
     Output("consensus-count", "children"),
-    Output("consensus-table-container", "children"),
+    Output("consensus-table", "data"),
+    Output("consensus-table", "page_current"),
     Input("consensus-include", "value"),
     Input("consensus-exclude", "value"),
     Input("consensus-filter", "value"),
@@ -9551,8 +9560,7 @@ def update_consensus(include, exclude, filter_value):
         df, n_total = _consensus_query(include, exclude,
                                        hide_all_agree=hide_all_agree)
     except Exception as e:
-        return (f"Query failed: {type(e).__name__}: {e}",
-                html.Div("(no results)", className="subtext"))
+        return (f"Query failed: {type(e).__name__}: {e}", [], 0)
     print(f"[consensus] -> n_total={n_total} returned_rows={len(df)}",
           flush=True)
 
@@ -9567,7 +9575,7 @@ def update_consensus(include, exclude, filter_value):
     if hide_all_agree:
         count_text += "  (only showing objects that do not appear in all lists)"
 
-    return count_text, _consensus_table(df)
+    return count_text, _format_table_rows(df), 0
 
 
 def _load_nea_txt_lookup():
