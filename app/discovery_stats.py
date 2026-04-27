@@ -2978,41 +2978,16 @@ app.layout = html.Div(
                                 "1.3 view, JPL CNEOS, ESA NEOCC, "
                                 "NEOfixer, and Lowell Observatory's "
                                 "astorb. Pick sources to include / "
-                                "exclude; the table shows objects "
-                                "matching the selection.",
+                                "exclude; the table shows matching "
+                                "objects with diagnostic columns. "
+                                "Orbit columns (q, e, i, H, u, nopp) "
+                                "come from MPC's mpc_orbits; class "
+                                "falls back to css_utilities."
+                                "classify_orbit when MPC's "
+                                "orbit_type_int is NULL. first_obs / "
+                                "last_obs / arc come from obs_sbn.",
                                 className="subtext",
-                                style={"fontSize": "13px",
-                                       "marginBottom": "6px"}),
-                            html.Div(
-                                [
-                                    "Orbit columns (q, e, i, H, MOID, u, "
-                                    "nopp) come from MPC's mpc_orbits on "
-                                    "Gizmo's replica — NOT from per-source "
-                                    "fits. ",
-                                    html.B("class"),
-                                    " uses mpc_orbits.orbit_type_int when "
-                                    "set, else recovers it from (q, e, i) "
-                                    "via css_utilities.classify_orbit "
-                                    "(covers ~99.98% of cases). ",
-                                    html.B("MOID"),
-                                    " is NULL for ~62% of NEOs in "
-                                    "mpc_orbits — JPL SBDB has fuller "
-                                    "coverage (overlaid in other tabs but "
-                                    "not yet here). ",
-                                    html.B("first_obs / last_obs / arc"),
-                                    " come from obs_sbn_neo and are "
-                                    "complete. ",
-                                    html.B("Name"),
-                                    " populates only for the ~1,000 "
-                                    "numbered NEOs that have IAU names. "
-                                    "Note: 15 designations in non-MPC "
-                                    "sources alias to MPC primaries "
-                                    "starting with P/ (comet) — not yet "
-                                    "merged in canonicalization.",
-                                ],
-                                className="subtext",
-                                style={"fontSize": "11px",
-                                       "fontStyle": "italic",
+                                style={"fontSize": "14px",
                                        "marginBottom": "18px"}),
 
                             # Controls row
@@ -9393,7 +9368,6 @@ def _consensus_query(include, exclude, hide_all_agree=False,
             mo.e::float AS e,
             mo.i::float AS i,
             mo.h::float AS h,
-            mo.earth_moid::float AS moid,
             mo.u_param,
             mo.nopp,
             mo.nobs_total::int AS nobs,
@@ -9408,11 +9382,17 @@ def _consensus_query(include, exclude, hide_all_agree=False,
           LEFT JOIN public.mpc_orbits mo
             ON mo.packed_primary_provisional_designation = t.packed_desig
           LEFT JOIN LATERAL (
+              -- obs_sbn (not obs_sbn_neo) for two reasons: (a) ~200x
+              -- faster on this LATERAL pattern empirically, because
+              -- obs_sbn's index set + planner handle the (permid =
+              -- ... OR provid = ...) better; (b) covers Mars-Crossers
+              -- and other non-NEO-in-mpc_orbits cases that obs_sbn_neo
+              -- excludes by definition.
               SELECT min(obstime)::date AS first_obs,
                      max(obstime)::date AS last_obs,
                      EXTRACT(EPOCH FROM (max(obstime) - min(obstime)))
                          / 86400.0 AS arc_days
-                FROM public.obs_sbn_neo
+                FROM public.obs_sbn
                WHERE (permid IS NOT NULL AND permid = t.permid)
                   OR provid = t.primary_desig
           ) obs ON TRUE
@@ -9434,8 +9414,7 @@ def _consensus_table(df):
         display_df[col] = display_df[col].map({True: "✓", False: ""})
     # Round numeric columns for legibility.
     for col, fmt in [("q", "%.4f"), ("e", "%.4f"),
-                     ("i", "%.2f"), ("h", "%.2f"),
-                     ("moid", "%.4f")]:
+                     ("i", "%.2f"), ("h", "%.2f")]:
         display_df[col] = display_df[col].apply(
             lambda v, f=fmt: f % v if pd.notna(v) else "")
     # MPC orbit_type_int → short label.
@@ -9464,7 +9443,6 @@ def _consensus_table(df):
         {"name": "e",             "id": "e"},
         {"name": "i (°)",         "id": "i"},
         {"name": "H",             "id": "h"},
-        {"name": "MOID",          "id": "moid"},
         {"name": "u",             "id": "u_param"},
         {"name": "nopp",          "id": "nopp"},
         {"name": "first_obs",     "id": "first_obs"},
@@ -9541,6 +9519,8 @@ def update_consensus(include, exclude, filter_value):
         count_text = (f"{n_total:,} matching NEOs "
                       f"(showing first {len(df):,}; "
                       f"narrow the selection to see them all)")
+    if hide_all_agree:
+        count_text += "  (only showing objects that do not appear in all lists)"
 
     return count_text, _consensus_table(df)
 
