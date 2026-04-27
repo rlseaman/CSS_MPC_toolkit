@@ -191,3 +191,13 @@ GRANT USAGE ON SCHEMA css_neo_consensus TO claude_ro;
 GRANT SELECT ON ALL TABLES IN SCHEMA css_neo_consensus TO claude_ro;
 ALTER DEFAULT PRIVILEGES IN SCHEMA css_neo_consensus
     GRANT SELECT ON TABLES TO claude_ro;
+
+
+-- ===========================================================================
+-- Derived matview: per-NEO obs aggregates. Defined in obs_summary.sql so
+-- it can be (re)installed independently. \i is psql syntax — running
+-- install.sql from a non-psql client will skip this; run obs_summary.sql
+-- directly in that case.
+-- ===========================================================================
+
+\i sql/consensus/obs_summary.sql
