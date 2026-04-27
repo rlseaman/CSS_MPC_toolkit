@@ -2531,7 +2531,16 @@ _CONSENSUS_SOURCE_OPTIONS = [
     {"label": " " + _CONSENSUS_SOURCE_LABELS[s], "value": s}
     for s in _CONSENSUS_SOURCES
 ]
-_CONSENSUS_TABLE_LIMIT = 50000  # well above the ~42K total population
+# Cap the detail table at 5,000 rows. The expensive part of
+# _consensus_query is the per-target LATERAL aggregate against
+# obs_sbn (526M rows): ~5 ms per target × 41K all-six-agree targets ≈
+# 3+ minutes, plus shipping ~5 MB of JSON to the browser. At 5K rows
+# that drops to ~25 s and the table renders responsively. When the
+# matching set exceeds the cap we tell the user in the count line.
+# Use the Download designations button (which queries
+# v_membership_wide directly, no LATERAL, no orbit columns) to
+# retrieve the full match set.
+_CONSENSUS_TABLE_LIMIT = 5000
 
 # MPC orbit_type_int → short label, for the consensus tab's "class"
 # column. Same encoding as memory/MEMORY.md "MPC orbit_type_int mapping".
