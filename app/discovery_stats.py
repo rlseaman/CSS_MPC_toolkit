@@ -2544,6 +2544,17 @@ _CONSENSUS_SOURCE_OPTIONS = [
     {"label": " " + _CONSENSUS_SOURCE_LABELS[s], "value": s}
     for s in _CONSENSUS_SOURCES
 ]
+# Per-source color used by the disagreement breakdown bar. Picked to
+# group by provider lineage: blues for MPC-family, warm colors for
+# everything else.
+_CONSENSUS_SOURCE_COLORS = {
+    "mpc":        "#1f77b4",  # MPC blue
+    "mpc_orbits": "#6baed6",  # paler blue (still MPC-family)
+    "cneos":      "#ff7f0e",  # JPL orange
+    "neocc":      "#2ca02c",  # ESA green
+    "neofixer":   "#d62728",  # CSS red
+    "lowell":     "#9467bd",  # Lowell purple
+}
 # Cap is high enough to fit the entire population (~42K) but bounded
 # so a future bug couldn't ship a runaway result. Obs aggregates come
 # from the css_neo_consensus.obs_summary matview (daily refresh), so
@@ -3434,7 +3445,23 @@ app.layout = html.Div(
                                 id="consensus-count",
                                 style={"fontSize": "16px",
                                        "fontWeight": "600",
-                                       "marginBottom": "8px"}),
+                                       "marginBottom": "4px"}),
+
+                            # Disagreement breakdown bar — horizontal
+                            # stacked, one segment per "Missing X" /
+                            # "Only in X" / "Mixed" disagreement
+                            # category. Updates with the current
+                            # filter so you can ask "of Apollos in
+                            # the all-six set, who disagrees about
+                            # what?" Empty when the current view has
+                            # no disagreements.
+                            dcc.Graph(
+                                id="consensus-breakdown",
+                                config={"displayModeBar": False,
+                                        "staticPlot": False},
+                                style={"height": "60px",
+                                       "marginBottom": "8px"},
+                            ),
 
                             # Download buttons
                             html.Div(
@@ -9924,6 +9951,124 @@ def _format_table_rows(df):
     return display_df.to_dict("records")
 
 
+def _build_breakdown_figure(df, theme="dark"):
+    """Render the disagreement breakdown as a horizontal stacked bar.
+
+    Categories (max 13):
+      * Six "Missing X" segments — 5 of 6 sources include this NEO,
+        X is the holdout. Filled.
+      * Six "Only in X" segments — X is the singleton; 5 others miss
+        it. Hatched (same source color, different fill pattern).
+      * One "Mixed" segment for any 2–4-source disagreement that
+        doesn't fit the single-holdout or singleton patterns.
+
+    The chart works off the already-fetched `df` (no extra DB query),
+    so it costs ~ms per filter change. Returns a Plotly Figure ready
+    to assign to dcc.Graph(id='consensus-breakdown').figure.
+    """
+    bool_cols = ["in_mpc", "in_mpc_orbits", "in_cneos",
+                 "in_neocc", "in_neofixer", "in_lowell"]
+    fg = "#e0e0e0" if theme == "dark" else "#222"
+
+    def empty(msg):
+        return go.Figure(layout={
+            "height": 60,
+            "margin": {"l": 8, "r": 8, "t": 4, "b": 4},
+            "xaxis": {"visible": False},
+            "yaxis": {"visible": False},
+            "paper_bgcolor": "rgba(0,0,0,0)",
+            "plot_bgcolor": "rgba(0,0,0,0)",
+            "annotations": [{
+                "text": msg,
+                "showarrow": False,
+                "x": 0.5, "y": 0.5,
+                "xref": "paper", "yref": "paper",
+                "font": {"color": fg, "size": 12},
+            }],
+        })
+
+    if df.empty:
+        return empty("No matches in current filter.")
+
+    n_src = df[bool_cols].sum(axis=1)
+    is_dis = n_src < 6
+    if not is_dis.any():
+        return empty("No disagreements in current view "
+                     "(all rows agreed across all six sources).")
+
+    dis = df[is_dis]
+    n_dis = n_src[is_dis]
+
+    # Build segment list. Skip zero-count segments so the bar isn't
+    # padded with invisible-but-legend-noise traces.
+    segs = []
+    for col in bool_cols:
+        src = col[len("in_"):]
+        # 5/6 include — single-source holdout (this source missing)
+        cnt = int(((n_dis == 5) & (~dis[col])).sum())
+        if cnt > 0:
+            segs.append({
+                "label": f"Missing from {_CONSENSUS_SOURCE_LABELS[src]}"
+                         f" (5 others have it)",
+                "count": cnt,
+                "color": _CONSENSUS_SOURCE_COLORS[src],
+                "pattern": None,
+            })
+    for col in bool_cols:
+        src = col[len("in_"):]
+        # 1/6 include — singleton (this source only)
+        cnt = int(((n_dis == 1) & dis[col]).sum())
+        if cnt > 0:
+            segs.append({
+                "label": f"Only in {_CONSENSUS_SOURCE_LABELS[src]}",
+                "count": cnt,
+                "color": _CONSENSUS_SOURCE_COLORS[src],
+                "pattern": "/",
+            })
+    cnt = int(((n_dis >= 2) & (n_dis <= 4)).sum())
+    if cnt > 0:
+        segs.append({
+            "label": "Mixed (2–4 sources)",
+            "count": cnt,
+            "color": "#7f7f7f",
+            "pattern": None,
+        })
+
+    fig = go.Figure()
+    total = sum(s["count"] for s in segs)
+    for s in segs:
+        # Show the count inside the segment when it's wide enough; the
+        # full descriptive label is in the hover.
+        text = str(s["count"]) if s["count"] / total >= 0.04 else ""
+        fig.add_trace(go.Bar(
+            y=[""],
+            x=[s["count"]],
+            name=s["label"],
+            orientation="h",
+            text=text,
+            textposition="inside",
+            textfont={"color": "white", "size": 11},
+            hovertemplate=f"<b>{s['label']}</b><br>%{{x:,}} NEOs<extra></extra>",
+            marker=dict(
+                color=s["color"],
+                pattern=dict(shape=s["pattern"]) if s["pattern"] else None,
+                line=dict(width=0),
+            ),
+        ))
+    fig.update_layout(
+        barmode="stack",
+        height=60,
+        margin=dict(l=8, r=8, t=4, b=4),
+        showlegend=False,
+        xaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
+        yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        bargap=0,
+    )
+    return fig
+
+
 # Buttons → radios + filter, run entirely in the browser. We tried
 # doing this server-side (one callback with the radios as both Input
 # AND Output) and observed Dash firing the callback once per Output
@@ -10050,6 +10195,7 @@ app.clientside_callback(
     Output("consensus-count", "children"),
     Output("consensus-table", "data"),
     Output("consensus-table", "page_current"),
+    Output("consensus-breakdown", "figure"),
     Input("consensus-radio-mpc", "value"),
     Input("consensus-radio-mpc_orbits", "value"),
     Input("consensus-radio-cneos", "value"),
@@ -10131,7 +10277,8 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
             date_ranges=date_ranges,
         )
     except Exception as e:
-        return (f"Query failed: {type(e).__name__}: {e}", [], 0)
+        return (f"Query failed: {type(e).__name__}: {e}", [], 0,
+                _build_breakdown_figure(pd.DataFrame()))
     print(f"[consensus] -> n_total={n_total} returned_rows={len(df)}",
           flush=True)
 
@@ -10147,7 +10294,8 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
         count_text += ("  (only showing objects that do not appear in "
                        "all lists)")
 
-    return count_text, _format_table_rows(df), 0
+    return (count_text, _format_table_rows(df), 0,
+            _build_breakdown_figure(df))
 
 
 def _load_nea_txt_lookup():
