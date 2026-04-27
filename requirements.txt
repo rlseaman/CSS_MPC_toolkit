@@ -29,5 +29,7 @@ kaleido>=0.2
 # Notebook server
 jupyterlab>=4.0
 
-# XML processing (ADES export)
-lxml>=4.9
+# XML processing (ADES export). Pinned to 6.1+ because 6.1.0 disabled
+# resolve_entities by default, mitigating CVE-2026-41066 (XXE) for any
+# future code path that might parse untrusted XML.
+lxml>=6.1.0
