@@ -15,6 +15,11 @@ mpc-designation @ git+https://github.com/rlseaman/MPC_designations.git#subdirect
 # Web application framework
 dash>=2.14
 
+# Production WSGI server. Used in deployment (--waitress flag in
+# scripts/start-dashboard*.sh); dev runs without it on Flask's
+# built-in server.
+waitress>=3.0
+
 # Interactive charting
 plotly>=5.18
 

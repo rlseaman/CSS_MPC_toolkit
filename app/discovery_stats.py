@@ -765,6 +765,18 @@ if "--port" in sys.argv:
 _RND = "--rnd" in sys.argv
 if _RND:
     sys.argv.remove("--rnd")
+# --waitress runs the WSGI app under waitress instead of Flask's
+# built-in development server. Used for production deployment under
+# launchd; dev runs without the flag.
+_WAITRESS = "--waitress" in sys.argv
+if _WAITRESS:
+    sys.argv.remove("--waitress")
+# Number of waitress threads (no effect without --waitress).
+_WAITRESS_THREADS = 4
+if "--waitress-threads" in sys.argv:
+    idx = sys.argv.index("--waitress-threads")
+    _WAITRESS_THREADS = int(sys.argv[idx + 1])
+    del sys.argv[idx:idx + 2]
 _MAINTENANCE_MSG = None
 if "--maintenance" in sys.argv:
     idx = sys.argv.index("--maintenance")
@@ -10232,8 +10244,18 @@ def download_consensus_nea(_n, rows):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    print(f"\nStarting Dash server at http://{_HOST}:{_PORT}/"
+    server_label = "waitress" if _WAITRESS else "Flask dev server"
+    print(f"\nStarting Dash ({server_label}) at http://{_HOST}:{_PORT}/"
           + ("   (--rnd: R&D surfaces enabled)" if _RND else ""))
     print("Data loading in background..." if not _data_ready.is_set()
           else "Data ready.")
-    app.run(host=_HOST, port=_PORT, debug=_DEBUG, use_reloader=False)
+    if _WAITRESS:
+        # Production WSGI. server is the Flask app underlying the Dash
+        # instance (exposed at module top via `server = app.server`).
+        # Multi-threaded so a slow callback doesn't block other users.
+        from waitress import serve
+        serve(server, host=_HOST, port=_PORT,
+              threads=_WAITRESS_THREADS,
+              ident="css-mpc-toolkit-dashboard")
+    else:
+        app.run(host=_HOST, port=_PORT, debug=_DEBUG, use_reloader=False)

@@ -25,8 +25,11 @@ cd "$PROJECT_DIR" || { echo "cannot cd $PROJECT_DIR" >&2; exit 1; }
 export PGHOST="${PGHOST:-/tmp}"
 
 echo "=== $(date) :: start-dashboard-rnd.sh ===" >"$LOG"
-echo "PGHOST=$PGHOST  port=8051  rnd=true" >>"$LOG"
+echo "PGHOST=$PGHOST  port=8051  rnd=true  waitress=true" >>"$LOG"
 echo "PID (parent shell): $$" >>"$LOG"
 
+# --waitress runs the WSGI app under a multithreaded production
+# server. Drop the flag for ad-hoc dev runs that want hot-reload or
+# verbose Flask tracebacks.
 exec ./venv/bin/python app/discovery_stats.py --rnd --port 8051 \
-    >>"$LOG" 2>&1
+    --waitress >>"$LOG" 2>&1
