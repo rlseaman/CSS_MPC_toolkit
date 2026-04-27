@@ -9572,10 +9572,30 @@ def _format_table_rows(df):
     return display_df.to_dict("records")
 
 
-@app.callback(
-    Output("consensus-count", "children"),
-    Output("consensus-table", "data"),
-    Output("consensus-table", "page_current"),
+# Buttons → radios + filter, run entirely in the browser. We tried
+# doing this server-side (one callback with the radios as both Input
+# AND Output) and observed Dash firing the callback once per Output
+# write, with partially-updated radio state, producing intermediate
+# counts and the final radio values reverting. Clientside avoids the
+# loop: the browser settles all 7 props locally, then the server-side
+# update_consensus callback fires once on the new Inputs.
+app.clientside_callback(
+    """
+    function(reset_clicks, preset_clicks) {
+        const ctx = window.dash_clientside.callback_context;
+        if (!ctx.triggered || ctx.triggered.length === 0) {
+            return Array(7).fill(window.dash_clientside.no_update);
+        }
+        const trig = ctx.triggered[0].prop_id.split('.')[0];
+        if (trig === 'consensus-reset') {
+            return ['any','any','any','any','any','any', ['hide_all']];
+        }
+        if (trig === 'consensus-preset-all') {
+            return ['include','include','include','include','include','include', []];
+        }
+        return Array(7).fill(window.dash_clientside.no_update);
+    }
+    """,
     Output("consensus-radio-mpc", "value"),
     Output("consensus-radio-mpc_orbits", "value"),
     Output("consensus-radio-cneos", "value"),
@@ -9583,6 +9603,16 @@ def _format_table_rows(df):
     Output("consensus-radio-neofixer", "value"),
     Output("consensus-radio-lowell", "value"),
     Output("consensus-filter", "value"),
+    Input("consensus-reset", "n_clicks"),
+    Input("consensus-preset-all", "n_clicks"),
+    prevent_initial_call=True,
+)
+
+
+@app.callback(
+    Output("consensus-count", "children"),
+    Output("consensus-table", "data"),
+    Output("consensus-table", "page_current"),
     Input("consensus-radio-mpc", "value"),
     Input("consensus-radio-mpc_orbits", "value"),
     Input("consensus-radio-cneos", "value"),
@@ -9590,31 +9620,9 @@ def _format_table_rows(df):
     Input("consensus-radio-neofixer", "value"),
     Input("consensus-radio-lowell", "value"),
     Input("consensus-filter", "value"),
-    Input("consensus-reset", "n_clicks"),
-    Input("consensus-preset-all", "n_clicks"),
 )
 def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
-                     r_lowell, filter_value, _reset_clicks, _all_clicks):
-    """Single source of truth for the consensus tab. Reads the six
-    per-source radios + the hide-all-six checklist + the two preset
-    buttons; writes the count, table data, page reset, and (when a
-    button fired) the new radio/checklist values. Bundling everything
-    into one callback removes the prior chaining (button → state →
-    table) where the table-update step was sometimes never triggered.
-    """
-    triggered = ctx.triggered_id
-    if triggered == "consensus-reset":
-        # Reset: every source back to "any", hide-all-six on. With no
-        # source-level constraint, that surfaces the disagreements set.
-        r_mpc = r_mpc_orbits = r_cneos = "any"
-        r_neocc = r_neofixer = r_lowell = "any"
-        filter_value = ["hide_all"]
-    elif triggered == "consensus-preset-all":
-        # Strict all-six-agree set: every source Include, hide-all off.
-        r_mpc = r_mpc_orbits = r_cneos = "include"
-        r_neocc = r_neofixer = r_lowell = "include"
-        filter_value = []
-
+                     r_lowell, filter_value):
     states = {
         "mpc": r_mpc, "mpc_orbits": r_mpc_orbits, "cneos": r_cneos,
         "neocc": r_neocc, "neofixer": r_neofixer, "lowell": r_lowell,
@@ -9624,16 +9632,14 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
     hide_all_agree = "hide_all" in (filter_value or [])
 
     print(f"[consensus] include={include!r} exclude={exclude!r} "
-          f"hide_all={hide_all_agree} trig={triggered}",
+          f"hide_all={hide_all_agree} trig={ctx.triggered_id}",
           flush=True)
 
     try:
         df, n_total = _consensus_query(include, exclude,
                                        hide_all_agree=hide_all_agree)
     except Exception as e:
-        return (f"Query failed: {type(e).__name__}: {e}", [], 0,
-                r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
-                r_lowell, filter_value)
+        return (f"Query failed: {type(e).__name__}: {e}", [], 0)
     print(f"[consensus] -> n_total={n_total} returned_rows={len(df)}",
           flush=True)
 
@@ -9649,9 +9655,7 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
         count_text += ("  (only showing objects that do not appear in "
                        "all lists)")
 
-    return (count_text, _format_table_rows(df), 0,
-            r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
-            r_lowell, filter_value)
+    return count_text, _format_table_rows(df), 0
 
 
 def _load_nea_txt_lookup():
