@@ -31,10 +31,16 @@ All three data paths are native to **Gizmo**:
      `python app/discovery_stats.py --refresh-only` (~5 min)
   3. Restarts the Dash process so it loads the freshly-written
      caches into memory (~5 s gap of 502s during rebind).
-  4. Refreshes all five `css_neo_consensus` source-membership tables
-     (mpc, cneos, neocc, neofixer, mpc_orbits — best-effort, ~25 s
-     total). Per-source success/failure logged in
+  4. Refreshes all six `css_neo_consensus` source-membership tables
+     (mpc, cneos, neocc, neofixer, mpc_orbits, lowell — best-effort,
+     ~25 s total). Per-source success/failure logged in
      `css_neo_consensus.source_runs` and surfaced in the status JSON.
+  5. `REFRESH MATERIALIZED VIEW CONCURRENTLY
+     css_neo_consensus.obs_summary` (~5 min, best-effort). Pre-
+     aggregates `obs_sbn` into per-NEO `first_obs / last_obs / arc /
+     nobs` so the NEO Consensus dashboard tab joins instead of
+     LATERAL-probing 41K times. Failure is logged but doesn't fail
+     the wrapper; the dashboard's obs columns just lag a day.
 - **Dashboard:** `start-dashboard.sh` loads the parquets at startup.
 
 The stage-3 restart is a deliberate bridge: Dash holds caches in memory
@@ -162,13 +168,15 @@ After the 06:00 MST refresh, verify:
 ssh robertseaman@192.168.0.157 cat ~/Claude/mpc_sbn/matview/last_refresh_status.json
 ```
 
-Expected: `"status": "OK"`, fresh `ts`, `elapsed_s` around 490–590 s,
+Expected: `"status": "OK"`, fresh `ts`, `elapsed_s` around 800–900 s,
 broken down as `stage1_s` ≈ 170–230 (matview REFRESH CONCURRENTLY),
 `stage2_s` ≈ 280–320 (`--refresh-only`: LOAD_SQL + NEA.txt resolve +
 APPARITION_SQL + BOXSCORE + SBDB MOID API + PHA.txt), `stage3_s` ≈
-6–15 (Dash kill + restart), `stage4_s` ≈ 20–30 (NEO consensus, all 5
-sources). The status JSON also carries `new_dash_pid` when stage 3
-succeeds and a `consensus` map of `{source: "ok"|"fail"}` after stage 4.
+6–15 (Dash kill + restart), `stage4_s` ≈ 20–30 (NEO consensus, all 6
+sources), `stage5_s` ≈ 280–320 (obs_summary REFRESH CONCURRENTLY).
+The status JSON also carries `new_dash_pid` when stage 3 succeeds, a
+`consensus` map of `{source: "ok"|"fail"}` after stage 4, and an
+`obs_summary` field of `"ok"|"fail"` after stage 5.
 
 Per-source consensus failures (e.g. NEOCC outage) don't fail the
 overall job — stage 4 is best-effort. Inspect

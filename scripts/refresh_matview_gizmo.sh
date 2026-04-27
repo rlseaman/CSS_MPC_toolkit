@@ -7,6 +7,9 @@
 # Stages, all against Gizmo's local mpc_sbn replica via Unix socket:
 #   1. REFRESH MATERIALIZED VIEW CONCURRENTLY obs_sbn_neo  (~3.6 min)
 #   2. python app/discovery_stats.py --refresh-only        (~1 min; all caches)
+#   3. Restart Dash so it picks up the new caches
+#   4. NEO consensus source_membership refresh (6 sources, best-effort)
+#   5. REFRESH MATERIALIZED VIEW CONCURRENTLY obs_summary  (~5 min, best-effort)
 #
 # Writes a status JSON under $HOME/Claude/mpc_sbn/matview/ that the
 # dashboard or an operator can consult.
@@ -238,8 +241,27 @@ fi
 STAGE4_ELAPSED=$(( $(date +%s) - START ))
 log "stage 4: elapsed=${STAGE4_ELAPSED}s ok=$CONSENSUS_OK fail=$CONSENSUS_FAIL"
 
+# -- Stage 5: refresh obs_summary matview (best-effort) --
+# Pre-aggregates obs_sbn by primary_desig for the NEO Consensus tab.
+# Depends on stage 4 having updated source_membership (so newly-added
+# NEOs get obs aggregates). Best-effort: a stale obs_summary just
+# means the dashboard's obs columns lag a day, not a hard failure.
+log "--- stage 5: REFRESH MATERIALIZED VIEW CONCURRENTLY obs_summary ---"
+START=$(date +%s)
+"$PSQL" -d mpc_sbn -v ON_ERROR_STOP=1 \
+    -c "REFRESH MATERIALIZED VIEW CONCURRENTLY css_neo_consensus.obs_summary;"
+STAGE5_RC=$?
+STAGE5_ELAPSED=$(( $(date +%s) - START ))
+if [[ $STAGE5_RC -eq 0 ]]; then
+    STAGE5_NOTE="\"obs_summary\": \"ok\""
+    log "stage 5: rc=0 elapsed=${STAGE5_ELAPSED}s"
+else
+    STAGE5_NOTE="\"obs_summary\": \"fail\", \"stage5_rc\": $STAGE5_RC"
+    log "WARN stage 5: rc=$STAGE5_RC elapsed=${STAGE5_ELAPSED}s — obs_summary may be stale"
+fi
+
 TOTAL=$(( $(date +%s) - START_ALL ))
-log "SUCCESS total ${TOTAL}s (stage1=${STAGE1_ELAPSED}s stage2=${STAGE2_ELAPSED}s stage3=${STAGE3_ELAPSED}s stage4=${STAGE4_ELAPSED}s)"
+log "SUCCESS total ${TOTAL}s (stage1=${STAGE1_ELAPSED}s stage2=${STAGE2_ELAPSED}s stage3=${STAGE3_ELAPSED}s stage4=${STAGE4_ELAPSED}s stage5=${STAGE5_ELAPSED}s)"
 
 # Record cache file sizes as a sanity-check proxy.
 CACHE_SIZES=""
@@ -252,9 +274,10 @@ for prefix in neo_cache apparition_cache boxscore_cache; do
 done
 CACHE_SIZES="${CACHE_SIZES%, }"
 
-EXTRA="\"stage1_s\": $STAGE1_ELAPSED, \"stage2_s\": $STAGE2_ELAPSED, \"stage3_s\": $STAGE3_ELAPSED, \"stage4_s\": $STAGE4_ELAPSED, \"cache_sizes\": {${CACHE_SIZES}}"
+EXTRA="\"stage1_s\": $STAGE1_ELAPSED, \"stage2_s\": $STAGE2_ELAPSED, \"stage3_s\": $STAGE3_ELAPSED, \"stage4_s\": $STAGE4_ELAPSED, \"stage5_s\": $STAGE5_ELAPSED, \"cache_sizes\": {${CACHE_SIZES}}"
 [[ -n "$STAGE3_NOTE" ]] && EXTRA+=", $STAGE3_NOTE"
 [[ -n "$CONSENSUS_RESULTS" ]] && EXTRA+=", $CONSENSUS_RESULTS"
+[[ -n "$STAGE5_NOTE" ]] && EXTRA+=", $STAGE5_NOTE"
 write_status OK "$TOTAL" "$EXTRA"
 log "=== gizmo refresh end — OK ==="
 exit 0

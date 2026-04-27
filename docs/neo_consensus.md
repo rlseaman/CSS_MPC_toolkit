@@ -159,6 +159,15 @@ status surfaces in:
 
 Total stage-4 wall clock: ~25 s for all six sources.
 
+**Stage 5** then runs `REFRESH MATERIALIZED VIEW CONCURRENTLY
+css_neo_consensus.obs_summary` (~5 min on Gizmo, best-effort). This
+matview pre-aggregates `obs_sbn` into per-NEO `first_obs / last_obs
+/ arc_days / nobs`, keyed on `primary_desig`. The dashboard's NEO
+Consensus tab joins it directly, replacing a per-target LATERAL
+that was prohibitively expensive at full population scale (~3 min
+for the all-six-agree set; see "Dashboard surface" below). Status
+JSON carries `"obs_summary": "ok"|"fail"` and `"stage5_s"`.
+
 ## Use cases
 
 ```sql
@@ -238,7 +247,10 @@ What's wired up so far:
   - Quality flags: `u_param` (orbit uncertainty 0–9), `nopp`
     (oppositions).
   - Observation summary: `first_obs`, `last_obs`, `arc` (days),
-    `nobs` — all from a LATERAL aggregate against `public.obs_sbn`.
+    `nobs` — joined from `css_neo_consensus.obs_summary`, a daily-
+    refreshed matview pre-aggregating `obs_sbn` by `primary_desig`.
+    A handful of designations have no obs match (~2 in current
+    snapshot) and show blank cells.
 - **Download buttons** for the currently-displayed table:
   - "Download designations" — plain text, one primary designation
     per line.
@@ -248,8 +260,8 @@ What's wired up so far:
     `unpack()` of each NEA.txt line's packed designation, with
     permid fallback for numbered NEOs.
 
-Two operational lessons came out of the session and are recorded in
-memory:
+Three operational lessons came out of the session and are recorded
+in memory:
 
 - **Use `obs_sbn`, not `obs_sbn_neo`, for `permid = $1 OR provid = $2`
   LATERAL aggregates.** Empirical: ~200× faster (1.9 s vs 3:55 on
@@ -258,6 +270,11 @@ memory:
   choice loses to `obs_sbn`'s broader index ladder on this access
   shape. The matview is still the right scan source for LOAD_SQL /
   APPARITION_SQL where we explicitly want NEO-filtered obs.
+- **LATERAL doesn't scale past ~hundreds of targets.** ~5 ms per
+  target × 41K = 3+ minutes, and shipping 41K rows × 20 cols of
+  JSON is another bottleneck. Solution was to precompute as a
+  matview (`obs_summary`) — daily cost paid once, query becomes a
+  plain join.
 - **`mpc_orbits.arc_length_total` is unreliable for NEOs** (NULL
   ~88%, only 5,091 / 41,763 populated). Compute arc from
   `obs_sbn.obstime` instead.
