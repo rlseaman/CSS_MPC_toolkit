@@ -352,15 +352,11 @@ These are noted but not implemented:
   `df_apparition` at app startup. Per-tab callbacks gain one
   Input + a `_apply_source_filter()` slice early in the function
   body. The filter is hidden on tabs that don't slice df by NEO
-  source (MPEC Browser, Asteroid Classes, Tools, Consensus). One
-  known limitation: the membership cache rebuilds during stage 2
-  of the daily refresh, which runs *before* stage 4's consensus
-  source ingest, so today's ingest is visible to the banner filter
-  tomorrow morning. The Consensus tab itself queries
-  `v_membership_wide` live, so its data stays current. Fixing
-  the lag requires the in-process cache reload backlog item
-  (SIGHUP or interval polling) — see
-  `dashboard_hardening_backlog.md`.
+  source (MPEC Browser, Asteroid Classes, Tools, Consensus).
+  Refresh ordering matters: the membership cache build (stage 4
+  of `refresh_matview_gizmo.sh`) runs **after** the consensus
+  source ingest (stage 2) so today's ingest is visible to the
+  banner filter same-day, no 24-hour lag.
 - **UpSet plot + pairwise Jaccard heatmap** — single chart showing
   the 14 populated 4-way buckets sorted by count, plus a 6×6 grid
   of pairwise Jaccard coefficients. Would replace or complement the
