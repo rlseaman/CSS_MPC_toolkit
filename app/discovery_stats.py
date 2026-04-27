@@ -2984,15 +2984,32 @@ app.layout = html.Div(
                                 style={"fontSize": "13px",
                                        "marginBottom": "6px"}),
                             html.Div(
-                                "Orbit columns (q, e, i, H, u, nopp, "
-                                "class, MOID, MPC fit) come from "
-                                "mpc_orbits — i.e. MPC's current orbit "
-                                "fit on Gizmo's replica. Per-source "
-                                "fits are not surfaced here (would "
-                                "require a standardized epoch). Name "
-                                "populates only for the ~1,000 numbered "
-                                "NEOs that have IAU names; sort by Name "
-                                "desc to surface them.",
+                                [
+                                    "Orbit columns (q, e, i, H, MOID, u, "
+                                    "nopp) come from MPC's mpc_orbits on "
+                                    "Gizmo's replica — NOT from per-source "
+                                    "fits. ",
+                                    html.B("class"),
+                                    " uses mpc_orbits.orbit_type_int when "
+                                    "set, else recovers it from (q, e, i) "
+                                    "via css_utilities.classify_orbit "
+                                    "(covers ~99.98% of cases). ",
+                                    html.B("MOID"),
+                                    " is NULL for ~62% of NEOs in "
+                                    "mpc_orbits — JPL SBDB has fuller "
+                                    "coverage (overlaid in other tabs but "
+                                    "not yet here). ",
+                                    html.B("first_obs / last_obs / arc"),
+                                    " come from obs_sbn_neo and are "
+                                    "complete. ",
+                                    html.B("Name"),
+                                    " populates only for the ~1,000 "
+                                    "numbered NEOs that have IAU names. "
+                                    "Note: 15 designations in non-MPC "
+                                    "sources alias to MPC primaries "
+                                    "starting with P/ (comet) — not yet "
+                                    "merged in canonicalization.",
+                                ],
                                 className="subtext",
                                 style={"fontSize": "11px",
                                        "fontStyle": "italic",
@@ -3012,8 +3029,14 @@ app.layout = html.Div(
                                         dcc.Checklist(
                                             id="consensus-include",
                                             options=_CONSENSUS_SOURCE_OPTIONS,
-                                            value=list(
-                                                _CONSENSUS_SOURCES),
+                                            # Default empty: paired with
+                                            # the disagreements-only
+                                            # filter (default-on), this
+                                            # opens the tab on the ~300
+                                            # disagreement rows. Click
+                                            # "All-six consensus" or any
+                                            # source to narrow.
+                                            value=[],
                                             inline=False,
                                             labelStyle=RADIO_LABEL_STYLE,
                                             style=RADIO_STYLE,
@@ -9344,32 +9367,56 @@ def _consensus_query(include, exclude, hide_all_agree=False,
           FROM css_neo_consensus.v_membership_wide v
          WHERE {where_clause}
     """
+    # Use a CTE so the LATERAL obs-aggregate fires only for the
+    # paginated set, not the full 41K. classify_orbit() is applied as
+    # a fallback for the ~77% of NEOs whose orbit_type_int is NULL in
+    # mpc_orbits. arc/first_obs/last_obs come from obs_sbn_neo because
+    # mpc_orbits.arc_length_total is NULL for ~88% of NEOs.
     detail_sql = f"""
+        WITH targets AS (
+            SELECT primary_desig, permid, packed_desig
+              FROM css_neo_consensus.v_membership_wide
+             WHERE {where_clause}
+             ORDER BY primary_desig
+             LIMIT {int(limit)}
+        )
         SELECT
-            v.primary_desig,
-            v.permid,
+            t.primary_desig,
+            t.permid,
             ni.iau_name,
             v.in_mpc, v.in_mpc_orbits, v.in_cneos,
             v.in_neocc, v.in_neofixer, v.in_lowell,
+            COALESCE(mo.orbit_type_int,
+                     css_utilities.classify_orbit(mo.q, mo.e, mo.i)
+            ) AS orbit_type_int,
             mo.q::float AS q,
             mo.e::float AS e,
             mo.i::float AS i,
             mo.h::float AS h,
+            mo.earth_moid::float AS moid,
             mo.u_param,
             mo.nopp,
-            mo.orbit_type_int,
-            mo.earth_moid::float AS moid,
-            mo.arc_length_total::int AS arc,
             mo.nobs_total::int AS nobs,
-            to_char(mo.updated_at, 'YYYY-MM-DD') AS mpc_updated
-          FROM css_neo_consensus.v_membership_wide v
+            obs.first_obs,
+            obs.last_obs,
+            obs.arc_days::int AS arc
+          FROM targets t
+          JOIN css_neo_consensus.v_membership_wide v
+            USING (primary_desig)
           LEFT JOIN public.numbered_identifications ni
-            ON ni.packed_primary_provisional_designation = v.packed_desig
+            ON ni.packed_primary_provisional_designation = t.packed_desig
           LEFT JOIN public.mpc_orbits mo
-            ON mo.packed_primary_provisional_designation = v.packed_desig
-         WHERE {where_clause}
-         ORDER BY v.primary_desig
-         LIMIT {int(limit)}
+            ON mo.packed_primary_provisional_designation = t.packed_desig
+          LEFT JOIN LATERAL (
+              SELECT min(obstime)::date AS first_obs,
+                     max(obstime)::date AS last_obs,
+                     EXTRACT(EPOCH FROM (max(obstime) - min(obstime)))
+                         / 86400.0 AS arc_days
+                FROM public.obs_sbn_neo
+               WHERE (permid IS NOT NULL AND permid = t.permid)
+                  OR provid = t.primary_desig
+          ) obs ON TRUE
+         ORDER BY t.primary_desig
     """
     with connect() as conn:
         n_total = pd.read_sql(count_sql, conn).iloc[0, 0]
@@ -9396,7 +9443,7 @@ def _consensus_table(df):
         _ORBIT_TYPE_LABELS).fillna("")
     # Replace NaN with empty string so the table doesn't render "nan".
     for col in ["iau_name", "permid", "u_param", "nopp", "arc", "nobs",
-                "mpc_updated"]:
+                "first_obs", "last_obs"]:
         display_df[col] = display_df[col].fillna("").astype(object)
         if col in ("u_param", "nopp", "arc", "nobs"):
             display_df[col] = display_df[col].apply(
@@ -9420,9 +9467,10 @@ def _consensus_table(df):
         {"name": "MOID",          "id": "moid"},
         {"name": "u",             "id": "u_param"},
         {"name": "nopp",          "id": "nopp"},
+        {"name": "first_obs",     "id": "first_obs"},
+        {"name": "last_obs",      "id": "last_obs"},
         {"name": "arc (d)",       "id": "arc"},
         {"name": "n_obs",         "id": "nobs"},
-        {"name": "MPC fit",       "id": "mpc_updated"},
     ]
     return dash_table.DataTable(
         id="consensus-table",
@@ -9508,11 +9556,12 @@ def update_consensus(include, exclude, filter_value):
 def reset_consensus_selection(_reset_clicks, _all_clicks):
     triggered = ctx.triggered_id
     if triggered == "consensus-reset":
-        # Default landing experience: all six included, no exclusions,
-        # disagreements-only filter on (the interesting view).
-        return list(_CONSENSUS_SOURCES), [], ["hide_all"]
+        # Default landing experience: NO inclusion filter (Include
+        # empty), so the disagreements toggle has the full population
+        # to subtract from. Yields ~300 disagreement rows.
+        return [], [], ["hide_all"]
     if triggered == "consensus-preset-all":
-        # Strict all-six-agree set: include all, no toggle.
+        # Strict all-six-agree set: include all six, toggle off.
         return list(_CONSENSUS_SOURCES), [], []
     raise PreventUpdate
 
