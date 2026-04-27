@@ -2991,22 +2991,10 @@ app.layout = html.Div(
                                 style={"fontSize": "14px",
                                        "marginBottom": "18px"}),
 
-                            # Filters — collapsible. Closed by default;
-                            # the disagreements toggle inside is the
-                            # primary filter the user lands on.
-                            html.Details(open=False,
-                                         style={"marginBottom": "16px"},
-                                         children=[
-                            html.Summary(
-                                "Filters",
-                                style={"cursor": "pointer",
-                                       "fontWeight": "600",
-                                       "fontSize": "14px",
-                                       "marginBottom": "10px"},
-                            ),
+                            # Filter controls (always visible)
                             html.Div(
                                 style={"display": "flex", "gap": "30px",
-                                       "marginBottom": "8px",
+                                       "marginBottom": "16px",
                                        "flexWrap": "wrap"},
                                 children=[
                                     html.Div(children=[
@@ -3089,7 +3077,6 @@ app.layout = html.Div(
                                     ),
                                 ],
                             ),
-                            ]),  # end html.Details
 
                             # Live count
                             html.Div(
@@ -9612,7 +9599,7 @@ def _nea_txt_line(primary_desig, permid):
 
 
 @app.callback(
-    Output("consensus-download", "data"),
+    Output("consensus-download", "data", allow_duplicate=True),
     Input("consensus-btn-download-desigs", "n_clicks"),
     State("consensus-table", "data"),
     prevent_initial_call=True,
