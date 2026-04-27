@@ -4,7 +4,21 @@ Context for what to do if the public dashboard at
 [hotwireduniverse.org](https://hotwireduniverse.org) stops serving
 fresh data.
 
-## Normal architecture (as of 2026-04-24)
+## Normal architecture (as of 2026-04-26)
+
+Two Dash processes on Gizmo, both under launchd:
+
+- **Prod** — `com.rlseaman.dashboard` → port 8050 → `hotwireduniverse.org`.
+  Public, no auth.
+- **R&D** — `com.rlseaman.dashboard-rnd` → port 8051 →
+  `dev.hotwireduniverse.org`. Behind Cloudflare Access (email
+  allow-list, configured in the Cloudflare Zero Trust dashboard).
+  Runs the same `app/discovery_stats.py` with `--rnd` to enable
+  R&D-only surfaces (currently the **NEO Consensus** tab).
+
+Both processes share the cache directory and the `mpc_sbn` database;
+they're independent instances of the same code, distinguished only
+by the flag.
 
 All three data paths are native to **Gizmo**:
 

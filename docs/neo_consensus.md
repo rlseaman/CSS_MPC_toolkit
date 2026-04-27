@@ -212,6 +212,56 @@ SELECT DISTINCT v.designation, v.kind
   NEOfixer doesn't. NEOfixer applies its own find_orb fits and
   disagrees with the consensus on a small but non-trivial population.
 
+## Dashboard surface (R&D, 2026-04-26)
+
+The consensus data is exposed in the dashboard as a **NEO Consensus**
+tab on the R&D instance only — visible at `dev.hotwireduniverse.org`,
+behind Cloudflare Access (email allow-list), gated by the `--rnd` flag
+to `app/discovery_stats.py`. Prod (`hotwireduniverse.org`) doesn't
+show the tab; both Dash processes run under launchd
+(`com.rlseaman.dashboard` and `com.rlseaman.dashboard-rnd`).
+
+What's wired up so far:
+
+- **Source-selection grid** (Include in / Exclude from) over all six
+  sources, plus a "Hide all-six-agree (disagreements only)" toggle —
+  all in a collapsible *Filters* disclosure, closed by default.
+- **Live count**, including a "(only showing objects that do not
+  appear in all lists)" caption when the disagreements toggle is on.
+- **Detail table** with diagnostic columns:
+  - Identity: Designation, Permid, Name (IAU name when present).
+  - Per-source membership booleans (✓ / blank).
+  - Class: `mpc_orbits.orbit_type_int` with fallback to
+    `css_utilities.classify_orbit(q, e, i)` — recovers ~99.98% of
+    NULLs in mpc_orbits' top-level column.
+  - Orbital elements: q, e, i, H from mpc_orbits.
+  - Quality flags: `u_param` (orbit uncertainty 0–9), `nopp`
+    (oppositions).
+  - Observation summary: `first_obs`, `last_obs`, `arc` (days),
+    `nobs` — all from a LATERAL aggregate against `public.obs_sbn`.
+- **Download buttons** for the currently-displayed table:
+  - "Download designations" — plain text, one primary designation
+    per line.
+  - "Download NEA.txt subset" — original MPCORB-format lines from
+    NEA.txt for those displayed rows that appear in NEA.txt; others
+    are skipped with a header-comment count. Lookup is keyed by
+    `unpack()` of each NEA.txt line's packed designation, with
+    permid fallback for numbered NEOs.
+
+Two operational lessons came out of the session and are recorded in
+memory:
+
+- **Use `obs_sbn`, not `obs_sbn_neo`, for `permid = $1 OR provid = $2`
+  LATERAL aggregates.** Empirical: ~200× faster (1.9 s vs 3:55 on
+  the 396-row disagreement set) AND covers Mars-Crossers / objects
+  not in `mpc_orbits`. The smaller matview's index set / planner
+  choice loses to `obs_sbn`'s broader index ladder on this access
+  shape. The matview is still the right scan source for LOAD_SQL /
+  APPARITION_SQL where we explicitly want NEO-filtered obs.
+- **`mpc_orbits.arc_length_total` is unreliable for NEOs** (NULL
+  ~88%, only 5,091 / 41,763 populated). Compute arc from
+  `obs_sbn.obstime` instead.
+
 ## Pending design topics
 
 These are noted but not implemented:
@@ -220,13 +270,21 @@ These are noted but not implemented:
   `css_neo_consensus.manual_annotations` table for human-curated
   notes (aliases, overrides, comments). Deferred until there's a
   concrete first use case.
-- **Dashboard surface** — initially as a R&D-instance tab (see
-  `dashboard_hardening_backlog.md`). Once stabilized, the
-  controlling concept is a banner-level "NEO source" selector that
-  filters all NEO-aware tabs (Discoveries by Year, Multi-survey,
-  Follow-up, Discovery Circumstances). Implementation requires
+- **Banner-level "NEO source" selector** — once the consensus tab is
+  stable, the next step is a global control that filters every
+  NEO-aware tab (Discoveries by Year, Multi-survey Comparison,
+  Follow-up Timing, Discovery Circumstances) by source. Requires
   expanding LOAD_SQL/APPARITION_SQL to carry per-source `in_X`
-  boolean columns drawn from `v_membership_wide`.
+  boolean columns drawn from `v_membership_wide`. Discussed but
+  intentionally deferred until the consensus tab itself proves out.
+- **UpSet plot + pairwise Jaccard heatmap** — single chart showing
+  the 14 populated 4-way buckets sorted by count, plus a 6×6 grid
+  of pairwise Jaccard coefficients. Would replace or complement the
+  current row-by-row table for set-overlap exploration.
+- **Object-detail modal** — clicking a table row opens a card with
+  per-source `raw_string` / `last_refreshed`, the `v_member_designations`
+  alias expansion, and a richer obs-summary view. Currently the user
+  has to query the schema manually for this depth.
 - **Comet support (NECs)** — currently `is_comet=TRUE` rows are
   filtered from `v_membership_wide`. NEOfixer carries 164 NECs;
   enabling them is a view edit. Defer until there's a concrete need.
