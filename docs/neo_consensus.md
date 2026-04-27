@@ -221,7 +221,7 @@ SELECT DISTINCT v.designation, v.kind
   NEOfixer doesn't. NEOfixer applies its own find_orb fits and
   disagrees with the consensus on a small but non-trivial population.
 
-## Dashboard surface (R&D, 2026-04-26)
+## Dashboard surface (R&D, 2026-04-27)
 
 The consensus data is exposed in the dashboard as a **NEO Consensus**
 tab on the R&D instance only — visible at `dev.hotwireduniverse.org`,
@@ -230,35 +230,89 @@ to `app/discovery_stats.py`. Prod (`hotwireduniverse.org`) doesn't
 show the tab; both Dash processes run under launchd
 (`com.rlseaman.dashboard` and `com.rlseaman.dashboard-rnd`).
 
-What's wired up so far:
+### Layout
 
-- **Source-selection grid** (Include in / Exclude from) over all six
-  sources, plus a "Hide all-six-agree (disagreements only)" toggle —
-  all in a collapsible *Filters* disclosure, closed by default.
-- **Live count**, including a "(only showing objects that do not
-  appear in all lists)" caption when the disagreements toggle is on.
-- **Detail table** with diagnostic columns:
-  - Identity: Designation, Permid, Name (IAU name when present).
-  - Per-source membership booleans (✓ / blank).
-  - Class: `mpc_orbits.orbit_type_int` with fallback to
-    `css_utilities.classify_orbit(q, e, i)` — recovers ~99.98% of
-    NULLs in mpc_orbits' top-level column.
-  - Orbital elements: q, e, i, H from mpc_orbits.
-  - Quality flags: `u_param` (orbit uncertainty 0–9), `nopp`
-    (oppositions).
-  - Observation summary: `first_obs`, `last_obs`, `arc` (days),
-    `nobs` — joined from `css_neo_consensus.obs_summary`, a daily-
-    refreshed matview pre-aggregating `obs_sbn` by `primary_desig`.
-    A handful of designations have no obs match (~2 in current
-    snapshot) and show blank cells.
-- **Download buttons** for the currently-displayed table:
-  - "Download designations" — plain text, one primary designation
-    per line.
-  - "Download NEA.txt subset" — original MPCORB-format lines from
-    NEA.txt for those displayed rows that appear in NEA.txt; others
-    are skipped with a header-comment count. Lookup is keyed by
-    `unpack()` of each NEA.txt line's packed designation, with
-    permid fallback for numbered NEOs.
+A description blurb and a one-line **Snapshot** of any-six vs
+all-six totals (queried once at module load), then a four-column
+filter grid, then count + download buttons + the result table.
+
+**Filter grid** (left to right):
+
+1. **Hide all-six-agree** checkbox (default ON — surfaces only
+   disagreements), then two big buttons:
+   - **All-six consensus** — every source radio → Inc, hide-all → off.
+   - **Reset to defaults** — all radios → Any, all ranges cleared,
+     hide-all → on.
+   Plus stacked **first_obs** and **last_obs** date ranges
+   (`YYYY-MM-DD` text inputs, regex-validated).
+2. **Filter by source** — six three-way Inc / Exc / Any radios, one
+   per source (MPC NEA.txt, mpc_orbits q ≤ 1.3, JPL CNEOS, ESA
+   NEOCC, CSS NEOfixer, Lowell astorb). AND-combined.
+3. **Filter by class** — five three-way **Only** / Exc / Any radios,
+   one per class (Atira, Aten, Apollo, Amor, MarsX). Selecting Only
+   on one auto-flips the other four to Exc via a clientside
+   callback. Picking multiple Onlys gives `class IN (...)` (OR
+   among Onlys); picking Excs gives `class NOT IN (...)`. Plus two
+   boolean Inc / Exc / Any radios:
+   - **Numbered** — `permid IS NOT NULL`.
+   - **Named** — IAU name present (joined from
+     `minor_planet_names`; ~183 of 41K NEOs).
+4. **Filter by range** — six numeric min/max pairs for q (AU), e, i
+   (°), H, U (uncertainty 0–9), Nopp (oppositions). Empty = no
+   constraint.
+
+All filters AND-combined.
+
+**Live count** below the grid. Reads "N matching NEOs" or "N matching
+NEOs (showing first 5,000; …)" if the result was capped (50K cap is
+above the ~42K population, so this caption rarely fires). Adds "(only
+showing objects that do not appear in all lists)" when hide-all is on.
+
+**Download buttons** below the count, both operating on the
+currently-displayed table:
+
+- **Download designations** — plain text, one primary designation
+  per line.
+- **Download NEA.txt subset** — original MPCORB-format lines from
+  NEA.txt for those displayed rows that appear in NEA.txt; others
+  are skipped with a header-comment count. Lookup is keyed by
+  `unpack()` of each NEA.txt line's packed designation, with
+  permid fallback for numbered NEOs.
+
+### Detail table columns
+
+- **Identity**: Designation, Permid, Name (IAU name from
+  `minor_planet_names` when present).
+- **Per-source membership booleans** (✓ / blank).
+- **Class**: always `css_utilities.classify_orbit(q, e, i)` — single
+  source of truth, no COALESCE with `mpc_orbits.orbit_type_int`
+  (which is NULL for ~77% of NEOs).
+- **Orbital elements**: q, e, i, H from `mpc_orbits`.
+- **Quality flags**: `U` (orbit uncertainty 0–9), `Nopp`
+  (oppositions). Capitalized in the column header — they were
+  lowercase in the v1 table.
+- **Observation summary**: `first_obs`, `last_obs`, `arc` (days),
+  `nobs` — joined from `css_neo_consensus.obs_summary`, the daily-
+  refreshed matview pre-aggregating `obs_sbn` by `primary_desig`.
+  A handful of designations have no obs match (~2 in current
+  snapshot) and show blank cells.
+
+### Implementation notes
+
+The buttons drive radios + filter via a **clientside callback**
+(7 → 30 outputs). The earlier server-side approach with the radios
+as both Input AND Output produced a multi-fire feedback storm —
+Dash's self-loop guard didn't dedupe across multiple Output→Input
+loops, and the callback fired 12 times for one button click with
+partially-updated state. The clientside path is the standard fix:
+the browser settles all props in one tick, the server-side
+`update_consensus` callback fires once on the new Inputs.
+
+The Only-flips-others class behavior is a second clientside callback
+keyed on `triggered.value === 'include'` — only acts when the user
+clicks Only, not when our own previous Output write set a class to
+Exc. `allow_duplicate=True` is needed because the buttons callback
+also writes to the five class radio Outputs.
 
 Three operational lessons came out of the session and are recorded
 in memory:
