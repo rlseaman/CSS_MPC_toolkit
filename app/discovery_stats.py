@@ -3460,7 +3460,19 @@ app.layout = html.Div(
                                 config={"displayModeBar": False,
                                         "staticPlot": False},
                                 style={"height": "60px",
-                                       "marginBottom": "8px"},
+                                       "marginBottom": "4px"},
+                            ),
+
+                            # UpSet plot — top bar per intersection
+                            # pattern (sorted descending), bottom dot
+                            # matrix showing which sources participate
+                            # in each pattern. Same df as the table
+                            # and breakdown, so it tracks the filter.
+                            dcc.Graph(
+                                id="consensus-upset",
+                                config={"displayModeBar": False},
+                                style={"height": "280px",
+                                       "marginBottom": "12px"},
                             ),
 
                             # Download buttons
@@ -10069,6 +10081,165 @@ def _build_breakdown_figure(df, theme="dark"):
     return fig
 
 
+def _build_upset_figure(df, top_n=15):
+    """Render an UpSet plot of source-membership patterns: top
+    subplot is intersection sizes (sorted descending, max top_n);
+    bottom subplot is the membership matrix with dots indicating
+    "this source is part of this pattern" and a vertical line
+    connecting them.
+
+    Operates on the already-fetched `df`. With six sources there are
+    up to 63 non-empty patterns; capping at top_n keeps the plot
+    legible — patterns past the cap roll into a small "+other"
+    indicator in the bar chart.
+
+    Returns a Plotly Figure ready to assign to dcc.Graph(...).figure.
+    """
+    bool_cols = ["in_mpc", "in_mpc_orbits", "in_cneos",
+                 "in_neocc", "in_neofixer", "in_lowell"]
+    fg_neutral = "rgba(150,150,150,1)"  # works in both light and dark
+
+    if df.empty:
+        return go.Figure(layout={
+            "height": 280,
+            "margin": {"l": 8, "r": 8, "t": 8, "b": 8},
+            "xaxis": {"visible": False},
+            "yaxis": {"visible": False},
+            "paper_bgcolor": "rgba(0,0,0,0)",
+            "plot_bgcolor": "rgba(0,0,0,0)",
+            "annotations": [{
+                "text": "No matches in current filter.",
+                "showarrow": False,
+                "x": 0.5, "y": 0.5,
+                "xref": "paper", "yref": "paper",
+                "font": {"color": fg_neutral, "size": 12},
+            }],
+        })
+
+    # Group by the boolean tuple and count rows per pattern.
+    pat_counts = (df.groupby(bool_cols, sort=False)
+                    .size()
+                    .sort_values(ascending=False))
+    n_total = int(pat_counts.sum())
+    n_patterns = len(pat_counts)
+    top = pat_counts.head(top_n)
+    other_total = int(pat_counts.iloc[top_n:].sum())
+
+    n = len(top)
+    src_count = len(bool_cols)
+    src_labels = [_CONSENSUS_SOURCE_LABELS[c[len("in_"):]]
+                  for c in bool_cols]
+
+    fig = make_subplots(
+        rows=2, cols=1,
+        row_heights=[0.65, 0.35],
+        vertical_spacing=0.06,
+        shared_xaxes=True,
+    )
+
+    # Top: intersection-size bars. Color each bar by how many sources
+    # are in the pattern — a "consensus gradient" from gray (1 source)
+    # to dark (all six).
+    pattern_n_src = [sum(p) for p in top.index]
+    bar_colors = [
+        f"rgba(91, 141, 239, {0.15 + 0.85 * (n_/src_count):.2f})"
+        for n_ in pattern_n_src
+    ]
+    bar_text = [f"{v:,}" for v in top.values]
+    bar_hover = []
+    for pat, cnt in top.items():
+        included = [src_labels[j] for j, inc in enumerate(pat) if inc]
+        n_in = len(included)
+        bar_hover.append(
+            f"<b>{cnt:,} NEOs</b><br>"
+            f"In {n_in} source{'s' if n_in != 1 else ''}: "
+            + (", ".join(included) if included else "(none)")
+        )
+
+    fig.add_trace(go.Bar(
+        x=list(range(n)),
+        y=top.values,
+        text=bar_text,
+        textposition="outside",
+        textfont=dict(color=fg_neutral, size=10),
+        marker=dict(color=bar_colors, line=dict(width=0)),
+        hovertext=bar_hover,
+        hoverinfo="text",
+        showlegend=False,
+    ), row=1, col=1)
+
+    # Bottom: dot matrix. Filled dots = source is in pattern; empty
+    # gray dots = source is not. One Scatter trace for all dots; one
+    # Scatter trace (with None separators) for the connecting lines.
+    dot_x, dot_y, dot_color = [], [], []
+    line_x, line_y = [], []
+    for i, pat in enumerate(top.index):
+        for j, inc in enumerate(pat):
+            dot_x.append(i)
+            dot_y.append(j)
+            dot_color.append("#5b8def" if inc else "#444")
+        filled = [j for j, inc in enumerate(pat) if inc]
+        if len(filled) >= 2:
+            line_x.extend([i, i, None])
+            line_y.extend([min(filled), max(filled), None])
+
+    fig.add_trace(go.Scatter(
+        x=line_x, y=line_y,
+        mode="lines",
+        line=dict(color="#5b8def", width=2),
+        hoverinfo="skip",
+        showlegend=False,
+    ), row=2, col=1)
+    fig.add_trace(go.Scatter(
+        x=dot_x, y=dot_y,
+        mode="markers",
+        marker=dict(size=10, color=dot_color,
+                    line=dict(width=0)),
+        hoverinfo="skip",
+        showlegend=False,
+    ), row=2, col=1)
+
+    # Subtitle: "showing top N of M patterns; +K NEOs in the rest"
+    if n_patterns > top_n:
+        subtitle = (f"Showing top {n} of {n_patterns} patterns "
+                    f"(+{other_total:,} NEOs in {n_patterns - n} "
+                    "rarer patterns).")
+    else:
+        subtitle = f"All {n_patterns} non-empty patterns."
+
+    fig.update_xaxes(showticklabels=False, showgrid=False,
+                     zeroline=False, range=[-0.6, n - 0.4],
+                     row=1, col=1)
+    fig.update_xaxes(showticklabels=False, showgrid=False,
+                     zeroline=False, range=[-0.6, n - 0.4],
+                     row=2, col=1)
+    fig.update_yaxes(title_text="NEOs", titlefont=dict(color=fg_neutral),
+                     tickfont=dict(color=fg_neutral),
+                     gridcolor="rgba(150,150,150,0.15)",
+                     zeroline=False,
+                     row=1, col=1)
+    fig.update_yaxes(
+        tickmode="array",
+        tickvals=list(range(src_count)),
+        ticktext=src_labels,
+        tickfont=dict(color=fg_neutral, size=11),
+        showgrid=False, zeroline=False,
+        range=[-0.6, src_count - 0.4],
+        row=2, col=1,
+    )
+    fig.update_layout(
+        height=280,
+        margin=dict(l=8, r=8, t=22, b=8),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        showlegend=False,
+        title=dict(text=subtitle,
+                   font=dict(color=fg_neutral, size=11),
+                   x=0.5, xanchor="center", y=0.98, yanchor="top"),
+    )
+    return fig
+
+
 # Buttons → radios + filter, run entirely in the browser. We tried
 # doing this server-side (one callback with the radios as both Input
 # AND Output) and observed Dash firing the callback once per Output
@@ -10196,6 +10367,7 @@ app.clientside_callback(
     Output("consensus-table", "data"),
     Output("consensus-table", "page_current"),
     Output("consensus-breakdown", "figure"),
+    Output("consensus-upset", "figure"),
     Input("consensus-radio-mpc", "value"),
     Input("consensus-radio-mpc_orbits", "value"),
     Input("consensus-radio-cneos", "value"),
@@ -10277,8 +10449,10 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
             date_ranges=date_ranges,
         )
     except Exception as e:
+        empty = pd.DataFrame()
         return (f"Query failed: {type(e).__name__}: {e}", [], 0,
-                _build_breakdown_figure(pd.DataFrame()))
+                _build_breakdown_figure(empty),
+                _build_upset_figure(empty))
     print(f"[consensus] -> n_total={n_total} returned_rows={len(df)}",
           flush=True)
 
@@ -10295,7 +10469,8 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
                        "all lists)")
 
     return (count_text, _format_table_rows(df), 0,
-            _build_breakdown_figure(df))
+            _build_breakdown_figure(df),
+            _build_upset_figure(df))
 
 
 def _load_nea_txt_lookup():
