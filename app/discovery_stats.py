@@ -2524,7 +2524,7 @@ _CONSENSUS_SOURCE_LABELS = {
     "mpc_orbits": "mpc_orbits q ≤ 1.3",
     "cneos":      "JPL CNEOS",
     "neocc":      "ESA NEOCC",
-    "neofixer":   "NEOfixer",
+    "neofixer":   "CSS NEOfixer",
     "lowell":     "Lowell astorb",
 }
 _CONSENSUS_SOURCE_OPTIONS = [
@@ -2976,7 +2976,7 @@ app.layout = html.Div(
                                 "Cross-source NEO membership across MPC "
                                 "(NEA.txt), the broader mpc_orbits q ≤ "
                                 "1.3 view, JPL CNEOS, ESA NEOCC, "
-                                "NEOfixer, and Lowell Observatory's "
+                                "CSS NEOfixer, and Lowell Observatory's "
                                 "astorb. Pick sources to include / "
                                 "exclude; the table shows matching "
                                 "objects with diagnostic columns. "
@@ -2984,16 +2984,29 @@ app.layout = html.Div(
                                 "come from MPC's mpc_orbits; class "
                                 "falls back to css_utilities."
                                 "classify_orbit when MPC's "
-                                "orbit_type_int is NULL. first_obs / "
-                                "last_obs / arc come from obs_sbn.",
+                                "orbit_type_int is NULL. "
+                                "first_obs / last_obs / arc / n_obs "
+                                "are aggregated from obs_sbn.",
                                 className="subtext",
                                 style={"fontSize": "14px",
                                        "marginBottom": "18px"}),
 
-                            # Controls row
+                            # Filters — collapsible. Closed by default;
+                            # the disagreements toggle inside is the
+                            # primary filter the user lands on.
+                            html.Details(open=False,
+                                         style={"marginBottom": "16px"},
+                                         children=[
+                            html.Summary(
+                                "Filters",
+                                style={"cursor": "pointer",
+                                       "fontWeight": "600",
+                                       "fontSize": "14px",
+                                       "marginBottom": "10px"},
+                            ),
                             html.Div(
                                 style={"display": "flex", "gap": "30px",
-                                       "marginBottom": "16px",
+                                       "marginBottom": "8px",
                                        "flexWrap": "wrap"},
                                 children=[
                                     html.Div(children=[
@@ -3076,13 +3089,44 @@ app.layout = html.Div(
                                     ),
                                 ],
                             ),
+                            ]),  # end html.Details
 
                             # Live count
                             html.Div(
                                 id="consensus-count",
                                 style={"fontSize": "16px",
                                        "fontWeight": "600",
-                                       "marginBottom": "12px"}),
+                                       "marginBottom": "8px"}),
+
+                            # Download buttons
+                            html.Div(
+                                style={"display": "flex", "gap": "10px",
+                                       "marginBottom": "12px"},
+                                children=[
+                                    html.Button(
+                                        "Download designations",
+                                        id="consensus-btn-download-desigs",
+                                        n_clicks=0,
+                                        style=DOWNLOAD_BTN_STYLE,
+                                        title=("Plain text, one primary "
+                                               "designation per line, "
+                                               "for the current table.")),
+                                    html.Button(
+                                        "Download NEA.txt subset",
+                                        id="consensus-btn-download-nea",
+                                        n_clicks=0,
+                                        style=DOWNLOAD_BTN_STYLE,
+                                        title=("Original NEA.txt MPCORB "
+                                               "lines for those "
+                                               "displayed objects that "
+                                               "appear in MPC's NEA.txt. "
+                                               "Objects not in NEA.txt "
+                                               "are skipped (count "
+                                               "noted in a header "
+                                               "comment).")),
+                                ],
+                            ),
+                            dcc.Download(id="consensus-download"),
 
                             # Result table
                             html.Div(id="consensus-table-container"),
@@ -9370,10 +9414,11 @@ def _consensus_query(include, exclude, hide_all_agree=False,
             mo.h::float AS h,
             mo.u_param,
             mo.nopp,
-            mo.nobs_total::int AS nobs,
             obs.first_obs,
             obs.last_obs,
-            obs.arc_days::int AS arc
+            obs.arc_days::int AS arc,
+            obs.nobs::int AS nobs,
+            t.packed_desig AS packed_desig
           FROM targets t
           JOIN css_neo_consensus.v_membership_wide v
             USING (primary_desig)
@@ -9391,7 +9436,8 @@ def _consensus_query(include, exclude, hide_all_agree=False,
               SELECT min(obstime)::date AS first_obs,
                      max(obstime)::date AS last_obs,
                      EXTRACT(EPOCH FROM (max(obstime) - min(obstime)))
-                         / 86400.0 AS arc_days
+                         / 86400.0 AS arc_days,
+                     count(*) AS nobs
                 FROM public.obs_sbn
                WHERE (permid IS NOT NULL AND permid = t.permid)
                   OR provid = t.primary_desig
@@ -9523,6 +9569,95 @@ def update_consensus(include, exclude, filter_value):
         count_text += "  (only showing objects that do not appear in all lists)"
 
     return count_text, _consensus_table(df)
+
+
+def _load_nea_txt_lookup():
+    """Load NEA.txt and build {unpacked_or_permid → original_line}.
+
+    Loaded once at app startup. NEA.txt updates daily; the rnd Dash
+    process restarts daily after the 06:00 MST refresh, so this
+    snapshot is fresh enough for the download path. Returns {} if
+    NEA.txt isn't present (graceful: download buttons emit a stub).
+    """
+    path = os.path.join(_APP_DIR, ".nea_raw.txt")
+    if not os.path.exists(path):
+        return {}
+    try:
+        from mpc_designation import unpack as _unpack
+    except ImportError:
+        return {}
+    cache = {}
+    with open(path) as f:
+        for line in f:
+            packed = line[0:7].rstrip()
+            if not packed:
+                continue
+            try:
+                key = _unpack(packed)
+            except Exception:
+                continue
+            cache[key] = line.rstrip("\n")
+    return cache
+
+
+_NEA_TXT_LOOKUP = _load_nea_txt_lookup() if _RND else {}
+
+
+def _nea_txt_line(primary_desig, permid):
+    """Look up the NEA.txt line for a row, by permid first (numbered)
+    then by primary_desig (unnumbered). Returns None if not in NEA.txt."""
+    if permid and permid in _NEA_TXT_LOOKUP:
+        return _NEA_TXT_LOOKUP[permid]
+    return _NEA_TXT_LOOKUP.get(primary_desig)
+
+
+@app.callback(
+    Output("consensus-download", "data"),
+    Input("consensus-btn-download-desigs", "n_clicks"),
+    State("consensus-table", "data"),
+    prevent_initial_call=True,
+)
+def download_consensus_designations(_n, rows):
+    if not rows:
+        raise PreventUpdate
+    text = "\n".join(r.get("primary_desig", "") for r in rows) + "\n"
+    return dict(content=text, filename="neo_consensus_designations.txt")
+
+
+@app.callback(
+    Output("consensus-download", "data", allow_duplicate=True),
+    Input("consensus-btn-download-nea", "n_clicks"),
+    State("consensus-table", "data"),
+    prevent_initial_call=True,
+)
+def download_consensus_nea(_n, rows):
+    if not rows:
+        raise PreventUpdate
+    if not _NEA_TXT_LOOKUP:
+        return dict(content="# NEA.txt cache not loaded "
+                            "(.nea_raw.txt missing)\n",
+                    filename="neo_consensus_nea_subset.txt")
+
+    lines = []
+    n_skipped = 0
+    for r in rows:
+        line = _nea_txt_line(r.get("primary_desig"), r.get("permid") or None)
+        if line:
+            lines.append(line)
+        else:
+            n_skipped += 1
+    body = "\n".join(lines)
+    if body:
+        body += "\n"
+    if n_skipped:
+        header = (f"# {n_skipped} of {len(rows):,} displayed rows were "
+                  f"not in MPC's NEA.txt and were skipped. The remaining "
+                  f"{len(lines):,} rows below are verbatim NEA.txt lines."
+                  f"\n# (Skipped rows include A/-prefix asteroids, "
+                  f"non-MPC objects, and recent objects MPC has not yet "
+                  f"published in NEA.txt.)\n")
+        body = header + body
+    return dict(content=body, filename="neo_consensus_nea_subset.txt")
 
 
 @app.callback(
