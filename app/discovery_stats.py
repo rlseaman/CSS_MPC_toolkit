@@ -10213,7 +10213,8 @@ def _build_upset_figure(df, top_n=15):
     fig.update_xaxes(showticklabels=False, showgrid=False,
                      zeroline=False, range=[-0.6, n - 0.4],
                      row=2, col=1)
-    fig.update_yaxes(title_text="NEOs", titlefont=dict(color=fg_neutral),
+    fig.update_yaxes(title_text="NEOs",
+                     title_font=dict(color=fg_neutral),
                      tickfont=dict(color=fg_neutral),
                      gridcolor="rgba(150,150,150,0.15)",
                      zeroline=False,
