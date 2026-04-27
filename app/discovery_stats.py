@@ -2802,16 +2802,39 @@ _CONSENSUS_ANY_SIX, _CONSENSUS_ALL_SIX = (
 
 
 def _consensus_snapshot_text():
-    """Inline summary line. Falls back to a minimal message if the
-    snapshot query failed at startup."""
+    """Inline summary line. The three numbers are clickable hooks
+    that trigger preset filter states via a clientside callback:
+      * any-six → clear all source filters, hide-all OFF
+      * all-six → equivalent to clicking the All-six button
+      * disagreements → equivalent to clicking Reset
+    Falls back to a minimal message if the snapshot query failed
+    at startup."""
     if _CONSENSUS_ANY_SIX is None:
         return "Snapshot stats unavailable."
     diff = _CONSENSUS_ANY_SIX - _CONSENSUS_ALL_SIX
+    link_style = {
+        "cursor": "pointer",
+        "textDecoration": "underline",
+        "color": "inherit",
+    }
     return [
         html.Span("Snapshot: ", style={"fontWeight": "600"}),
-        f"{_CONSENSUS_ANY_SIX:,} NEOs in any of the six sources, ",
-        f"{_CONSENSUS_ALL_SIX:,} in all six (",
-        f"{diff:,} disagreements).",
+        html.Span(f"{_CONSENSUS_ANY_SIX:,}",
+                  id="consensus-snap-any",
+                  n_clicks=0, style=link_style,
+                  title="Show all NEOs in any of the six sources"),
+        " NEOs in any of the six sources, ",
+        html.Span(f"{_CONSENSUS_ALL_SIX:,}",
+                  id="consensus-snap-all",
+                  n_clicks=0, style=link_style,
+                  title="Show only the all-six-agree set "
+                        "(same as the All-six consensus button)"),
+        " in all six (",
+        html.Span(f"{diff:,} disagreements",
+                  id="consensus-snap-dis",
+                  n_clicks=0, style=link_style,
+                  title="Show only the disagreements (same as Reset)"),
+        ").",
     ]
 
 
@@ -3460,7 +3483,55 @@ app.layout = html.Div(
                                 config={"displayModeBar": False,
                                         "staticPlot": False},
                                 style={"height": "60px",
-                                       "marginBottom": "4px"},
+                                       "marginBottom": "2px"},
+                            ),
+                            # Inline legend for the breakdown bar.
+                            html.Div(
+                                className="subtext",
+                                style={"fontSize": "11px",
+                                       "marginBottom": "8px",
+                                       "display": "flex", "gap": "16px",
+                                       "flexWrap": "wrap",
+                                       "alignItems": "center"},
+                                children=[
+                                    html.Span([
+                                        html.Span(style={
+                                            "display": "inline-block",
+                                            "width": "12px",
+                                            "height": "10px",
+                                            "background": "#1f77b4",
+                                            "marginRight": "5px",
+                                            "verticalAlign": "middle"}),
+                                        "Solid: this source is the "
+                                        "lone holdout (5 of 6 include)",
+                                    ]),
+                                    html.Span([
+                                        html.Span(style={
+                                            "display": "inline-block",
+                                            "width": "12px",
+                                            "height": "10px",
+                                            "background": (
+                                                "repeating-linear-"
+                                                "gradient(45deg,"
+                                                "#1f77b4,#1f77b4 3px,"
+                                                "transparent 3px,"
+                                                "transparent 6px)"),
+                                            "marginRight": "5px",
+                                            "verticalAlign": "middle"}),
+                                        "Hatched: only this source "
+                                        "has it (1 of 6 include)",
+                                    ]),
+                                    html.Span([
+                                        html.Span(style={
+                                            "display": "inline-block",
+                                            "width": "12px",
+                                            "height": "10px",
+                                            "background": "#7f7f7f",
+                                            "marginRight": "5px",
+                                            "verticalAlign": "middle"}),
+                                        "Gray: 2–4 sources disagree",
+                                    ]),
+                                ],
                             ),
 
                             # UpSet plot — top bar per intersection
@@ -10120,6 +10191,31 @@ def _build_upset_figure(df, top_n=15):
     pat_counts = (df.groupby(bool_cols, sort=False)
                     .size()
                     .sort_values(ascending=False))
+    # Drop the all-six-agree pattern: it's reported in the snapshot
+    # line above the chart, and including it makes the disagreement
+    # patterns visually disappear when the filter set spans both.
+    all_six_key = (True,) * len(bool_cols)
+    all_six_count = int(pat_counts.get(all_six_key, 0))
+    pat_counts = pat_counts.drop(index=all_six_key, errors="ignore")
+    if pat_counts.empty:
+        return go.Figure(layout={
+            "height": 280,
+            "margin": {"l": 8, "r": 8, "t": 8, "b": 8},
+            "xaxis": {"visible": False},
+            "yaxis": {"visible": False},
+            "paper_bgcolor": "rgba(0,0,0,0)",
+            "plot_bgcolor": "rgba(0,0,0,0)",
+            "annotations": [{
+                "text": (f"All {all_six_count:,} matching NEOs are in "
+                         "all six sources — no disagreement structure."
+                         if all_six_count else
+                         "No matches in current filter."),
+                "showarrow": False,
+                "x": 0.5, "y": 0.5,
+                "xref": "paper", "yref": "paper",
+                "font": {"color": fg_neutral, "size": 12},
+            }],
+        })
     n_total = int(pat_counts.sum())
     n_patterns = len(pat_counts)
     top = pat_counts.head(top_n)
@@ -10156,6 +10252,10 @@ def _build_upset_figure(df, top_n=15):
             + (", ".join(included) if included else "(none)")
         )
 
+    # customdata carries the boolean tuple for each bar so a click
+    # handler downstream can map the bar back to a filter state.
+    bar_customdata = [[bool(v) for v in pat] for pat in top.index]
+
     fig.add_trace(go.Bar(
         x=list(range(n)),
         y=top.values,
@@ -10165,6 +10265,7 @@ def _build_upset_figure(df, top_n=15):
         marker=dict(color=bar_colors, line=dict(width=0)),
         hovertext=bar_hover,
         hoverinfo="text",
+        customdata=bar_customdata,
         showlegend=False,
     ), row=1, col=1)
 
@@ -10200,12 +10301,17 @@ def _build_upset_figure(df, top_n=15):
     ), row=2, col=1)
 
     # Subtitle: "showing top N of M patterns; +K NEOs in the rest"
+    # "(all-six excluded — see snapshot)" is the standing footnote.
+    base_note = "all-six set excluded; see snapshot above"
     if n_patterns > top_n:
-        subtitle = (f"Showing top {n} of {n_patterns} patterns "
-                    f"(+{other_total:,} NEOs in {n_patterns - n} "
-                    "rarer patterns).")
+        subtitle = (f"Showing top {n} of {n_patterns} disagreement "
+                    f"patterns (+{other_total:,} NEOs in "
+                    f"{n_patterns - n} rarer patterns; {base_note}). "
+                    "Click a bar to filter the table.")
     else:
-        subtitle = f"All {n_patterns} non-empty patterns."
+        subtitle = (f"All {n_patterns} disagreement patterns "
+                    f"({base_note}). "
+                    "Click a bar to filter the table.")
 
     fig.update_xaxes(showticklabels=False, showgrid=False,
                      zeroline=False, range=[-0.6, n - 0.4],
@@ -10320,6 +10426,86 @@ app.clientside_callback(
     Output("consensus-filter", "value"),
     Input("consensus-reset", "n_clicks"),
     Input("consensus-preset-all", "n_clicks"),
+    prevent_initial_call=True,
+)
+
+
+# Snapshot stats numbers are clickable shortcuts:
+#   * any-six   → clear source radios + hide-all off (full population)
+#   * all-six   → all sources Include + hide-all off (the consensus set)
+#   * disagrmts → clear source radios + hide-all on  (the Reset state)
+# Numeric / class / range filters are NOT cleared here — the user
+# might be drilling down (e.g. "show me the disagreement Apollos")
+# and we don't want to undo that. For a full reset, the Reset button
+# still does its job.
+app.clientside_callback(
+    """
+    function(any_n, all_n, dis_n) {
+        const ctx = window.dash_clientside.callback_context;
+        if (!ctx.triggered || ctx.triggered.length === 0) {
+            return Array(7).fill(window.dash_clientside.no_update);
+        }
+        const trig = ctx.triggered[0].prop_id.split('.')[0];
+        if (trig === 'consensus-snap-any') {
+            return ['any','any','any','any','any','any', []];
+        }
+        if (trig === 'consensus-snap-all') {
+            return ['include','include','include','include',
+                    'include','include', []];
+        }
+        if (trig === 'consensus-snap-dis') {
+            return ['any','any','any','any','any','any',
+                    ['hide_all']];
+        }
+        return Array(7).fill(window.dash_clientside.no_update);
+    }
+    """,
+    Output("consensus-radio-mpc",        "value", allow_duplicate=True),
+    Output("consensus-radio-mpc_orbits", "value", allow_duplicate=True),
+    Output("consensus-radio-cneos",      "value", allow_duplicate=True),
+    Output("consensus-radio-neocc",      "value", allow_duplicate=True),
+    Output("consensus-radio-neofixer",   "value", allow_duplicate=True),
+    Output("consensus-radio-lowell",     "value", allow_duplicate=True),
+    Output("consensus-filter",           "value", allow_duplicate=True),
+    Input("consensus-snap-any", "n_clicks"),
+    Input("consensus-snap-all", "n_clicks"),
+    Input("consensus-snap-dis", "n_clicks"),
+    prevent_initial_call=True,
+)
+
+
+# Click an UpSet bar → snap the source radios to that bar's
+# membership pattern. customdata on each bar carries the boolean
+# tuple [in_mpc, in_mpc_orbits, in_cneos, in_neocc, in_neofixer,
+# in_lowell] so we can map a click straight to filter state without
+# re-querying or re-deriving the pattern from x-index.
+#
+# Also turns hide-all-six off, since the user's intent is "show me
+# this exact pattern" and a hide-all filter would just narrow it
+# further. allow_duplicate=True because the source radios + filter
+# are also written by the buttons clientside_callback.
+app.clientside_callback(
+    """
+    function(clickData) {
+        if (!clickData || !clickData.points || !clickData.points[0]) {
+            return Array(7).fill(window.dash_clientside.no_update);
+        }
+        const cd = clickData.points[0].customdata;
+        if (!cd || cd.length !== 6) {
+            return Array(7).fill(window.dash_clientside.no_update);
+        }
+        const radios = cd.map(b => b ? 'include' : 'exclude');
+        return [...radios, []];
+    }
+    """,
+    Output("consensus-radio-mpc",        "value", allow_duplicate=True),
+    Output("consensus-radio-mpc_orbits", "value", allow_duplicate=True),
+    Output("consensus-radio-cneos",      "value", allow_duplicate=True),
+    Output("consensus-radio-neocc",      "value", allow_duplicate=True),
+    Output("consensus-radio-neofixer",   "value", allow_duplicate=True),
+    Output("consensus-radio-lowell",     "value", allow_duplicate=True),
+    Output("consensus-filter",           "value", allow_duplicate=True),
+    Input("consensus-upset", "clickData"),
     prevent_initial_call=True,
 )
 
