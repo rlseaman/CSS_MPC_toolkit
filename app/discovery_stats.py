@@ -9358,18 +9358,6 @@ def _consensus_query(include, exclude, hide_all_agree=False,
     include = [s for s in include or [] if s in _CONSENSUS_SOURCES]
     exclude = [s for s in exclude or [] if s in _CONSENSUS_SOURCES]
 
-    # Reconcile a common math contradiction: if Include=all six AND
-    # hide_all_agree=True, the WHERE clause is `(in_all_six) AND NOT
-    # (in_all_six)` = empty. The user's intent in this state is
-    # "disagreements across all sources", not "all-six AND not-all-six."
-    # Treat Include as empty in that case so the toggle has the full
-    # population to subtract from. The UI count text flags this so the
-    # user sees what happened.
-    auto_cleared_include = False
-    if hide_all_agree and set(include) == set(_CONSENSUS_SOURCES):
-        include = []
-        auto_cleared_include = True
-
     parts = [f"in_{s}" for s in include]
     parts += [f"NOT in_{s}" for s in exclude]
     if hide_all_agree:
@@ -9380,7 +9368,6 @@ def _consensus_query(include, exclude, hide_all_agree=False,
     # Two queries: one for the (paginated) detail rows, one for the
     # total count. They could be combined via window functions but two
     # queries are simpler and both are sub-second on this scale.
-    _ = auto_cleared_include  # surfaced via _consensus_query return
     count_sql = f"""
         SELECT count(*) AS n
           FROM css_neo_consensus.v_membership_wide v
@@ -9447,7 +9434,7 @@ def _consensus_query(include, exclude, hide_all_agree=False,
     with connect() as conn:
         n_total = pd.read_sql(count_sql, conn).iloc[0, 0]
         df = pd.read_sql(detail_sql, conn)
-    return df, int(n_total), auto_cleared_include
+    return df, int(n_total)
 
 
 def _consensus_table(df):
@@ -9561,13 +9548,12 @@ def update_consensus(include, exclude, filter_value):
           f"exclude={exclude!r} hide_all={hide_all_agree}",
           flush=True)
     try:
-        df, n_total, auto_cleared = _consensus_query(
-            include, exclude, hide_all_agree=hide_all_agree)
+        df, n_total = _consensus_query(include, exclude,
+                                       hide_all_agree=hide_all_agree)
     except Exception as e:
         return (f"Query failed: {type(e).__name__}: {e}",
                 html.Div("(no results)", className="subtext"))
-    print(f"[consensus] -> n_total={n_total} returned_rows={len(df)} "
-          f"auto_cleared={auto_cleared}",
+    print(f"[consensus] -> n_total={n_total} returned_rows={len(df)}",
           flush=True)
 
     if n_total == 0:
@@ -9580,11 +9566,6 @@ def update_consensus(include, exclude, filter_value):
                       f"narrow the selection to see them all)")
     if hide_all_agree:
         count_text += "  (only showing objects that do not appear in all lists)"
-    if auto_cleared:
-        count_text += ("  [Include = all six was auto-cleared because "
-                       "it would otherwise contradict the "
-                       "disagreements filter; uncheck the toggle to "
-                       "see the full all-six consensus]")
 
     return count_text, _consensus_table(df)
 
