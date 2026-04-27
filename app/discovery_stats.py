@@ -3136,6 +3136,53 @@ app.layout = html.Div(
                     ],
                 ),
                 # Shared controls
+                # Banner-level NEO source filter (R&D-only). Filters
+                # every NEO-aware tab (Discoveries, Size dist, Multi-
+                # survey, Follow-up, Circumstances) by source
+                # membership from css_neo_consensus.v_membership_wide.
+                # Hidden on the Consensus tab (which has its own
+                # richer filter set). Always present in the layout so
+                # callbacks can reference its id; container hides via
+                # the tabs.value callback.
+                *([html.Div(
+                    id="neo-source-filter-container",
+                    children=[
+                        html.Label("NEO source filter",
+                                   style=LABEL_STYLE),
+                        dcc.Dropdown(
+                            id="neo-source-filter",
+                            options=_NEO_SOURCE_FILTER_OPTIONS,
+                            value="any",
+                            clearable=False,
+                            style={"width": "230px",
+                                   "fontSize": "12px"},
+                        ),
+                        html.Div(
+                            id="neo-source-filter-caption",
+                            className="subtext",
+                            style={"fontSize": "11px",
+                                   "marginTop": "2px",
+                                   "minHeight": "13px"},
+                        ),
+                    ],
+                )] if _RND else [
+                    # Non-rnd: hidden Dropdown so callback Inputs
+                    # binding to it still resolve (returns "any").
+                    html.Div(
+                        style={"display": "none"},
+                        children=[
+                            dcc.Dropdown(
+                                id="neo-source-filter",
+                                options=_NEO_SOURCE_FILTER_OPTIONS,
+                                value="any",
+                            ),
+                            html.Div(
+                                id="neo-source-filter-caption"),
+                            html.Div(
+                                id="neo-source-filter-container"),
+                        ],
+                    ),
+                ]),
                 html.Div(children=[
                     html.Label("Group by", style=LABEL_STYLE),
                     dcc.RadioItems(
@@ -3205,53 +3252,6 @@ app.layout = html.Div(
                                     "cursor": "pointer",
                                 },
                             ),
-                        ],
-                    ),
-                ]),
-                # Banner-level NEO source filter (R&D-only). Filters
-                # every NEO-aware tab (Discoveries, Size dist, Multi-
-                # survey, Follow-up, Circumstances) by source
-                # membership from css_neo_consensus.v_membership_wide.
-                # Hidden on the Consensus tab (which has its own
-                # richer filter set). Always present in the layout so
-                # callbacks can reference its id; container hides via
-                # the tabs.value callback.
-                *([html.Div(
-                    id="neo-source-filter-container",
-                    children=[
-                        html.Label("NEO source filter",
-                                   style=LABEL_STYLE),
-                        dcc.Dropdown(
-                            id="neo-source-filter",
-                            options=_NEO_SOURCE_FILTER_OPTIONS,
-                            value="any",
-                            clearable=False,
-                            style={"width": "230px",
-                                   "fontSize": "12px"},
-                        ),
-                        html.Div(
-                            id="neo-source-filter-caption",
-                            className="subtext",
-                            style={"fontSize": "11px",
-                                   "marginTop": "2px",
-                                   "minHeight": "13px"},
-                        ),
-                    ],
-                )] if _RND else [
-                    # Non-rnd: hidden Dropdown so callback Inputs
-                    # binding to it still resolve (returns "any").
-                    html.Div(
-                        style={"display": "none"},
-                        children=[
-                            dcc.Dropdown(
-                                id="neo-source-filter",
-                                options=_NEO_SOURCE_FILTER_OPTIONS,
-                                value="any",
-                            ),
-                            html.Div(
-                                id="neo-source-filter-caption"),
-                            html.Div(
-                                id="neo-source-filter-container"),
                         ],
                     ),
                 ]),
