@@ -2575,6 +2575,42 @@ _CONSENSUS_TABLE_BOOL_COLS = [
     "in_neocc", "in_neofixer", "in_lowell",
 ]
 
+# Three-way per-source filter: "include" → list must contain the source,
+# "exclude" → list must not, "any" → don't constrain on this source.
+# Single radio per source is mutually exclusive by construction, which
+# avoids the prior bug where the user could put a source in BOTH the
+# Include and Exclude columns simultaneously.
+_CONSENSUS_RADIO_OPTIONS = [
+    {"label": " Include", "value": "include"},
+    {"label": " Exclude", "value": "exclude"},
+    {"label": " Any",     "value": "any"},
+]
+
+
+def _consensus_source_row(source_key, label):
+    """One row of the per-source filter grid: a label and a three-way
+    radio (Include / Exclude / Any). Default is 'any', which means the
+    source does not constrain the result set."""
+    return html.Div(
+        style={"display": "flex", "alignItems": "center",
+               "gap": "12px", "marginBottom": "4px"},
+        children=[
+            html.Span(label,
+                      style={**LABEL_STYLE, "minWidth": "150px"}),
+            dcc.RadioItems(
+                id=f"consensus-radio-{source_key}",
+                options=_CONSENSUS_RADIO_OPTIONS,
+                value="any",
+                inline=True,
+                labelStyle={**RADIO_LABEL_STYLE,
+                            "marginRight": "10px",
+                            "fontSize": "12px"},
+                inputStyle={"marginRight": "3px"},
+            ),
+        ],
+    )
+
+
 # ---------------------------------------------------------------------------
 # Observatory site buttons — sites known to work with NEOfixer ephemeris API
 # ---------------------------------------------------------------------------
@@ -3010,9 +3046,10 @@ app.layout = html.Div(
                                 "(NEA.txt), the broader mpc_orbits q ≤ "
                                 "1.3 view, JPL CNEOS, ESA NEOCC, "
                                 "CSS NEOfixer, and Lowell Observatory's "
-                                "astorb. Pick sources to include / "
-                                "exclude; the table shows matching "
-                                "objects with diagnostic columns. "
+                                "astorb. For each source pick Include, "
+                                "Exclude, or Any — the table shows "
+                                "matching objects with diagnostic "
+                                "columns. "
                                 "Orbit columns (q, e, i, H, u, nopp) "
                                 "come from MPC's mpc_orbits; class "
                                 "falls back to css_utilities."
@@ -3024,53 +3061,42 @@ app.layout = html.Div(
                                 style={"fontSize": "14px",
                                        "marginBottom": "18px"}),
 
-                            # Filter controls (always visible)
+                            # Filter controls. One three-way radio per
+                            # source (Include / Exclude / Either). This
+                            # is structurally cleaner than the prior
+                            # two-checkbox-grid, which let the user put
+                            # the same source in Include AND Exclude.
                             html.Div(
                                 style={"display": "flex", "gap": "30px",
                                        "marginBottom": "16px",
-                                       "flexWrap": "wrap"},
+                                       "flexWrap": "wrap",
+                                       "alignItems": "flex-start"},
                                 children=[
-                                    html.Div(children=[
-                                        html.Label(
-                                            "Include in",
-                                            style={**LABEL_STYLE,
-                                                   "fontWeight": "600"}),
-                                        dcc.Checklist(
-                                            id="consensus-include",
-                                            options=_CONSENSUS_SOURCE_OPTIONS,
-                                            # Default empty: paired with
-                                            # the disagreements-only
-                                            # filter (default-on), this
-                                            # opens the tab on the ~300
-                                            # disagreement rows. Click
-                                            # "All-six consensus" or any
-                                            # source to narrow.
-                                            value=[],
-                                            inline=False,
-                                            labelStyle=RADIO_LABEL_STYLE,
-                                            style=RADIO_STYLE,
-                                        ),
-                                    ]),
-                                    html.Div(children=[
-                                        html.Label(
-                                            "Exclude from",
-                                            style={**LABEL_STYLE,
-                                                   "fontWeight": "600"}),
-                                        dcc.Checklist(
-                                            id="consensus-exclude",
-                                            options=_CONSENSUS_SOURCE_OPTIONS,
-                                            value=[],
-                                            inline=False,
-                                            labelStyle=RADIO_LABEL_STYLE,
-                                            style=RADIO_STYLE,
-                                        ),
-                                    ]),
                                     html.Div(
-                                        style={"alignSelf": "flex-end",
+                                        style={"flex": "1 1 380px",
+                                               "minWidth": "380px"},
+                                        children=[
+                                            html.Label(
+                                                "Filter by source",
+                                                style={**LABEL_STYLE,
+                                                       "fontWeight":
+                                                           "600"}),
+                                            *(
+                                                _consensus_source_row(
+                                                    s,
+                                                    _CONSENSUS_SOURCE_LABELS[s])
+                                                for s in
+                                                _CONSENSUS_SOURCES
+                                            ),
+                                        ],
+                                    ),
+                                    html.Div(
+                                        style={"alignSelf": "flex-start",
                                                "display": "flex",
                                                "flexDirection": "column",
                                                "gap": "8px",
-                                               "minWidth": "230px"},
+                                               "minWidth": "230px",
+                                               "marginTop": "20px"},
                                         children=[
                                             html.Button(
                                                 "All-six consensus",
@@ -3078,15 +3104,23 @@ app.layout = html.Div(
                                                 n_clicks=0,
                                                 style=DOWNLOAD_BTN_STYLE,
                                                 title=(
-                                                    "Include all six "
-                                                    "sources, exclude "
-                                                    "none → strict "
-                                                    "all-agree set")),
+                                                    "Set every source "
+                                                    "to Include and "
+                                                    "untoggle the "
+                                                    "disagreements "
+                                                    "filter — strict "
+                                                    "all-six-agree "
+                                                    "set")),
                                             html.Button(
                                                 "Reset to defaults",
                                                 id="consensus-reset",
                                                 n_clicks=0,
-                                                style=DOWNLOAD_BTN_STYLE),
+                                                style=DOWNLOAD_BTN_STYLE,
+                                                title=(
+                                                    "All sources back "
+                                                    "to Either and the "
+                                                    "disagreements "
+                                                    "filter on.")),
                                             dcc.Checklist(
                                                 id="consensus-filter",
                                                 options=[
@@ -3095,11 +3129,6 @@ app.layout = html.Div(
                                                      "(disagreements only)",
                                                      "value": "hide_all"},
                                                 ],
-                                                # Default ON — the
-                                                # disagreements ARE the
-                                                # interesting data; the
-                                                # all-six set is the
-                                                # null hypothesis.
                                                 value=["hide_all"],
                                                 labelStyle={
                                                     **RADIO_LABEL_STYLE,
@@ -9547,20 +9576,64 @@ def _format_table_rows(df):
     Output("consensus-count", "children"),
     Output("consensus-table", "data"),
     Output("consensus-table", "page_current"),
-    Input("consensus-include", "value"),
-    Input("consensus-exclude", "value"),
+    Output("consensus-radio-mpc", "value"),
+    Output("consensus-radio-mpc_orbits", "value"),
+    Output("consensus-radio-cneos", "value"),
+    Output("consensus-radio-neocc", "value"),
+    Output("consensus-radio-neofixer", "value"),
+    Output("consensus-radio-lowell", "value"),
+    Output("consensus-filter", "value"),
+    Input("consensus-radio-mpc", "value"),
+    Input("consensus-radio-mpc_orbits", "value"),
+    Input("consensus-radio-cneos", "value"),
+    Input("consensus-radio-neocc", "value"),
+    Input("consensus-radio-neofixer", "value"),
+    Input("consensus-radio-lowell", "value"),
     Input("consensus-filter", "value"),
+    Input("consensus-reset", "n_clicks"),
+    Input("consensus-preset-all", "n_clicks"),
 )
-def update_consensus(include, exclude, filter_value):
+def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
+                     r_lowell, filter_value, _reset_clicks, _all_clicks):
+    """Single source of truth for the consensus tab. Reads the six
+    per-source radios + the hide-all-six checklist + the two preset
+    buttons; writes the count, table data, page reset, and (when a
+    button fired) the new radio/checklist values. Bundling everything
+    into one callback removes the prior chaining (button → state →
+    table) where the table-update step was sometimes never triggered.
+    """
+    triggered = ctx.triggered_id
+    if triggered == "consensus-reset":
+        # Reset: every source back to "any", hide-all-six on. With no
+        # source-level constraint, that surfaces the disagreements set.
+        r_mpc = r_mpc_orbits = r_cneos = "any"
+        r_neocc = r_neofixer = r_lowell = "any"
+        filter_value = ["hide_all"]
+    elif triggered == "consensus-preset-all":
+        # Strict all-six-agree set: every source Include, hide-all off.
+        r_mpc = r_mpc_orbits = r_cneos = "include"
+        r_neocc = r_neofixer = r_lowell = "include"
+        filter_value = []
+
+    states = {
+        "mpc": r_mpc, "mpc_orbits": r_mpc_orbits, "cneos": r_cneos,
+        "neocc": r_neocc, "neofixer": r_neofixer, "lowell": r_lowell,
+    }
+    include = [s for s, v in states.items() if v == "include"]
+    exclude = [s for s, v in states.items() if v == "exclude"]
     hide_all_agree = "hide_all" in (filter_value or [])
-    print(f"[consensus] update_consensus include={include!r} "
-          f"exclude={exclude!r} hide_all={hide_all_agree}",
+
+    print(f"[consensus] include={include!r} exclude={exclude!r} "
+          f"hide_all={hide_all_agree} trig={triggered}",
           flush=True)
+
     try:
         df, n_total = _consensus_query(include, exclude,
                                        hide_all_agree=hide_all_agree)
     except Exception as e:
-        return (f"Query failed: {type(e).__name__}: {e}", [], 0)
+        return (f"Query failed: {type(e).__name__}: {e}", [], 0,
+                r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
+                r_lowell, filter_value)
     print(f"[consensus] -> n_total={n_total} returned_rows={len(df)}",
           flush=True)
 
@@ -9573,9 +9646,12 @@ def update_consensus(include, exclude, filter_value):
                       f"(showing first {len(df):,}; "
                       f"narrow the selection to see them all)")
     if hide_all_agree:
-        count_text += "  (only showing objects that do not appear in all lists)"
+        count_text += ("  (only showing objects that do not appear in "
+                       "all lists)")
 
-    return count_text, _format_table_rows(df), 0
+    return (count_text, _format_table_rows(df), 0,
+            r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
+            r_lowell, filter_value)
 
 
 def _load_nea_txt_lookup():
@@ -9665,27 +9741,6 @@ def download_consensus_nea(_n, rows):
                   f"published in NEA.txt.)\n")
         body = header + body
     return dict(content=body, filename="neo_consensus_nea_subset.txt")
-
-
-@app.callback(
-    Output("consensus-include", "value", allow_duplicate=True),
-    Output("consensus-exclude", "value", allow_duplicate=True),
-    Output("consensus-filter", "value", allow_duplicate=True),
-    Input("consensus-reset", "n_clicks"),
-    Input("consensus-preset-all", "n_clicks"),
-    prevent_initial_call=True,
-)
-def reset_consensus_selection(_reset_clicks, _all_clicks):
-    triggered = ctx.triggered_id
-    if triggered == "consensus-reset":
-        # Default landing experience: NO inclusion filter (Include
-        # empty), so the disagreements toggle has the full population
-        # to subtract from. Yields ~300 disagreement rows.
-        return [], [], ["hide_all"]
-    if triggered == "consensus-preset-all":
-        # Strict all-six-agree set: include all six, toggle off.
-        return list(_CONSENSUS_SOURCES), [], []
-    raise PreventUpdate
 
 
 # ---------------------------------------------------------------------------
