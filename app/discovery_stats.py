@@ -9488,6 +9488,13 @@ def _consensus_table(df):
         columns=columns,
         data=display_df.to_dict("records"),
         page_size=50,
+        # Reset pagination on every callback firing. Without this,
+        # Dash preserves page_current across re-renders (since the
+        # id is unchanged), and a user who was on page 5 of a 250-row
+        # result sees an empty page when the filter narrows to 30
+        # rows. Forcing page_current=0 makes the table jump to the
+        # top when the filter changes.
+        page_current=0,
         sort_action="native",
         filter_action="native",
         # virtualization off because we use page_size; on large result
@@ -9537,12 +9544,17 @@ def _consensus_table(df):
 )
 def update_consensus(include, exclude, filter_value):
     hide_all_agree = "hide_all" in (filter_value or [])
+    print(f"[consensus] update_consensus include={include!r} "
+          f"exclude={exclude!r} hide_all={hide_all_agree}",
+          flush=True)
     try:
         df, n_total = _consensus_query(include, exclude,
                                        hide_all_agree=hide_all_agree)
     except Exception as e:
         return (f"Query failed: {type(e).__name__}: {e}",
                 html.Div("(no results)", className="subtext"))
+    print(f"[consensus] -> n_total={n_total} returned_rows={len(df)}",
+          flush=True)
 
     if n_total == 0:
         count_text = "No NEOs match the selection."
