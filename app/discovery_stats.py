@@ -2586,31 +2586,34 @@ _CONSENSUS_TABLE_BOOL_COLS = [
 # avoids the prior bug where the user could put a source in BOTH the
 # Include and Exclude columns simultaneously.
 _CONSENSUS_RADIO_OPTIONS = [
-    {"label": " Include", "value": "include"},
-    {"label": " Exclude", "value": "exclude"},
-    {"label": " Any",     "value": "any"},
+    {"label": " Inc", "value": "include"},
+    {"label": " Exc", "value": "exclude"},
+    {"label": " Any", "value": "any"},
 ]
 
 
 def _consensus_source_row(source_key, label):
     """One row of the per-source filter grid: a label and a three-way
-    radio (Include / Exclude / Any). Default is 'any', which means the
-    source does not constrain the result set."""
+    radio (Inc / Exc / Any). Default is 'any', which means the source
+    does not constrain the result set. flexWrap=nowrap forces label +
+    radio to stay on a single line."""
     return html.Div(
         style={"display": "flex", "alignItems": "center",
-               "gap": "12px", "marginBottom": "4px"},
+               "gap": "10px", "marginBottom": "3px",
+               "flexWrap": "nowrap", "whiteSpace": "nowrap"},
         children=[
             html.Span(label,
-                      style={**LABEL_STYLE, "minWidth": "150px"}),
+                      style={**LABEL_STYLE, "minWidth": "140px",
+                             "flexShrink": "0"}),
             dcc.RadioItems(
                 id=f"consensus-radio-{source_key}",
                 options=_CONSENSUS_RADIO_OPTIONS,
                 value="any",
                 inline=True,
                 labelStyle={**RADIO_LABEL_STYLE,
-                            "marginRight": "10px",
+                            "marginRight": "8px",
                             "fontSize": "12px"},
-                inputStyle={"marginRight": "3px"},
+                inputStyle={"marginRight": "2px"},
             ),
         ],
     )
@@ -2638,19 +2641,21 @@ def _consensus_class_row(class_int, label):
     routing trivial."""
     return html.Div(
         style={"display": "flex", "alignItems": "center",
-               "gap": "12px", "marginBottom": "4px"},
+               "gap": "10px", "marginBottom": "3px",
+               "flexWrap": "nowrap", "whiteSpace": "nowrap"},
         children=[
             html.Span(label,
-                      style={**LABEL_STYLE, "minWidth": "100px"}),
+                      style={**LABEL_STYLE, "minWidth": "85px",
+                             "flexShrink": "0"}),
             dcc.RadioItems(
                 id=f"consensus-class-{class_int}",
                 options=_CONSENSUS_RADIO_OPTIONS,
                 value="any",
                 inline=True,
                 labelStyle={**RADIO_LABEL_STYLE,
-                            "marginRight": "10px",
+                            "marginRight": "8px",
                             "fontSize": "12px"},
-                inputStyle={"marginRight": "3px"},
+                inputStyle={"marginRight": "2px"},
             ),
         ],
     )
@@ -2670,9 +2675,10 @@ _CONSENSUS_NUM_RANGES = (
 
 
 def _consensus_num_range(key, label, lo, hi, step):
-    """Inline label + min input + 'to' + max input."""
+    """Inline label + min input + 'to' + max input. Stacks vertically
+    when placed inside a flexDirection=column container."""
     inp_style = {
-        "width": "70px",
+        "width": "65px",
         "fontSize": "12px",
         "padding": "3px 6px",
         "backgroundColor": "var(--paper-bg, white)",
@@ -2682,10 +2688,12 @@ def _consensus_num_range(key, label, lo, hi, step):
     }
     return html.Div(
         style={"display": "flex", "alignItems": "center",
-               "gap": "6px", "marginBottom": "4px"},
+               "gap": "5px", "marginBottom": "3px",
+               "flexWrap": "nowrap", "whiteSpace": "nowrap"},
         children=[
             html.Span(label,
-                      style={**LABEL_STYLE, "minWidth": "60px"}),
+                      style={**LABEL_STYLE, "minWidth": "55px",
+                             "flexShrink": "0"}),
             dcc.Input(id=f"consensus-{key}-min", type="number",
                       min=lo, max=hi, step=step, debounce=True,
                       placeholder="min", style=inp_style),
@@ -2707,9 +2715,51 @@ _CONSENSUS_DATE_RANGES = (
 )
 
 
+def _consensus_snapshot_counts():
+    """One-shot count of NEOs in any of the six sources vs all six.
+    Runs at module load (each Dash restart, which is daily after the
+    refresh). Returns (any_six, all_six) ints, or (None, None) on
+    error so the UI can degrade gracefully."""
+    try:
+        sql = """
+            SELECT
+                count(*) AS any_six,
+                count(*) FILTER (
+                    WHERE in_mpc AND in_mpc_orbits AND in_cneos
+                      AND in_neocc AND in_neofixer AND in_lowell
+                ) AS all_six
+              FROM css_neo_consensus.v_membership_wide
+        """
+        with connect() as conn:
+            row = pd.read_sql(sql, conn).iloc[0]
+        return int(row["any_six"]), int(row["all_six"])
+    except Exception as e:
+        print(f"[consensus] snapshot stats failed: {e}", flush=True)
+        return None, None
+
+
+_CONSENSUS_ANY_SIX, _CONSENSUS_ALL_SIX = (
+    _consensus_snapshot_counts() if _RND else (None, None)
+)
+
+
+def _consensus_snapshot_text():
+    """Inline summary line. Falls back to a minimal message if the
+    snapshot query failed at startup."""
+    if _CONSENSUS_ANY_SIX is None:
+        return "Snapshot stats unavailable."
+    diff = _CONSENSUS_ANY_SIX - _CONSENSUS_ALL_SIX
+    return [
+        html.Span("Snapshot: ", style={"fontWeight": "600"}),
+        f"{_CONSENSUS_ANY_SIX:,} NEOs in any of the six sources, ",
+        f"{_CONSENSUS_ALL_SIX:,} in all six (",
+        f"{diff:,} disagreements).",
+    ]
+
+
 def _consensus_date_range(key, label):
     inp_style = {
-        "width": "110px",
+        "width": "100px",
         "fontSize": "12px",
         "padding": "3px 6px",
         "backgroundColor": "var(--paper-bg, white)",
@@ -2719,10 +2769,12 @@ def _consensus_date_range(key, label):
     }
     return html.Div(
         style={"display": "flex", "alignItems": "center",
-               "gap": "6px", "marginBottom": "4px"},
+               "gap": "5px", "marginBottom": "3px",
+               "flexWrap": "nowrap", "whiteSpace": "nowrap"},
         children=[
             html.Span(label,
-                      style={**LABEL_STYLE, "minWidth": "80px"}),
+                      style={**LABEL_STYLE, "minWidth": "70px",
+                             "flexShrink": "0"}),
             dcc.Input(id=f"consensus-{key}-min", type="text",
                       debounce=True, placeholder="YYYY-MM-DD",
                       style=inp_style),
@@ -3170,40 +3222,66 @@ app.layout = html.Div(
                                 "(NEA.txt), the broader mpc_orbits q ≤ "
                                 "1.3 view, JPL CNEOS, ESA NEOCC, "
                                 "CSS NEOfixer, and Lowell Observatory's "
-                                "astorb. For each source pick Include, "
-                                "Exclude, or Any — the table shows "
+                                "astorb. For each source pick Inc, "
+                                "Exc, or Any — the table shows "
                                 "matching objects with diagnostic "
                                 "columns. Orbit columns (q, e, i, H, U, "
                                 "Nopp) come from MPC's mpc_orbits; "
-                                "class is always derived from css_"
-                                "utilities.classify_orbit(q, e, i). "
-                                "first_obs / last_obs / arc / n_obs "
-                                "come from the daily-refreshed "
-                                "obs_summary matview.",
+                                "class is from css_utilities."
+                                "classify_orbit(q, e, i). first_obs / "
+                                "last_obs / arc / n_obs come from the "
+                                "daily-refreshed obs_summary matview. "
+                                "Names come from minor_planet_names.",
                                 className="subtext",
                                 style={"fontSize": "14px",
-                                       "marginBottom": "18px"}),
+                                       "marginBottom": "12px"}),
 
-                            # Filter controls. Buttons + the "Hide all-
-                            # six-agree" toggle group on the LEFT;
-                            # per-source three-way radios in the middle
-                            # column; per-class radios + the Numbered
-                            # boolean on the right. Numeric and date
-                            # range inputs go in their own row below.
+                            # Snapshot stats — count of NEOs in
+                            # any source vs all six. Computed once at
+                            # module load (rebuilt on dashboard
+                            # restart, which happens daily after the
+                            # 06:00 MST refresh, so freshness matches
+                            # the underlying source_membership data).
+                            html.Div(
+                                id="consensus-snapshot-stats",
+                                style={"fontSize": "13px",
+                                       "marginBottom": "12px",
+                                       "color": "var(--subtext-color)"},
+                                children=_consensus_snapshot_text(),
+                            ),
+
+                            # Filter controls in four columns:
+                            #   1. Hide-all-six toggle + buttons
+                            #   2. Per-source three-way radios
+                            #   3. Per-class radios + Numbered
+                            #   4. Numeric and date ranges, stacked.
                             html.Div(
                                 style={"display": "flex", "gap": "30px",
                                        "marginBottom": "16px",
                                        "flexWrap": "wrap",
                                        "alignItems": "flex-start"},
                                 children=[
-                                    # ── Left column: buttons + filter toggle
+                                    # ── Col 1: hide-all + buttons
                                     html.Div(
                                         style={"alignSelf": "flex-start",
                                                "display": "flex",
                                                "flexDirection": "column",
                                                "gap": "8px",
-                                               "minWidth": "230px"},
+                                               "minWidth": "210px"},
                                         children=[
+                                            dcc.Checklist(
+                                                id="consensus-filter",
+                                                options=[
+                                                    {"label":
+                                                     " Hide all-six-agree "
+                                                     "(disagreements only)",
+                                                     "value": "hide_all"},
+                                                ],
+                                                value=["hide_all"],
+                                                labelStyle={
+                                                    **RADIO_LABEL_STYLE,
+                                                    "fontSize": "12px"},
+                                            ),
                                             html.Button(
                                                 "All-six consensus",
                                                 id="consensus-preset-all",
@@ -3230,26 +3308,12 @@ app.layout = html.Div(
                                                     "empty, "
                                                     "disagreements "
                                                     "filter on.")),
-                                            dcc.Checklist(
-                                                id="consensus-filter",
-                                                options=[
-                                                    {"label":
-                                                     " Hide all-six-agree "
-                                                     "(disagreements only)",
-                                                     "value": "hide_all"},
-                                                ],
-                                                value=["hide_all"],
-                                                labelStyle={
-                                                    **RADIO_LABEL_STYLE,
-                                                    "fontSize": "12px"},
-                                                style={"marginTop": "6px"},
-                                            ),
                                         ],
                                     ),
-                                    # ── Middle column: source radios
+                                    # ── Col 2: source radios
                                     html.Div(
-                                        style={"flex": "0 1 380px",
-                                               "minWidth": "380px"},
+                                        style={"flex": "0 1 320px",
+                                               "minWidth": "300px"},
                                         children=[
                                             html.Label(
                                                 "Filter by source",
@@ -3265,10 +3329,10 @@ app.layout = html.Div(
                                             ),
                                         ],
                                     ),
-                                    # ── Right column: class radios + Numbered
+                                    # ── Col 3: class radios + Numbered
                                     html.Div(
-                                        style={"flex": "0 1 320px",
-                                               "minWidth": "320px"},
+                                        style={"flex": "0 1 260px",
+                                               "minWidth": "240px"},
                                         children=[
                                             html.Label(
                                                 "Filter by class",
@@ -3285,16 +3349,20 @@ app.layout = html.Div(
                                                 style={"display": "flex",
                                                        "alignItems":
                                                            "center",
-                                                       "gap": "12px",
+                                                       "gap": "10px",
                                                        "marginTop":
-                                                           "10px"},
+                                                           "10px",
+                                                       "flexWrap": "nowrap",
+                                                       "whiteSpace": "nowrap"},
                                                 children=[
                                                     html.Span(
                                                         "Numbered",
                                                         style={
                                                             **LABEL_STYLE,
                                                             "minWidth":
-                                                                "100px"}),
+                                                                "85px",
+                                                            "flexShrink":
+                                                                "0"}),
                                                     dcc.RadioItems(
                                                         id="consensus-numbered",
                                                         options=_CONSENSUS_RADIO_OPTIONS,
@@ -3303,45 +3371,42 @@ app.layout = html.Div(
                                                         labelStyle={
                                                             **RADIO_LABEL_STYLE,
                                                             "marginRight":
-                                                                "10px",
+                                                                "8px",
                                                             "fontSize":
                                                                 "12px"},
                                                         inputStyle={
                                                             "marginRight":
-                                                                "3px"},
+                                                                "2px"},
                                                     ),
                                                 ],
                                             ),
                                         ],
                                     ),
-                                ],
-                            ),
-
-                            # Numeric range row (q, e, i, H, U, Nopp) and
-                            # date range row (first_obs, last_obs).
-                            # Empty inputs mean "no constraint" on that
-                            # side.
-                            html.Div(
-                                style={"display": "flex",
-                                       "flexWrap": "wrap",
-                                       "gap": "20px",
-                                       "marginBottom": "10px"},
-                                children=[
-                                    *(
-                                        _consensus_num_range(*spec)
-                                        for spec in _CONSENSUS_NUM_RANGES
-                                    ),
-                                ],
-                            ),
-                            html.Div(
-                                style={"display": "flex",
-                                       "flexWrap": "wrap",
-                                       "gap": "20px",
-                                       "marginBottom": "16px"},
-                                children=[
-                                    *(
-                                        _consensus_date_range(*spec)
-                                        for spec in _CONSENSUS_DATE_RANGES
+                                    # ── Col 4: numeric + date ranges, stacked
+                                    html.Div(
+                                        style={"flex": "0 1 280px",
+                                               "minWidth": "260px",
+                                               "display": "flex",
+                                               "flexDirection": "column"},
+                                        children=[
+                                            html.Label(
+                                                "Filter by range",
+                                                style={**LABEL_STYLE,
+                                                       "fontWeight":
+                                                           "600"}),
+                                            *(
+                                                _consensus_num_range(*spec)
+                                                for spec in
+                                                _CONSENSUS_NUM_RANGES
+                                            ),
+                                            html.Div(
+                                                style={"height": "8px"}),
+                                            *(
+                                                _consensus_date_range(*spec)
+                                                for spec in
+                                                _CONSENSUS_DATE_RANGES
+                                            ),
+                                        ],
                                     ),
                                 ],
                             ),
@@ -9784,11 +9849,19 @@ def _consensus_query(include, exclude, hide_all_agree=False,
     """
 
     count_sql = base_cte + "SELECT count(*) AS n FROM base"
+    # iau_name is empty in numbered_identifications across the entire
+    # SBN replica (~887K rows, all NULL — the column is a known gap
+    # vs the upstream MPC DB). Names live in public.minor_planet_names
+    # keyed on mp_number TEXT, which matches numbered_identifications.
+    # permid. Coverage on the consensus set is small (~183 of 41K) but
+    # consists of exactly the famous NEOs (Eros, Apophis, Apollo, ...).
     detail_sql = base_cte + f"""
-        SELECT b.*, ni.iau_name
+        SELECT b.*, mpn.name AS iau_name
           FROM base b
           LEFT JOIN public.numbered_identifications ni
             ON ni.packed_primary_provisional_designation = b.packed_desig
+          LEFT JOIN public.minor_planet_names mpn
+            ON mpn.mp_number = ni.permid
          ORDER BY b.primary_desig
          LIMIT {int(limit)}
     """
