@@ -2590,6 +2590,16 @@ _CONSENSUS_RADIO_OPTIONS = [
     {"label": " Exc", "value": "exclude"},
     {"label": " Any", "value": "any"},
 ]
+# Class radios use the same SQL semantics under the hood (include →
+# class IN list; exclude → class NOT IN list) but with "Only" labelling
+# and an auto-flip-to-Exc-on-the-others behavior driven by a clientside
+# callback. Internal value strings stay as include/exclude/any so the
+# server-side _consensus_query handling doesn't fork.
+_CONSENSUS_CLASS_RADIO_OPTIONS = [
+    {"label": " Only", "value": "include"},
+    {"label": " Exc",  "value": "exclude"},
+    {"label": " Any",  "value": "any"},
+]
 
 
 def _consensus_source_row(source_key, label):
@@ -2637,8 +2647,8 @@ _CONSENSUS_CLASS_KEYS = tuple(str(c) for c, _ in _CONSENSUS_CLASSES)
 
 def _consensus_class_row(class_int, label):
     """Three-way radio for one orbit class. Same shape as
-    _consensus_source_row; different ID prefix to keep the callback
-    routing trivial."""
+    _consensus_source_row; uses the Only/Exc/Any label set so the
+    auto-flip-on-Only clientside callback semantics read naturally."""
     return html.Div(
         style={"display": "flex", "alignItems": "center",
                "gap": "10px", "marginBottom": "3px",
@@ -2649,6 +2659,31 @@ def _consensus_class_row(class_int, label):
                              "flexShrink": "0"}),
             dcc.RadioItems(
                 id=f"consensus-class-{class_int}",
+                options=_CONSENSUS_CLASS_RADIO_OPTIONS,
+                value="any",
+                inline=True,
+                labelStyle={**RADIO_LABEL_STYLE,
+                            "marginRight": "8px",
+                            "fontSize": "12px"},
+                inputStyle={"marginRight": "2px"},
+            ),
+        ],
+    )
+
+
+def _consensus_bool_row(radio_id, label):
+    """Single boolean filter (Numbered, Named) — same shape as a
+    source row but bound to a specific id."""
+    return html.Div(
+        style={"display": "flex", "alignItems": "center",
+               "gap": "10px", "marginBottom": "3px",
+               "flexWrap": "nowrap", "whiteSpace": "nowrap"},
+        children=[
+            html.Span(label,
+                      style={**LABEL_STYLE, "minWidth": "85px",
+                             "flexShrink": "0"}),
+            dcc.RadioItems(
+                id=radio_id,
                 options=_CONSENSUS_RADIO_OPTIONS,
                 value="any",
                 inline=True,
@@ -3244,9 +3279,9 @@ app.layout = html.Div(
                             # the underlying source_membership data).
                             html.Div(
                                 id="consensus-snapshot-stats",
+                                className="subtext",
                                 style={"fontSize": "13px",
-                                       "marginBottom": "12px",
-                                       "color": "var(--subtext-color)"},
+                                       "marginBottom": "12px"},
                                 children=_consensus_snapshot_text(),
                             ),
 
@@ -3261,13 +3296,13 @@ app.layout = html.Div(
                                        "flexWrap": "wrap",
                                        "alignItems": "flex-start"},
                                 children=[
-                                    # ── Col 1: hide-all + buttons
+                                    # ── Col 1: hide-all + buttons + date ranges
                                     html.Div(
                                         style={"alignSelf": "flex-start",
                                                "display": "flex",
                                                "flexDirection": "column",
                                                "gap": "8px",
-                                               "minWidth": "210px"},
+                                               "minWidth": "260px"},
                                         children=[
                                             dcc.Checklist(
                                                 id="consensus-filter",
@@ -3308,6 +3343,13 @@ app.layout = html.Div(
                                                     "empty, "
                                                     "disagreements "
                                                     "filter on.")),
+                                            html.Div(style={"height":
+                                                            "8px"}),
+                                            *(
+                                                _consensus_date_range(*spec)
+                                                for spec in
+                                                _CONSENSUS_DATE_RANGES
+                                            ),
                                         ],
                                     ),
                                     # ── Col 2: source radios
@@ -3329,7 +3371,7 @@ app.layout = html.Div(
                                             ),
                                         ],
                                     ),
-                                    # ── Col 3: class radios + Numbered
+                                    # ── Col 3: class radios + Numbered/Named
                                     html.Div(
                                         style={"flex": "0 1 260px",
                                                "minWidth": "240px"},
@@ -3345,47 +3387,18 @@ app.layout = html.Div(
                                                 for c, label in
                                                 _CONSENSUS_CLASSES
                                             ),
-                                            html.Div(
-                                                style={"display": "flex",
-                                                       "alignItems":
-                                                           "center",
-                                                       "gap": "10px",
-                                                       "marginTop":
-                                                           "10px",
-                                                       "flexWrap": "nowrap",
-                                                       "whiteSpace": "nowrap"},
-                                                children=[
-                                                    html.Span(
-                                                        "Numbered",
-                                                        style={
-                                                            **LABEL_STYLE,
-                                                            "minWidth":
-                                                                "85px",
-                                                            "flexShrink":
-                                                                "0"}),
-                                                    dcc.RadioItems(
-                                                        id="consensus-numbered",
-                                                        options=_CONSENSUS_RADIO_OPTIONS,
-                                                        value="any",
-                                                        inline=True,
-                                                        labelStyle={
-                                                            **RADIO_LABEL_STYLE,
-                                                            "marginRight":
-                                                                "8px",
-                                                            "fontSize":
-                                                                "12px"},
-                                                        inputStyle={
-                                                            "marginRight":
-                                                                "2px"},
-                                                    ),
-                                                ],
-                                            ),
+                                            _consensus_bool_row(
+                                                "consensus-numbered",
+                                                "Numbered"),
+                                            _consensus_bool_row(
+                                                "consensus-named",
+                                                "Named"),
                                         ],
                                     ),
-                                    # ── Col 4: numeric + date ranges, stacked
+                                    # ── Col 4: numeric ranges, stacked
                                     html.Div(
-                                        style={"flex": "0 1 280px",
-                                               "minWidth": "260px",
+                                        style={"flex": "0 1 240px",
+                                               "minWidth": "230px",
                                                "display": "flex",
                                                "flexDirection": "column"},
                                         children=[
@@ -3398,13 +3411,6 @@ app.layout = html.Div(
                                                 _consensus_num_range(*spec)
                                                 for spec in
                                                 _CONSENSUS_NUM_RANGES
-                                            ),
-                                            html.Div(
-                                                style={"height": "8px"}),
-                                            *(
-                                                _consensus_date_range(*spec)
-                                                for spec in
-                                                _CONSENSUS_DATE_RANGES
                                             ),
                                         ],
                                     ),
@@ -9734,7 +9740,7 @@ _CONSENSUS_VALID_CLASSES = {c for c, _ in _CONSENSUS_CLASSES}
 
 def _consensus_query(include, exclude, hide_all_agree=False,
                      class_includes=None, class_excludes=None,
-                     numbered="any",
+                     numbered="any", named="any",
                      num_ranges=None, date_ranges=None,
                      limit=_CONSENSUS_TABLE_LIMIT):
     """Query the consensus view + mpc_orbits + obs_summary, filtered
@@ -9793,6 +9799,11 @@ def _consensus_query(include, exclude, hide_all_agree=False,
     elif numbered == "exclude":
         parts.append("v.permid IS NULL")
 
+    if named == "include":
+        parts.append("mpn.name IS NOT NULL")
+    elif named == "exclude":
+        parts.append("mpn.name IS NULL")
+
     for field, bounds in num_ranges.items():
         if field not in _CONSENSUS_NUM_FIELD_SQL or not bounds:
             continue
@@ -9819,6 +9830,13 @@ def _consensus_query(include, exclude, hide_all_agree=False,
     # one row per primary_desig (joins are 1:1 on packed_desig /
     # primary_desig). Both the count and the detail query share this
     # CTE so they apply the same filters.
+    # The minor_planet_names join is in the base CTE so the Named
+    # filter participates in the count. iau_name is empty in
+    # numbered_identifications across the entire SBN replica (~887K
+    # rows, all NULL); names live in public.minor_planet_names keyed
+    # on mp_number TEXT, matching numbered_identifications.permid.
+    # Coverage is small (~183 of 41K NEOs) but consists of the famous
+    # ones (Eros, Apophis, Apollo, Toro, …).
     base_cte = f"""
         WITH base AS (
             SELECT
@@ -9838,31 +9856,25 @@ def _consensus_query(include, exclude, hide_all_agree=False,
                 obs.first_obs,
                 obs.last_obs,
                 obs.arc_days::int AS arc,
-                obs.nobs::int     AS nobs
+                obs.nobs::int     AS nobs,
+                mpn.name          AS iau_name
               FROM css_neo_consensus.v_membership_wide v
               LEFT JOIN public.mpc_orbits mo
                 ON mo.packed_primary_provisional_designation = v.packed_desig
               LEFT JOIN css_neo_consensus.obs_summary obs
                 ON obs.primary_desig = v.primary_desig
+              LEFT JOIN public.numbered_identifications ni
+                ON ni.packed_primary_provisional_designation = v.packed_desig
+              LEFT JOIN public.minor_planet_names mpn
+                ON mpn.mp_number = ni.permid
              WHERE {where_clause}
         )
     """
 
     count_sql = base_cte + "SELECT count(*) AS n FROM base"
-    # iau_name is empty in numbered_identifications across the entire
-    # SBN replica (~887K rows, all NULL — the column is a known gap
-    # vs the upstream MPC DB). Names live in public.minor_planet_names
-    # keyed on mp_number TEXT, which matches numbered_identifications.
-    # permid. Coverage on the consensus set is small (~183 of 41K) but
-    # consists of exactly the famous NEOs (Eros, Apophis, Apollo, ...).
     detail_sql = base_cte + f"""
-        SELECT b.*, mpn.name AS iau_name
-          FROM base b
-          LEFT JOIN public.numbered_identifications ni
-            ON ni.packed_primary_provisional_designation = b.packed_desig
-          LEFT JOIN public.minor_planet_names mpn
-            ON mpn.mp_number = ni.permid
-         ORDER BY b.primary_desig
+        SELECT * FROM base
+         ORDER BY primary_desig
          LIMIT {int(limit)}
     """
     with connect() as conn:
@@ -9913,14 +9925,14 @@ def _format_table_rows(df):
 #          hide_all off (so the all-six-agree set surfaces).
 #
 # Outputs in this order: 6 source radios, 5 class radios, numbered,
-# 6 numeric ranges × 2 (min/max), 2 date ranges × 2, hide_all checklist.
-# Total: 6 + 5 + 1 + 12 + 4 + 1 = 29 outputs.
+# named, 6 numeric ranges × 2, 2 date ranges × 2, hide_all checklist.
+# Total: 6 + 5 + 1 + 1 + 12 + 4 + 1 = 30 outputs.
 app.clientside_callback(
     """
     function(reset_clicks, preset_clicks) {
         const ctx = window.dash_clientside.callback_context;
         if (!ctx.triggered || ctx.triggered.length === 0) {
-            return Array(29).fill(window.dash_clientside.no_update);
+            return Array(30).fill(window.dash_clientside.no_update);
         }
         const trig = ctx.triggered[0].prop_id.split('.')[0];
         const empty_ranges = Array(16).fill(null);
@@ -9929,6 +9941,7 @@ app.clientside_callback(
                 'any','any','any','any','any','any',         // 6 source radios
                 'any','any','any','any','any',                 // 5 class radios
                 'any',                                          // numbered
+                'any',                                          // named
                 ...empty_ranges,                                // 12 num + 4 date
                 ['hide_all']
             ];
@@ -9938,11 +9951,12 @@ app.clientside_callback(
                 'include','include','include','include','include','include',
                 'any','any','any','any','any',
                 'any',
+                'any',
                 ...empty_ranges,
                 []
             ];
         }
-        return Array(29).fill(window.dash_clientside.no_update);
+        return Array(30).fill(window.dash_clientside.no_update);
     }
     """,
     Output("consensus-radio-mpc", "value"),
@@ -9957,6 +9971,7 @@ app.clientside_callback(
     Output("consensus-class-3",  "value"),
     Output("consensus-class-10", "value"),
     Output("consensus-numbered", "value"),
+    Output("consensus-named", "value"),
     Output("consensus-q-min", "value"),
     Output("consensus-q-max", "value"),
     Output("consensus-e-min", "value"),
@@ -9980,6 +9995,45 @@ app.clientside_callback(
 )
 
 
+# Class radio "Only" → auto-flip the other four classes to "Exc".
+# Self-loop is safe here because we only act when the trigger value is
+# 'include' (user picked Only). If the trigger comes from one of our
+# own writes ('exclude' or 'any'), we return no_update and the chain
+# stops. allow_duplicate=True is needed because the same five outputs
+# are written by the buttons clientside_callback above.
+app.clientside_callback(
+    """
+    function(v0, v1, v2, v3, v10) {
+        const ctx = window.dash_clientside.callback_context;
+        if (!ctx.triggered || ctx.triggered.length === 0) {
+            return Array(5).fill(window.dash_clientside.no_update);
+        }
+        if (ctx.triggered[0].value !== 'include') {
+            return Array(5).fill(window.dash_clientside.no_update);
+        }
+        const trig = ctx.triggered[0].prop_id.split('.')[0];
+        // Set the picked one to 'include' (no-op echo) and every other
+        // class radio to 'exclude'.
+        const ids = ['consensus-class-0','consensus-class-1',
+                     'consensus-class-2','consensus-class-3',
+                     'consensus-class-10'];
+        return ids.map(id => id === trig ? 'include' : 'exclude');
+    }
+    """,
+    Output("consensus-class-0",  "value", allow_duplicate=True),
+    Output("consensus-class-1",  "value", allow_duplicate=True),
+    Output("consensus-class-2",  "value", allow_duplicate=True),
+    Output("consensus-class-3",  "value", allow_duplicate=True),
+    Output("consensus-class-10", "value", allow_duplicate=True),
+    Input("consensus-class-0",  "value"),
+    Input("consensus-class-1",  "value"),
+    Input("consensus-class-2",  "value"),
+    Input("consensus-class-3",  "value"),
+    Input("consensus-class-10", "value"),
+    prevent_initial_call=True,
+)
+
+
 @app.callback(
     Output("consensus-count", "children"),
     Output("consensus-table", "data"),
@@ -9996,6 +10050,7 @@ app.clientside_callback(
     Input("consensus-class-3", "value"),
     Input("consensus-class-10", "value"),
     Input("consensus-numbered", "value"),
+    Input("consensus-named", "value"),
     Input("consensus-q-min", "value"),
     Input("consensus-q-max", "value"),
     Input("consensus-e-min", "value"),
@@ -10017,7 +10072,7 @@ app.clientside_callback(
 def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
                      r_lowell,
                      c_atira, c_aten, c_apollo, c_amor, c_marsx,
-                     numbered,
+                     numbered, named,
                      q_min, q_max, e_min, e_max, i_min, i_max,
                      h_min, h_max, u_min, u_max, nopp_min, nopp_max,
                      first_min, first_max, last_min, last_max,
@@ -10048,8 +10103,8 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
 
     print(f"[consensus] inc={include!r} exc={exclude!r} "
           f"cinc={class_includes!r} cexc={class_excludes!r} "
-          f"num={numbered!r} hide_all={hide_all_agree} "
-          f"trig={ctx.triggered_id}",
+          f"num={numbered!r} named={named!r} "
+          f"hide_all={hide_all_agree} trig={ctx.triggered_id}",
           flush=True)
 
     try:
@@ -10059,6 +10114,7 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
             class_includes=class_includes,
             class_excludes=class_excludes,
             numbered=numbered,
+            named=named,
             num_ranges=num_ranges,
             date_ranges=date_ranges,
         )
