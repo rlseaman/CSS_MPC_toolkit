@@ -2547,7 +2547,42 @@ def _make_elongation_hist(dff, color_by, group_by, t, height):
 # ---------------------------------------------------------------------------
 
 app = Dash(__name__, suppress_callback_exceptions=True,
-           title="Planetary Defense Dashboard (βeta)")
+           title="Planetary Defense Dashboard (βeta)",
+           meta_tags=[
+               {"name": "viewport",
+                "content": "width=device-width, initial-scale=1"},
+               {"name": "description",
+                "content": (
+                    "Interactive views of NEO discovery statistics, "
+                    "multi-survey reach, and a cross-source consensus "
+                    "catalog, built on the MPC PostgreSQL replica at "
+                    "the Catalina Sky Survey, University of Arizona.")},
+               {"property": "og:type", "content": "website"},
+               {"property": "og:site_name",
+                "content": "Catalina Sky Survey"},
+               {"property": "og:title",
+                "content": "Planetary Defense Dashboard (βeta)"},
+               {"property": "og:description",
+                "content": (
+                    "NEO discovery statistics, multi-survey reach, "
+                    "and a cross-source consensus catalog from the "
+                    "Catalina Sky Survey.")},
+               {"property": "og:url",
+                "content": "https://hotwireduniverse.org/"},
+               {"property": "og:image",
+                "content": ("https://hotwireduniverse.org/"
+                            "assets/CSS_logo_transparent.png")},
+               {"name": "twitter:card", "content": "summary"},
+               {"name": "twitter:title",
+                "content": "Planetary Defense Dashboard (βeta)"},
+               {"name": "twitter:description",
+                "content": (
+                    "NEO discovery statistics from the Catalina "
+                    "Sky Survey.")},
+               {"name": "twitter:image",
+                "content": ("https://hotwireduniverse.org/"
+                            "assets/CSS_logo_transparent.png")},
+           ])
 server = app.server  # Flask WSGI server for gunicorn deployment
 
 
@@ -5567,23 +5602,32 @@ def _toggle_source_filter_visibility(active_tab):
     return {"display": "none"}
 
 
-# ── Banner-level Group by — show only on tabs whose plots use it ───
-# Wired Input("group-by", "value"): tab-discovery (Discoveries by
-# Year), tab-neomod (size dist), tab-circumstances (sky map / mag /
-# rate / PA). Other tabs ignore the radio so we hide it for clarity.
-_GROUP_BY_TABS = {
-    "tab-discovery", "tab-neomod", "tab-circumstances",
-}
-
-
+# ── Banner-level Group by — show only when it actually affects the
+# active view. Three tabs read Input("group-by"), but two of them
+# have orthogonal controls that override it:
+#   tab-discovery     → size-filter="split" stacks by size class and
+#                       ignores group-by (default state).
+#   tab-circumstances → circ-color-by != "survey" colors by size or
+#                       year and ignores group-by.
+#   tab-neomod        → always uses group-by.
+# Hiding when overridden keeps the banner uncluttered and avoids
+# the "this control does nothing" confusion.
 @app.callback(
     Output("group-by-container", "style"),
     Input("tabs", "value"),
+    Input("size-filter", "value"),
+    Input("circ-color-by", "value"),
 )
-def _toggle_group_by_visibility(active_tab):
-    if active_tab in _GROUP_BY_TABS:
-        return {"display": "block"}
-    return {"display": "none"}
+def _toggle_group_by_visibility(active_tab, size_filter, circ_color_by):
+    show = {"display": "block"}
+    hide = {"display": "none"}
+    if active_tab == "tab-discovery":
+        return show if size_filter != "split" else hide
+    if active_tab == "tab-neomod":
+        return show
+    if active_tab == "tab-circumstances":
+        return show if circ_color_by == "survey" else hide
+    return hide
 
 
 @app.callback(
