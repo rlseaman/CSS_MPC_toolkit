@@ -2547,7 +2547,7 @@ def _make_elongation_hist(dff, color_by, group_by, t, height):
 # ---------------------------------------------------------------------------
 
 app = Dash(__name__, suppress_callback_exceptions=True,
-           title="Planetary Defense Dashboard")
+           title="Planetary Defense Dashboard (βeta)")
 server = app.server  # Flask WSGI server for gunicorn deployment
 
 
@@ -3110,7 +3110,21 @@ app.layout = html.Div(
                     style={"marginRight": "auto"},
                     children=[
                         html.H1(
-                            "Planetary Defense Dashboard",
+                            children=[
+                                "Planetary Defense Dashboard ",
+                                html.Span(
+                                    "(βeta)",
+                                    style={
+                                        "fontFamily":
+                                            "Georgia, 'Times New Roman', serif",
+                                        "fontStyle": "italic",
+                                        "fontWeight": "400",
+                                        "fontSize": "0.7em",
+                                        "opacity": "0.75",
+                                        "marginLeft": "4px",
+                                    },
+                                ),
+                            ],
                             style={"fontFamily": "sans-serif",
                                    "marginBottom": "0", "marginTop": "0"},
                         ),
@@ -3451,7 +3465,7 @@ app.layout = html.Div(
                         html.Div(style={"paddingTop": "15px",
                                         "fontFamily": "sans-serif"},
                                  children=[
-                            html.H2("NEO Consensus (R&D)",
+                            html.H2("NEO Consensus",
                                     style={"fontSize": "20px",
                                            "fontWeight": "600",
                                            "marginBottom": "4px"}),
@@ -5119,6 +5133,95 @@ app.layout = html.Div(
                                              "from that full moon.\n"
                                              "Enter a UTC date/datetime to "
                                              "get CLN + offset.",
+                                    ),
+                                ],
+                            ),
+                        ]),
+                    ],
+                ),
+                # ━━━ Tab: About ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                dcc.Tab(
+                    label="About",
+                    value="tab-about",
+                    className="nav-tab",
+                    selected_className="nav-tab--selected",
+                    children=[
+                        html.Div(style={"paddingTop": "15px",
+                                        "fontFamily": "sans-serif"},
+                                 children=[
+                            html.H2("About this dashboard",
+                                     style={"fontSize": "20px",
+                                            "fontWeight": "600",
+                                            "marginBottom": "4px"}),
+                            html.Div(
+                                "Interactive views of NEO discovery "
+                                "statistics, multi-survey reach, "
+                                "follow-up timing, and the cross-source "
+                                "NEO consensus catalog. Data is rebuilt "
+                                "nightly from the MPC PostgreSQL replica "
+                                "maintained at the Catalina Sky Survey, "
+                                "University of Arizona.",
+                                className="subtext",
+                                style={"fontSize": "13px",
+                                       "marginBottom": "18px",
+                                       "maxWidth": "720px"}),
+                            html.Div(
+                                style={
+                                    "display": "grid",
+                                    "gridTemplateColumns":
+                                        "repeat(auto-fill, minmax(380px, 1fr))",
+                                    "gap": "16px",
+                                },
+                                children=[
+                                    # ── Get in touch ──
+                                    html.Div(
+                                        style={
+                                            "border":
+                                                "1px solid var(--hr-color, #ccc)",
+                                            "borderRadius": "8px",
+                                            "padding": "14px 16px",
+                                            "backgroundColor":
+                                                "var(--paper-bg, white)",
+                                        },
+                                        children=[
+                                            html.Div(
+                                                html.Span(
+                                                    "Get in touch",
+                                                    style={
+                                                        "fontWeight": "600",
+                                                        "fontSize": "14px"}),
+                                                style={"marginBottom": "10px"}),
+                                            html.Div([
+                                                html.Strong("Source code: "),
+                                                html.A(
+                                                    "github.com/rlseaman/"
+                                                    "CSS_MPC_toolkit",
+                                                    href="https://github.com/"
+                                                         "rlseaman/"
+                                                         "CSS_MPC_toolkit",
+                                                    target="_blank",
+                                                    rel="noopener noreferrer",
+                                                ),
+                                            ], style={"fontSize": "13px",
+                                                      "marginBottom": "8px"}),
+                                            html.Div([
+                                                html.Strong("Contact: "),
+                                                html.A(
+                                                    "contact@"
+                                                    "hotwireduniverse.org",
+                                                    href="mailto:contact@"
+                                                         "hotwireduniverse.org",
+                                                ),
+                                            ], style={"fontSize": "13px",
+                                                      "marginBottom": "8px"}),
+                                            html.Div([
+                                                html.Strong("Maintainer: "),
+                                                "Rob Seaman, Catalina Sky "
+                                                "Survey / Lunar & Planetary "
+                                                "Laboratory, University of "
+                                                "Arizona.",
+                                            ], style={"fontSize": "13px"}),
+                                        ],
                                     ),
                                 ],
                             ),
