@@ -70,7 +70,7 @@ sandbox/                      # Analysis notes, exploratory outputs
 
 ## Interactive App (`app/discovery_stats.py`)
 
-Dash web application at http://127.0.0.1:8050/ with eight tabbed pages:
+Dash web application at http://127.0.0.1:8050/ with ten tabbed pages:
 
 ### Tab 0: MPEC Browser
 - Searchable list of recent Minor Planet Electronic Circulars
@@ -87,7 +87,23 @@ Dash web application at http://127.0.0.1:8050/ with eight tabbed pages:
   refresh — it grows monotonically as users browse.
 - Data: live; not part of the parquet-cache pipeline.
 
-### Tab 1: Discoveries by Year
+### Tab 1: NEO Consensus
+- Cross-source membership view of the `css_neo_consensus` schema:
+  per-NEO booleans across MPC NEA.txt, `mpc_orbits` (q ≤ 1.3), JPL
+  CNEOS, ESA NEOCC, CSS NEOfixer, Lowell `astorb`. Highlights
+  agreements / disagreements among the six sources.
+- Filter rows by per-source include / exclude / any, by orbit class,
+  numbered/named status, and several numeric / date ranges. "Reset"
+  and "All-six-agree preset" buttons are clientside.
+- Disagreement-breakdown bar (which source pattern, how many objects)
+  and an UpSet plot beneath the breakdown make pairwise / triple
+  intersections legible at a glance.
+- Snapshot stats card surfaces total / all-six / disagreements counts
+  at a glance.
+- Data: live join on `css_neo_consensus.v_membership_wide` joined
+  against `obs_summary` for first/last/arc/nobs columns.
+
+### Tab 2: Discoveries by Year
 - Stacked bar chart of NEO discoveries by year/survey
 - Grouping: Combined, by Project (CNEOS definitions), or by Station
 - Size class filtering with "Split sizes" mode (viridis-colored
@@ -95,14 +111,14 @@ Dash web application at http://127.0.0.1:8050/ with eight tabbed pages:
 - Annual or cumulative views
 - Secondary row: size distribution histogram + top-15 stations table
 
-### Tab 2: Size Distribution vs. NEOMOD3
+### Tab 3: Size Distribution vs. NEOMOD3
 - Half-magnitude bin chart comparing MPC discoveries to NEOMOD3
   population model (Nesvorny et al. 2024, Icarus 411)
 - Undiscovered remainder bars, completeness curve with 1-sigma errors
 - Differential or cumulative modes
 - NEOMOD3 reference table with per-bin completeness
 
-### Tab 3: Multi-survey Comparison
+### Tab 4: Multi-survey Comparison
 - Venn diagrams (1-3 surveys) showing co-detection during discovery
   apparitions (observations within +/-200 days of discovery)
 - Survey reach bar chart, pairwise co-detection heatmap, summary stats
@@ -110,7 +126,7 @@ Dash web application at http://127.0.0.1:8050/ with eight tabbed pages:
 - Data: `APPARITION_SQL` uses `CROSS JOIN LATERAL` with
   `AS MATERIALIZED` CTEs for indexed scans (~1-2 min query)
 
-### Tab 4: Follow-up Timing
+### Tab 5: Follow-up Timing
 - Response curve (CDF): fraction of NEOs observed by 1st/2nd/3rd
   follow-up survey within N days of discovery
 - Box plots of follow-up time by survey (excludes discoverer's own
@@ -118,7 +134,7 @@ Dash web application at http://127.0.0.1:8050/ with eight tabbed pages:
 - Follow-up network heatmap: discoverer -> first follow-up survey
 - Median follow-up time trend by discovery year with IQR band
 
-### Tab 5: Discovery Circumstances
+### Tab 6: Discovery Circumstances
 - Sky map (RA/Dec scatter) of discovery positions with ecliptic and
   galactic plane overlays; WebGL for ~40K points
 - Apparent V magnitude histogram (band-corrected) at discovery
@@ -128,7 +144,7 @@ Dash web application at http://127.0.0.1:8050/ with eight tabbed pages:
 - Data: `tracklet_obs_all` and `discovery_tracklet_stats` CTEs added
   to `LOAD_SQL`; same ~44K rows, 6 new columns
 
-### Tab 6: Asteroid Classes
+### Tab 7: Asteroid Classes
 - Cross-tabulation of the full `mpc_orbits` catalog (~1.5M objects,
   all classes — not just NEOs) by orbit type and selected attributes.
 - Class grouping: Fine (21), Standard (17), Coarse (7) MPC orbit
@@ -142,7 +158,7 @@ Dash web application at http://127.0.0.1:8050/ with eight tabbed pages:
   identifications join). Same ~1.5M rows that drive boxscore-class
   callbacks elsewhere.
 
-### Tab 7: Tools
+### Tab 8: Tools
 - Standalone calculators and converters for planetary-defense work.
   No data dependencies; all pure Python computation via `lib/`.
 - Currently 10 cards:
@@ -158,6 +174,11 @@ Dash web application at http://127.0.0.1:8050/ with eight tabbed pages:
   conversion primitives the SQL `css_utilities` schema exposes
   server-side.
 
+### Tab 9: About
+- Static project page: short description, GitHub repo link, contact
+  email (`contact@hotwireduniverse.org` via Cloudflare Email Routing),
+  maintainer line. No state, no callbacks.
+
 ### Survey Groupings
 Stations are mapped to project groups via `STATION_TO_PROJECT`:
 - **Catalina Survey** (703, E12, G96) — core CSS telescopes
@@ -170,7 +191,13 @@ Stations are mapped to project groups via `STATION_TO_PROJECT`:
 
 ### Shared Banner Controls
 - CSS logo (linked to catalina.lpl.arizona.edu) at upper left
-- Group by, Plot height, Theme toggle (Light/Dark)
+- NEO sources (filter by membership in MPC / mpc_orbits / CNEOS /
+  NEOCC / NEOfixer / Lowell / all-six / disagreements / any),
+  Group by, Plot height, Theme toggle (Light/Dark)
+- "NEO sources" hides on tabs whose plots don't slice by membership
+  (MPEC, Asteroid Classes, Tools, Consensus, About). "Group by"
+  hides when the active context overrides it (e.g. size-filter=split
+  on Discoveries, color-by≠survey on Circumstances).
 - Reset buttons: "Tab" (resets current tab), "All" (resets all tabs)
 - Per-tab "Download CSV" buttons export currently filtered data
 
@@ -213,11 +240,21 @@ python app/discovery_stats.py --refresh  # force re-query from DB
 ```
 
 ### Production Deployment
-For hosted deployment with daily updates:
-1. Cron job runs `python app/discovery_stats.py --refresh` to
-   repopulate both CSV caches
-2. App process starts and loads both caches instantly (~1s)
-3. Users never wait for database queries
+Public surface at `hotwireduniverse.org` is served from a Mac mini
+(Gizmo) replica via a Cloudflare named tunnel. Dash itself runs
+under launchd (`com.rlseaman.dashboard`, port 8050) behind a
+waitress WSGI server. A daily launchd agent
+(`org.seaman.gizmo-refresh`, 06:00 MST) runs five stages:
+  1. `REFRESH MATERIALIZED VIEW CONCURRENTLY obs_sbn_neo`
+  2. NEO consensus refresh (six sources, best-effort)
+  3. `REFRESH MATERIALIZED VIEW CONCURRENTLY obs_summary`
+  4. `python app/discovery_stats.py --refresh-only` to rebuild
+     parquet caches against today's matview state
+  5. `launchctl kickstart -k` on the Dash plist so the running
+     process picks up the fresh caches (~5 s of 502s while the
+     port rebinds; acceptable for a low-traffic outreach window).
+Total elapsed ~14–16 min in normal operation. See `docs/disaster_recovery.md`
+for what to do if a stage fails.
 
 ## Development Conventions
 
