@@ -46,6 +46,9 @@ from lib.sbdb_moid import load_sbdb_moid_lookup
 from lib.solar import (sun_altitude, classify_twilight,
                        _observer_latitude, TWILIGHT_ORDER)
 from lib.identifications import resolve_designation
+from lib.station_report import (fetch_station_report,
+                                split_neo_non_neo as _split_station_neo,
+                                summarize as _summarize_station)
 from lib.api_clients import (
     fetch_sbdb, fetch_sentry, fetch_neofixer_orbit, fetch_neocc_risk,
     fetch_neofixer_ephem, fetch_neofixer_ades, resolve_mps_url,
@@ -5175,6 +5178,150 @@ app.layout = html.Div(
                         ]),
                     ],
                 ),
+                # ━━━ Tab: Station Report ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                dcc.Tab(
+                    label="Station Report",
+                    value="tab-station",
+                    className="nav-tab",
+                    selected_className="nav-tab--selected",
+                    children=[
+                        html.Div(style={"paddingTop": "15px",
+                                        "fontFamily": "sans-serif"},
+                                 children=[
+                            html.H2("Station Report",
+                                    style={"fontSize": "20px",
+                                           "fontWeight": "600",
+                                           "marginBottom": "4px"}),
+                            html.Div(
+                                "Per-site rollup of observations, "
+                                "tracklets, and discoveries from "
+                                "obs_sbn. NEO vs. non-NEO is computed "
+                                "from current orbital elements via "
+                                "css_utilities.classify_orbit_label, "
+                                "not from the (often-NULL) "
+                                "orbit_type_int column. First query "
+                                "for an active site can take 2-3 "
+                                "minutes; subsequent queries are "
+                                "cached for 24 h.",
+                                className="subtext",
+                                style={"fontSize": "13px",
+                                       "marginBottom": "16px",
+                                       "maxWidth": "780px"}),
+                            # Controls row
+                            html.Div(
+                                style={"display": "flex",
+                                       "gap": "16px",
+                                       "alignItems": "flex-end",
+                                       "marginBottom": "16px",
+                                       "flexWrap": "wrap"},
+                                children=[
+                                    html.Div(children=[
+                                        html.Label("Site code",
+                                                   style=LABEL_STYLE),
+                                        dcc.Input(
+                                            id="station-site",
+                                            type="text",
+                                            value="V00",
+                                            debounce=True,
+                                            style={"width": "100px",
+                                                   "padding": "4px 8px",
+                                                   "fontSize": "13px"},
+                                        ),
+                                    ]),
+                                    html.Div(children=[
+                                        html.Label("From (optional)",
+                                                   style=LABEL_STYLE),
+                                        dcc.Input(
+                                            id="station-date-start",
+                                            type="date",
+                                            value="",
+                                            style={"width": "150px",
+                                                   "padding": "4px 8px",
+                                                   "fontSize": "13px"},
+                                        ),
+                                    ]),
+                                    html.Div(children=[
+                                        html.Label("To (optional)",
+                                                   style=LABEL_STYLE),
+                                        dcc.Input(
+                                            id="station-date-end",
+                                            type="date",
+                                            value="",
+                                            style={"width": "150px",
+                                                   "padding": "4px 8px",
+                                                   "fontSize": "13px"},
+                                        ),
+                                    ]),
+                                    html.Button(
+                                        "Run report",
+                                        id="station-run-btn",
+                                        n_clicks=0,
+                                        style={
+                                            "padding": "6px 16px",
+                                            "fontSize": "13px",
+                                            "fontFamily": "sans-serif",
+                                            "cursor": "pointer",
+                                        },
+                                    ),
+                                ],
+                            ),
+                            # Summary line
+                            html.Div(
+                                "Click 'Run report' to query.",
+                                id="station-summary",
+                                className="subtext",
+                                style={"fontSize": "13px",
+                                       "marginBottom": "16px"}),
+                            # NEO breakdown
+                            html.H3("NEOs",
+                                    style={"fontSize": "16px",
+                                           "fontWeight": "600",
+                                           "marginTop": "20px",
+                                           "marginBottom": "8px"}),
+                            html.Div(id="station-neo-table",
+                                     style={"marginBottom": "8px"}),
+                            html.Button(
+                                "Download NEO CSV",
+                                id="station-neo-dl-btn",
+                                n_clicks=0,
+                                style={"padding": "4px 12px",
+                                       "fontSize": "12px",
+                                       "cursor": "pointer"},
+                            ),
+                            dcc.Download(id="station-neo-dl"),
+                            # Non-NEO breakdown
+                            html.H3("Non-NEOs (incl. Unclassified)",
+                                    style={"fontSize": "16px",
+                                           "fontWeight": "600",
+                                           "marginTop": "24px",
+                                           "marginBottom": "8px"}),
+                            html.Div(id="station-non-neo-table",
+                                     style={"marginBottom": "8px"}),
+                            html.Button(
+                                "Download non-NEO CSV",
+                                id="station-non-neo-dl-btn",
+                                n_clicks=0,
+                                style={"padding": "4px 12px",
+                                       "fontSize": "12px",
+                                       "cursor": "pointer"},
+                            ),
+                            dcc.Download(id="station-non-neo-dl"),
+                            # MPEC stub for Phase 2
+                            html.H3("MPEC publications",
+                                    style={"fontSize": "16px",
+                                           "fontWeight": "600",
+                                           "marginTop": "24px",
+                                           "marginBottom": "8px"}),
+                            html.Div(
+                                "Coming in Phase 2 (ADS API "
+                                "integration). Will list MPECs that "
+                                "include observations from this "
+                                "site, with bibcode and DOI links.",
+                                className="subtext",
+                                style={"fontSize": "13px"}),
+                        ]),
+                    ],
+                ),
                 # ━━━ Tab: About ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
                 dcc.Tab(
                     label="About",
@@ -5618,6 +5765,10 @@ def _get_defaults():
         "tool-cln-date": "",
         "tool-cln-offset": None,
         "tool-cln-tz": 7,
+        # Tab 10 — Station Report
+        "station-site": "V00",
+        "station-date-start": "",
+        "station-date-end": "",
         # Shared
         "group-by": "combined",
         "plot-height": "700",
@@ -5628,6 +5779,8 @@ _TAB_KEYS = {
     "tab-mpec": set(),       # no resettable controls
     "tab-consensus": set(),  # has its own consensus-reset button
     "tab-about": set(),      # static content
+    "tab-station": {"station-site", "station-date-start",
+                    "station-date-end"},
     "tab-discovery": {"year-range", "size-filter", "cumulative-toggle"},
     "tab-neomod": {"h-year-range", "h-range", "h-yscale", "h-mode",
                     "size-mapping", "comp-labels-toggle"},
@@ -5669,6 +5822,7 @@ _RESET_ORDER = [
     "tool-obs80-input", "tool-date-input",
     "tool-airmass-x", "tool-airmass-alt",
     "tool-cln-date", "tool-cln-offset", "tool-cln-tz",
+    "station-site", "station-date-start", "station-date-end",
     "group-by", "plot-height", "neo-source-filter",
 ]
 
@@ -11235,6 +11389,152 @@ def download_consensus_nea(_n, rows):
                   f"published in NEA.txt.)\n")
         body = header + body
     return dict(content=body, filename="neo_consensus_nea_subset.txt")
+
+
+# ---------------------------------------------------------------------------
+# Station Report tab — query, render, downloads
+# ---------------------------------------------------------------------------
+# In-memory cache of the most-recently-fetched station report so the
+# download callbacks don't re-query.  The disk cache in
+# lib.station_report handles cross-session persistence; this dict
+# avoids a re-load even within the same session.
+_station_last_result = {"site": None, "df": None}
+
+
+def _build_station_table(df, table_id_suffix):
+    """Render a per-(year × class) breakdown DataFrame as a DataTable."""
+    if df is None or df.empty:
+        return html.Div("(no rows)", className="subtext",
+                        style={"fontSize": "13px",
+                               "fontStyle": "italic"})
+    columns = [
+        {"name": "Year",         "id": "obs_year"},
+        {"name": "Orbit class",  "id": "orbit_class"},
+        {"name": "Obs",          "id": "obs_count",
+         "type": "numeric",
+         "format": {"specifier": ","}},
+        {"name": "Tracklets",    "id": "tracklet_count",
+         "type": "numeric",
+         "format": {"specifier": ","}},
+        {"name": "Objects",      "id": "object_count",
+         "type": "numeric",
+         "format": {"specifier": ","}},
+        {"name": "Discovery obs", "id": "discovery_obs",
+         "type": "numeric",
+         "format": {"specifier": ","}},
+        {"name": "Discovered objects", "id": "discovery_objects",
+         "type": "numeric",
+         "format": {"specifier": ","}},
+    ]
+    return dash_table.DataTable(
+        id=f"station-table-{table_id_suffix}",
+        data=df.to_dict("records"),
+        columns=columns,
+        page_size=50,
+        sort_action="native",
+        filter_action="native",
+        style_table={"overflowX": "auto"},
+        style_cell={
+            "fontFamily": "sans-serif",
+            "fontSize": "12px",
+            "padding": "4px 8px",
+            "textAlign": "left",
+            "backgroundColor": "transparent",
+            "color": "inherit",
+            "borderColor": "var(--hr-color, #ccc)",
+        },
+        style_cell_conditional=[
+            {"if": {"column_id": c}, "textAlign": "right"}
+            for c in ["obs_count", "tracklet_count", "object_count",
+                      "discovery_obs", "discovery_objects"]
+        ],
+        style_header={
+            "fontWeight": "600",
+            "backgroundColor": "var(--paper-bg, #f5f5f5)",
+            "color": "inherit",
+            "borderBottom": "2px solid var(--hr-color, #999)",
+        },
+        style_filter={
+            "backgroundColor": "transparent",
+            "color": "inherit",
+        },
+    )
+
+
+@app.callback(
+    Output("station-summary", "children"),
+    Output("station-neo-table", "children"),
+    Output("station-non-neo-table", "children"),
+    Input("station-run-btn", "n_clicks"),
+    State("station-site", "value"),
+    State("station-date-start", "value"),
+    State("station-date-end", "value"),
+    prevent_initial_call=True,
+)
+def _run_station_report(_n_clicks, site, date_start, date_end):
+    if not site or not site.strip():
+        return ("Please enter a site code (e.g. V00).", "", "")
+    site = site.strip().upper()
+    try:
+        df = fetch_station_report(
+            site,
+            date_start or None,
+            date_end or None,
+        )
+    except Exception as exc:
+        return (f"Query failed: {exc}", "", "")
+
+    _station_last_result["site"] = site
+    _station_last_result["df"] = df
+
+    if df.empty:
+        return (f"No observations found for site {site}.", "", "")
+
+    neo_df, non_neo_df = _split_station_neo(df)
+    total = _summarize_station(df)
+    neo = _summarize_station(neo_df)
+    non_neo = _summarize_station(non_neo_df)
+
+    summary = (
+        f"Site {site} — {total['obs_count']:,} obs, "
+        f"NEO obs {neo['obs_count']:,} "
+        f"({neo['discovery_obs']:,} discovery), "
+        f"non-NEO obs {non_neo['obs_count']:,} "
+        f"({non_neo['discovery_obs']:,} discovery). "
+        f"Span {total['year_min']}–{total['year_max']}."
+    )
+    return (summary,
+            _build_station_table(neo_df, "neo"),
+            _build_station_table(non_neo_df, "non-neo"))
+
+
+@app.callback(
+    Output("station-neo-dl", "data"),
+    Input("station-neo-dl-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def _station_neo_dl(_n):
+    if _station_last_result["df"] is None:
+        raise PreventUpdate
+    neo_df, _ = _split_station_neo(_station_last_result["df"])
+    site = _station_last_result["site"]
+    return send_data_frame(
+        neo_df.to_csv, f"station_report_{site}_neo.csv", index=False)
+
+
+@app.callback(
+    Output("station-non-neo-dl", "data"),
+    Input("station-non-neo-dl-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def _station_non_neo_dl(_n):
+    if _station_last_result["df"] is None:
+        raise PreventUpdate
+    _, non_neo_df = _split_station_neo(_station_last_result["df"])
+    site = _station_last_result["site"]
+    return send_data_frame(
+        non_neo_df.to_csv,
+        f"station_report_{site}_non_neo.csv", index=False)
 
 
 # ---------------------------------------------------------------------------
