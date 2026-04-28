@@ -1175,7 +1175,6 @@ def _attach_source_membership(df_in, membership):
 
 
 _NEO_SOURCE_FILTER_OPTIONS = [
-    {"label": "All known NEOs (any source)",       "value": "any"},
     {"label": "All-six consensus",                 "value": "all_six"},
     {"label": "MPC NEA.txt",                       "value": "mpc"},
     {"label": "mpc_orbits q ≤ 1.3",                "value": "mpc_orbits"},
@@ -1184,6 +1183,7 @@ _NEO_SOURCE_FILTER_OPTIONS = [
     {"label": "CSS NEOfixer",                      "value": "neofixer"},
     {"label": "Lowell astorb",                     "value": "lowell"},
     {"label": "Disagreements only (NOT all six)",  "value": "disagreements"},
+    {"label": "All known NEOs (any source)",       "value": "any"},
 ]
 _NEO_SOURCE_FILTER_VALID = {opt["value"] for opt in _NEO_SOURCE_FILTER_OPTIONS}
 
@@ -3161,13 +3161,14 @@ app.layout = html.Div(
                 *([html.Div(
                     id="neo-source-filter-container",
                     children=[
-                        html.Label("NEO source filter",
+                        html.Label("NEO sources",
                                    style=LABEL_STYLE),
                         dcc.Dropdown(
                             id="neo-source-filter",
                             options=_NEO_SOURCE_FILTER_OPTIONS,
-                            value="any",
+                            value="all_six",
                             clearable=False,
+                            searchable=False,
                             style={"width": "230px",
                                    "fontSize": "12px"},
                         ),
@@ -3181,14 +3182,14 @@ app.layout = html.Div(
                     ],
                 )] if _RND else [
                     # Non-rnd: hidden Dropdown so callback Inputs
-                    # binding to it still resolve (returns "any").
+                    # binding to it still resolve.
                     html.Div(
                         style={"display": "none"},
                         children=[
                             dcc.Dropdown(
                                 id="neo-source-filter",
                                 options=_NEO_SOURCE_FILTER_OPTIONS,
-                                value="any",
+                                value="all_six",
                             ),
                             html.Div(
                                 id="neo-source-filter-caption"),
@@ -3197,7 +3198,7 @@ app.layout = html.Div(
                         ],
                     ),
                 ]),
-                html.Div(children=[
+                html.Div(id="group-by-container", children=[
                     html.Label("Group by", style=LABEL_STYLE),
                     dcc.RadioItems(
                         id="group-by",
@@ -5150,9 +5151,9 @@ app.layout = html.Div(
                                         "fontFamily": "sans-serif"},
                                  children=[
                             html.H2("About this dashboard",
-                                     style={"fontSize": "20px",
+                                     style={"fontSize": "22px",
                                             "fontWeight": "600",
-                                            "marginBottom": "4px"}),
+                                            "marginBottom": "6px"}),
                             html.Div(
                                 "Interactive views of NEO discovery "
                                 "statistics, multi-survey reach, "
@@ -5162,8 +5163,9 @@ app.layout = html.Div(
                                 "maintained at the Catalina Sky Survey, "
                                 "University of Arizona.",
                                 className="subtext",
-                                style={"fontSize": "13px",
-                                       "marginBottom": "18px",
+                                style={"fontSize": "15px",
+                                       "lineHeight": "1.5",
+                                       "marginBottom": "20px",
                                        "maxWidth": "720px"}),
                             html.Div(
                                 style={
@@ -5189,8 +5191,8 @@ app.layout = html.Div(
                                                     "Get in touch",
                                                     style={
                                                         "fontWeight": "600",
-                                                        "fontSize": "14px"}),
-                                                style={"marginBottom": "10px"}),
+                                                        "fontSize": "16px"}),
+                                                style={"marginBottom": "12px"}),
                                             html.Div([
                                                 html.Strong("Source code: "),
                                                 html.A(
@@ -5202,7 +5204,8 @@ app.layout = html.Div(
                                                     target="_blank",
                                                     rel="noopener noreferrer",
                                                 ),
-                                            ], style={"fontSize": "13px",
+                                            ], style={"fontSize": "15px",
+                                                      "lineHeight": "1.6",
                                                       "marginBottom": "8px"}),
                                             html.Div([
                                                 html.Strong("Contact: "),
@@ -5212,7 +5215,8 @@ app.layout = html.Div(
                                                     href="mailto:contact@"
                                                          "hotwireduniverse.org",
                                                 ),
-                                            ], style={"fontSize": "13px",
+                                            ], style={"fontSize": "15px",
+                                                      "lineHeight": "1.6",
                                                       "marginBottom": "8px"}),
                                             html.Div([
                                                 html.Strong("Maintainer: "),
@@ -5220,7 +5224,8 @@ app.layout = html.Div(
                                                 "Survey / Lunar & Planetary "
                                                 "Laboratory, University of "
                                                 "Arizona.",
-                                            ], style={"fontSize": "13px"}),
+                                            ], style={"fontSize": "15px",
+                                                      "lineHeight": "1.6"}),
                                         ],
                                     ),
                                 ],
@@ -5477,10 +5482,13 @@ def _get_defaults():
         # Shared
         "group-by": "combined",
         "plot-height": "700",
+        "neo-source-filter": "all_six",
     }
 
 _TAB_KEYS = {
-    "tab-mpec": set(),  # no resettable controls
+    "tab-mpec": set(),       # no resettable controls
+    "tab-consensus": set(),  # has its own consensus-reset button
+    "tab-about": set(),      # static content
     "tab-discovery": {"year-range", "size-filter", "cumulative-toggle"},
     "tab-neomod": {"h-year-range", "h-range", "h-yscale", "h-mode",
                     "size-mapping", "comp-labels-toggle"},
@@ -5501,7 +5509,7 @@ _TAB_KEYS = {
                    "tool-airmass-x", "tool-airmass-alt",
                    "tool-cln-date", "tool-cln-offset", "tool-cln-tz"},
 }
-_SHARED_KEYS = {"group-by", "plot-height"}
+_SHARED_KEYS = {"group-by", "plot-height", "neo-source-filter"}
 
 # Output order must match the tuple returned by reset_controls
 _RESET_ORDER = [
@@ -5522,7 +5530,7 @@ _RESET_ORDER = [
     "tool-obs80-input", "tool-date-input",
     "tool-airmass-x", "tool-airmass-alt",
     "tool-cln-date", "tool-cln-offset", "tool-cln-tz",
-    "group-by", "plot-height",
+    "group-by", "plot-height", "neo-source-filter",
 ]
 
 
@@ -5555,6 +5563,25 @@ _NEO_SOURCE_FILTER_TABS = {
 )
 def _toggle_source_filter_visibility(active_tab):
     if active_tab in _NEO_SOURCE_FILTER_TABS:
+        return {"display": "block"}
+    return {"display": "none"}
+
+
+# ── Banner-level Group by — show only on tabs whose plots use it ───
+# Wired Input("group-by", "value"): tab-discovery (Discoveries by
+# Year), tab-neomod (size dist), tab-circumstances (sky map / mag /
+# rate / PA). Other tabs ignore the radio so we hide it for clarity.
+_GROUP_BY_TABS = {
+    "tab-discovery", "tab-neomod", "tab-circumstances",
+}
+
+
+@app.callback(
+    Output("group-by-container", "style"),
+    Input("tabs", "value"),
+)
+def _toggle_group_by_visibility(active_tab):
+    if active_tab in _GROUP_BY_TABS:
         return {"display": "block"}
     return {"display": "none"}
 

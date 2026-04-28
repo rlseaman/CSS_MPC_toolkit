@@ -365,3 +365,17 @@
 #kb-shortcut-overlay div {
     color: inherit !important;
 }
+
+/* ── Anchor links ─────────────────────────────────────────────
+   #5b8def matches the slider/handle accent already used elsewhere.
+   Readable on both light and dark backgrounds — a crisp medium
+   blue rather than the browser default #0000ee that disappears
+   on the dark theme. */
+#page-container a,
+#page-container a:visited {
+    color: #5b8def !important;
+    text-decoration: none;
+}
+#page-container a:hover {
+    text-decoration: underline;
+}
