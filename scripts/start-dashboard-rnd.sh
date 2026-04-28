@@ -7,15 +7,19 @@
 # `dev.hotwireduniverse.org` to localhost:8051; access is gated by a
 # Cloudflare Access policy.
 #
-# Cache files live under app/ and are SHARED with the prod instance.
-# Both processes read the same parquets — the daily refresh writes
-# them once.
+# When invoked from the prod checkout, cache files in app/ are shared
+# with the prod instance via symlinks (or the same checkout). When
+# invoked from a git worktree (e.g. ~/CSS_MPC_toolkit_dev for staging
+# the next release), each worktree carries its own venv and (usually)
+# symlinked caches.
 #
 # Invoked by ~/Library/LaunchAgents/com.rlseaman.dashboard-rnd.plist
 # (KeepAlive=true), so manual launch is rare. For ad-hoc runs:
 #   ./scripts/start-dashboard-rnd.sh
 
-PROJECT_DIR=/Users/robertseaman/CSS_MPC_toolkit
+# Self-locate the project root so the same script works whether it's
+# run from the primary checkout or from a `git worktree` directory.
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 LOGDIR=/Users/robertseaman/Claude/mpc_sbn/logs
 mkdir -p "$LOGDIR"
 LOG="$LOGDIR/dashboard-rnd_$(date +%Y%m%d_%H%M%S).log"
