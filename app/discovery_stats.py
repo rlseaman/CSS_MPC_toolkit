@@ -5265,6 +5265,110 @@ app.layout = html.Div(
                                     ),
                                 ],
                             ),
+                            # ── FAQ card (below the grid) ───────────────
+                            html.Div(
+                                style={
+                                    "border":
+                                        "1px solid var(--hr-color, #ccc)",
+                                    "borderRadius": "8px",
+                                    "padding": "14px 16px",
+                                    "backgroundColor":
+                                        "var(--paper-bg, white)",
+                                    "marginTop": "16px",
+                                    "maxWidth": "720px",
+                                },
+                                children=[
+                                    html.Div(
+                                        html.Span(
+                                            "FAQ",
+                                            style={"fontWeight": "600",
+                                                   "fontSize": "16px"}),
+                                        style={"marginBottom": "12px"}),
+                                    # Q: data freshness
+                                    html.Div([
+                                        html.Strong(
+                                            "How current is the data? "),
+                                        "Caches rebuild nightly at 06:00 "
+                                        "MST from the MPC PostgreSQL "
+                                        "replica, so most views are up "
+                                        "to ~24 hours behind MPC. The "
+                                        "MPEC Browser fetches live."
+                                    ], style={"fontSize": "15px",
+                                              "lineHeight": "1.6",
+                                              "marginBottom": "10px"}),
+                                    # Q: NEO definition
+                                    html.Div([
+                                        html.Strong("What's a NEO here? "),
+                                        "Perihelion distance q ≤ 1.3 AU. "
+                                        "Almost every tab is NEO-only; "
+                                        "Asteroid Classes is the one "
+                                        "exception and shows the full "
+                                        "~1.5M-object catalog."
+                                    ], style={"fontSize": "15px",
+                                              "lineHeight": "1.6",
+                                              "marginBottom": "10px"}),
+                                    # Q: six sources rationale
+                                    html.Div([
+                                        html.Strong(
+                                            "Why six sources side by "
+                                            "side? "),
+                                        "MPC NEA.txt, mpc_orbits, JPL "
+                                        "CNEOS, ESA NEOCC, CSS NEOfixer, "
+                                        "and Lowell astorb each apply "
+                                        "slightly different inclusion "
+                                        "rules (NEOCP candidates, "
+                                        "find_orb cutoffs, recently "
+                                        "delisted objects, …). The "
+                                        "Consensus tab surfaces "
+                                        "agreements and disagreements; "
+                                        "we don't pick a winner."
+                                    ], style={"fontSize": "15px",
+                                              "lineHeight": "1.6",
+                                              "marginBottom": "10px"}),
+                                    # Q: orbit class derivation
+                                    html.Div([
+                                        html.Strong(
+                                            "How are orbit classes "
+                                            "computed? "),
+                                        "Derived from current orbital "
+                                        "elements (q, e, i) using the "
+                                        "MPC's published rules. The "
+                                        "raw orbit_type_int column is "
+                                        "missing for ~35% of objects, "
+                                        "so we don't rely on it."
+                                    ], style={"fontSize": "15px",
+                                              "lineHeight": "1.6",
+                                              "marginBottom": "10px"}),
+                                    # Q: mobile
+                                    html.Div([
+                                        html.Strong(
+                                            "Why does my phone screen "
+                                            "look cramped? "),
+                                        "The dashboard is currently "
+                                        "desktop-oriented. A "
+                                        "mobile-friendly variant is on "
+                                        "the roadmap."
+                                    ], style={"fontSize": "15px",
+                                              "lineHeight": "1.6",
+                                              "marginBottom": "10px"}),
+                                    # Q: contact / report a bug
+                                    html.Div([
+                                        html.Strong(
+                                            "How do I report a bug or "
+                                            "suggest a feature? "),
+                                        "GitHub issues at the repo link "
+                                        "above, or email ",
+                                        html.A(
+                                            "contact@"
+                                            "hotwireduniverse.org",
+                                            href="mailto:contact@"
+                                                 "hotwireduniverse.org",
+                                        ),
+                                        ".",
+                                    ], style={"fontSize": "15px",
+                                              "lineHeight": "1.6"}),
+                                ],
+                            ),
                         ]),
                     ],
                 ),
