@@ -2,7 +2,9 @@
 -- Splits NEOs vs. non-NEOs using *current* mpc_orbits q/e (q ≤ 1.3 AU,
 -- e < 1.0).  Orbit class label is derived live via
 -- css_utilities.classify_orbit_label(q, e, i) — we deliberately do
--- NOT trust mpc_orbits.orbit_type_int, which is NULL for ~35% of rows.
+-- NOT trust mpc_orbits.orbit_type_int, which is NULL for ~35 pct of
+-- rows. (The bare percent sign would otherwise confuse psycopg2's
+-- parameter binder, which doesn't strip SQL comments before reading.)
 --
 -- Parameters:
 --   :site          — IAU obs code ('V00', 'F51', '703', …)
