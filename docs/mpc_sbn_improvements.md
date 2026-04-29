@@ -43,6 +43,45 @@ scans, which dominate analytic queries. Same case applies to
 `created_at` and `updated_at` if you want to support
 "what was submitted/changed in the last N days" queries.
 
+**Implementation notes.** A BRIN stores a `(min, max)` summary per
+range of physical heap pages — default 128 pages (~1 MB of table)
+per range — instead of one entry per row. For 526 M rows, the
+btree on `obstime` is ~10–15 GB; a BRIN with `pages_per_range = 32`
+is on the order of 20 MB, ~1000× smaller. Confirm correlation
+before building:
+
+```sql
+SELECT attname, correlation
+  FROM pg_stats
+ WHERE tablename = 'obs_sbn'
+   AND attname IN ('obstime','created_at','updated_at','stn');
+```
+
+Values close to ±1 → BRIN works well. `obstime` will be near +1
+because logical replication appends in time order. `stn` will be
+near 0 (V00 obs are scattered throughout) — a BRIN on `stn` is
+nearly useless and you want a btree there.
+
+Recommended creation:
+
+```sql
+CREATE INDEX CONCURRENTLY idx_obs_sbn_obstime_brin
+    ON obs_sbn USING BRIN (obstime)
+    WITH (pages_per_range = 32, autosummarize = on);
+```
+
+`CONCURRENTLY` avoids locking `obs_sbn` during the build.
+`pages_per_range = 32` is sensible for narrow date ranges; bump
+higher (default 128) if usage is mostly multi-month.
+`autosummarize = on` keeps the summary current without scheduling
+`brin_summarize_new_values`. Smoke test by running `EXPLAIN
+ANALYZE` on a representative date-range query before and after,
+expecting `Bitmap Heap Scan` + `Bitmap Index Scan on
+idx_obs_sbn_obstime_brin` to replace whatever the planner chose
+prior. The MUG-friendly framing: "we replaced an unused 12 GB
+btree with a 20 MB BRIN and got the queries we actually run
+faster."
+
 ### A2. Multi-column index `(stn, obstime)`
 
 The Station Report query took ~2:30 on V00 (4.5 M rows from the
@@ -57,9 +96,41 @@ rollups generally.
 If `pg_stat_statements` is enabled, you have months of real
 workload data already; it just needs reading. A "top 20 by total
 elapsed time" report tells us where to add indexes guided by actual
-queries rather than guesses. If it isn't enabled, enabling it is a
-postgresql.conf line + a one-time PG restart, after which it
-accumulates silently.
+queries rather than guesses.
+
+**Check (Sibyl first).** Sibyl has been the workhorse for a year+;
+real workload data lives there.
+
+```sql
+SHOW shared_preload_libraries;
+SELECT * FROM pg_available_extensions WHERE name = 'pg_stat_statements';
+SELECT * FROM pg_extension          WHERE extname = 'pg_stat_statements';
+```
+
+- `shared_preload_libraries` lists `pg_stat_statements` AND
+  `pg_extension` has the row → it's recording. Pull top-N by
+  total time directly.
+- Available but not in `shared_preload_libraries` → installed but
+  not loaded; `CREATE EXTENSION` produces empty stubs.
+- Neither set → not present.
+
+**Enable on Gizmo (recommended).**
+
+1. Edit `postgresql.conf`:
+   `shared_preload_libraries = 'pg_stat_statements'`
+   (append to any existing list).
+2. Restart PG. Schedule alongside the daily 06:00 MST refresh —
+   stage 5 already bounces Dash, so a coincident PG restart is
+   invisible to users (~10 s).
+3. `CREATE EXTENSION IF NOT EXISTS pg_stat_statements;` in
+   `mpc_sbn`.
+4. Optionally bump `pg_stat_statements.max` from 5000 to 10000 if
+   you want longer history.
+
+After a week of accumulation, a "top 20 by total time" report on
+either host gives a real-workload index roadmap and a MUG slide:
+"Here's what people actually ask of mpc_sbn, by frequency and
+elapsed time."
 
 ### A4. More targeted matviews
 
@@ -201,3 +272,32 @@ speedups under the hood, all in one announcement.
   MPEC Browser, About).
 - In-process cache reload to eliminate the ~5 s daily 502 window
   during dashboard restart.
+
+## F. Calibrating against real workload — Sibyl SQL examples
+
+Sibyl has been the workhorse for a year+; its accumulated workload
+is the better guide than guesses for what to provision on Gizmo.
+Drop representative `.sql` files into `sql/examples/` (one query
+per file, top-of-file comment about purpose and any known pain).
+The shapes that help most:
+
+- **Recurrent queries** — the same pattern run repeatedly from
+  scripts, notebooks, or operational tools.
+- **Known slow queries** — anywhere you've thought "this should be
+  faster than it is."
+- **Aspirational queries** — things you've wanted to ask of
+  mpc_sbn but skipped because they were too slow or awkward to
+  write.
+
+Five to ten representative queries are enough to:
+
+- Decide which composite indexes are worth the maintenance cost
+  vs. over-indexing the table.
+- Identify what should land in `css_utilities` as a helper
+  function vs. stay client-side.
+- Spot what should become a matview vs. an on-demand query.
+
+Once `pg_stat_statements` is running on Gizmo (and if it's already
+on Sibyl), this curated list is complemented by automatically-
+captured workload data; together they give a much sharper picture
+than either alone.
