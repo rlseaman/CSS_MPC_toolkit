@@ -31,106 +31,142 @@ gated until ADS reconciliation matures.
 
 ## A. Database-level improvements (Gizmo first; Sibyl after operational experience)
 
-Quick wins, 1–3 days each:
+Three of the originally-proposed items below were **measured against
+Gizmo on 2026-04-29** and the picture changed:
 
-### A1. BRIN on `obs_sbn.obstime`
+- BRIN on `obs_sbn.obstime` (A1) is *not viable* on the current
+  layout — correlation between physical row order and `obstime` is
+  effectively zero.
+- The `(stn, obstime)` composite (A2) *already exists* as
+  `idx_obs_stn_time`.
+- `pg_stat_statements` (A3) is *already enabled and recording*; ~17 h
+  of accumulated query time was already on hand. Its top-consumer
+  output surfaced a much higher-impact target: A0.
 
-`obs_sbn` is monotonically appended via logical replication, so
-physical row order is highly correlated with `obstime`. That's the
-sweet spot for a Block Range Index — orders of magnitude smaller
-than a btree (a few MB instead of ~10 GB) and faster for date-range
-scans, which dominate analytic queries. Same case applies to
-`created_at` and `updated_at` if you want to support
-"what was submitted/changed in the last N days" queries.
+A0 is the new top priority. A1–A3 are retained as-was so the
+reasoning behind the original proposal — and what measurement
+revealed — stays in the historical record.
 
-**Implementation notes.** A BRIN stores a `(min, max)` summary per
-range of physical heap pages — default 128 pages (~1 MB of table)
-per range — instead of one entry per row. For 526 M rows, the
-btree on `obstime` is ~10–15 GB; a BRIN with `pages_per_range = 32`
-is on the order of 20 MB, ~1000× smaller. Confirm correlation
-before building:
+### A0. Materialize `css_neo_consensus.v_membership_wide` (highest impact)
 
-```sql
-SELECT attname, correlation
-  FROM pg_stats
- WHERE tablename = 'obs_sbn'
-   AND attname IN ('obstime','created_at','updated_at','stn');
+`pg_stat_statements` on Gizmo (claude_ro user, ~17 h of recorded
+query time) shows a single dominant hot spot:
+
+| total time      | calls | mean   | shape                                              |
+| --------------: | ----: | -----: | -------------------------------------------------- |
+| 13,515 s (~3.7 h) | 27 | 500 s | `css_neo_consensus.v_membership_wide` filtered     |
+|        3,998 s  |   4 | 1000 s | `LOAD_SQL`-shaped CTE (cache rebuild)              |
+|        3,684 s  |   4 |  921 s | `LOAD_SQL`-shaped CTE                              |
+
+**~40 % of total DB time** goes to `v_membership_wide`. It is
+currently a regular view (not a matview), and re-aggregates
+`source_membership` (48 MB, six per-source rollup tables) into one
+row per primary designation on every call. Mean execution time is
+500–750 s for queries that return ~41 K rows.
+
+Converting to a materialized view, refreshed in stage 2 of the
+nightly pipeline (right after `source_membership` is updated),
+collapses each call to a simple scan of a pre-aggregated result.
+Expected impact:
+
+- 500 s mean → a few seconds (sub-second for simple shapes).
+- ~40 % of total DB time recovered.
+- Refresh cost added to stage 2: small — `source_membership` is
+  48 MB and the aggregation is one `GROUP BY`.
+
+This is the single MUG-friendly slide the audit produced: *"by
+materializing the cross-source join, consensus-tab response went
+from ~8 minutes to a few seconds."* Implementation is roughly
+half a day: `CREATE MATERIALIZED VIEW` with the existing view body,
+either point dependent code at the new name or use `ALTER VIEW ...
+RENAME` so the matview can take the original name, then append a
+`REFRESH MATERIALIZED VIEW CONCURRENTLY` line to
+`scripts/refresh_matview_gizmo.sh` stage 2.
+
+### A1. BRIN on `obs_sbn.obstime` — investigated, NOT viable here
+
+Retained for context: this *was* the marquee proposal until
+measurement ruled it out. The reasoning is still useful for future
+decisions on related tables.
+
+A Block Range Index stores a `(min, max)` summary per range of
+physical heap pages (default 128 pages, ~1 MB of table) instead
+of one entry per row. For 526 M rows, the existing btree on
+`obstime` is ~4.2 GB; a BRIN with `pages_per_range = 32` would
+have been on the order of 20 MB — ~200× smaller. The catch is
+that BRIN is *only* useful when physical row order correlates
+with the indexed value; otherwise per-range `(min, max)` summaries
+are too wide to skip pages.
+
+**Measurement (2026-04-29).** `pg_stats` on Gizmo:
+
+```
+attname     correlation
+obstime     -0.009
+created_at   0.082
+updated_at  -0.000032
+stn          0.080
 ```
 
-Values close to ±1 → BRIN works well. `obstime` will be near +1
-because logical replication appends in time order. `stn` will be
-near 0 (V00 obs are scattered throughout) — a BRIN on `stn` is
-nearly useless and you want a btree there.
+Physical heap layout is effectively random with respect to all
+time columns — even `created_at`, which one would expect to track
+insertion order. The likely culprits are past `pg_repack` runs
+and parallel replication workers writing rows from independent
+transactions to wherever the next free page is.
 
-Recommended creation:
+**Verdict: do not build.** With near-zero correlation, BRIN
+page-skip would deliver effectively zero selectivity gain over a
+sequential scan or the existing btree. The 20 MB index would
+cost ~minutes of build time for no measurable speedup.
 
-```sql
-CREATE INDEX CONCURRENTLY idx_obs_sbn_obstime_brin
-    ON obs_sbn USING BRIN (obstime)
-    WITH (pages_per_range = 32, autosummarize = on);
-```
+A periodic `pg_repack --order-by obstime` (or full `CLUSTER`,
+which takes an exclusive lock) would restore correlation and make
+BRIN viable, but on a 526 M-row replicating table that's a heavy
+maintenance event for limited gain over the btree we already have.
 
-`CONCURRENTLY` avoids locking `obs_sbn` during the build.
-`pages_per_range = 32` is sensible for narrow date ranges; bump
-higher (default 128) if usage is mostly multi-month.
-`autosummarize = on` keeps the summary current without scheduling
-`brin_summarize_new_values`. Smoke test by running `EXPLAIN
-ANALYZE` on a representative date-range query before and after,
-expecting `Bitmap Heap Scan` + `Bitmap Index Scan on
-idx_obs_sbn_obstime_brin` to replace whatever the planner chose
-prior. The MUG-friendly framing: "we replaced an unused 12 GB
-btree with a 20 MB BRIN and got the queries we actually run
-faster."
+If we ever build new analytical tables that *are* monotonically
+appended (no repack, no shuffle), BRIN will be on the table again
+— so the design pattern is preserved here, just not applied to
+`obs_sbn` as it stands today.
 
-### A2. Multi-column index `(stn, obstime)`
+### A2. Multi-column index `(stn, obstime)` — already exists
 
-The Station Report query took ~2:30 on V00 (4.5 M rows from the
-indexed `stn` filter, then row-by-row aggregation). A composite
-index on `(stn, obstime)` reduces this to seconds — index seeks
-return only the obs in the right station and date range, in order.
-Same shape benefits follow-up-timing queries and per-station
-rollups generally.
+Confirmed 2026-04-29: `idx_obs_stn_time` (4.5 GB) already covers
+`(stn, obstime)`. Per-station date-range queries (Station Report,
+follow-up timing) get index seeks for the right station + date
+range, in order, regardless of physical heap layout — which is why
+this index works for those queries while BRIN wouldn't have. The
+provisioner of the original index inventory deserves credit; no
+new work needed here. Section retained so future readers know this
+ground was already covered.
 
-### A3. `pg_stat_statements` audit
+### A3. `pg_stat_statements` audit — already running, with findings
 
-If `pg_stat_statements` is enabled, you have months of real
-workload data already; it just needs reading. A "top 20 by total
-elapsed time" report tells us where to add indexes guided by actual
-queries rather than guesses.
+Confirmed 2026-04-29: `pg_stat_statements` is enabled on Gizmo
+(extension version 1.12) and has been accumulating since the
+replica came up — ~17 h of recorded query time across 1,168
+distinct query shapes was already on hand when checked. Top
+consumers are listed under A0 above; the headline finding is that
+~40 % of recorded DB time goes to `v_membership_wide`, motivating
+the A0 matview conversion.
 
-**Check (Sibyl first).** Sibyl has been the workhorse for a year+;
-real workload data lives there.
+To compare against Sibyl (year+ of workload):
 
 ```sql
 SHOW shared_preload_libraries;
 SELECT * FROM pg_available_extensions WHERE name = 'pg_stat_statements';
 SELECT * FROM pg_extension          WHERE extname = 'pg_stat_statements';
+SELECT count(*) AS recorded_queries,
+       round(sum(total_exec_time)/1000) AS total_seconds
+  FROM pg_stat_statements;
 ```
 
-- `shared_preload_libraries` lists `pg_stat_statements` AND
-  `pg_extension` has the row → it's recording. Pull top-N by
-  total time directly.
-- Available but not in `shared_preload_libraries` → installed but
-  not loaded; `CREATE EXTENSION` produces empty stubs.
-- Neither set → not present.
-
-**Enable on Gizmo (recommended).**
-
-1. Edit `postgresql.conf`:
-   `shared_preload_libraries = 'pg_stat_statements'`
-   (append to any existing list).
-2. Restart PG. Schedule alongside the daily 06:00 MST refresh —
-   stage 5 already bounces Dash, so a coincident PG restart is
-   invisible to users (~10 s).
-3. `CREATE EXTENSION IF NOT EXISTS pg_stat_statements;` in
-   `mpc_sbn`.
-4. Optionally bump `pg_stat_statements.max` from 5000 to 10000 if
-   you want longer history.
-
-After a week of accumulation, a "top 20 by total time" report on
-either host gives a real-workload index roadmap and a MUG slide:
-"Here's what people actually ask of mpc_sbn, by frequency and
-elapsed time."
+If Sibyl has it on, comparing the top-N between hosts will tell us
+whether the consensus-view dominance is a Gizmo phenomenon (driven
+by the dashboard) or a workload-shape that exists across both
+replicas. If Sibyl doesn't have it on, enabling there is the same
+recipe (postgresql.conf + restart + `CREATE EXTENSION`) — schedule
+the restart for a quiet maintenance window.
 
 ### A4. More targeted matviews
 
@@ -242,14 +278,17 @@ direction can go.
 
 ## D. Recommended MUG slate (next-week scope)
 
-If we have ~5–7 days of focus before the meeting, the highest-yield
-bundle is a coherent story rather than any one piece:
+Revised 2026-04-29 after the BRIN / pg_stat_statements measurement:
+the index-side "speedup story" is replaced by the matview
+conversion, which has a much stronger before-and-after story
+backed by real workload data.
 
 1. **Dashboard βeta** — already shippable, announce it.
 2. **`mpc_sbn_neo.parquet` snapshot + DuckDB recipe** — the single
    highest-impact "you can use this today" artifact.
-3. **BRIN on `obstime` + composite `(stn, obstime)` index** —
-   measurable performance wins, easy to demo.
+3. **`v_membership_wide` matview conversion** (A0) — measurable,
+   demonstrable speedup backed by `pg_stat_statements` before /
+   after. ~40 % of DB time recovered for cross-source queries.
 4. **2–3 `css_utilities` function additions** (`pack_designation`,
    `unpack_designation`, `is_neo`) — concrete value for psql users.
 5. **One notebook tutorial** that ties them all together: query
@@ -273,31 +312,37 @@ speedups under the hood, all in one announcement.
 - In-process cache reload to eliminate the ~5 s daily 502 window
   during dashboard restart.
 
-## F. Calibrating against real workload — Sibyl SQL examples
+## F. Calibrating against real workload
 
-Sibyl has been the workhorse for a year+; its accumulated workload
-is the better guide than guesses for what to provision on Gizmo.
-Drop representative `.sql` files into `sql/examples/` (one query
-per file, top-of-file comment about purpose and any known pain).
-The shapes that help most:
+`pg_stat_statements` on Gizmo (already running, A3) gives us
+automatic workload signal — top-N by total time, mean time, calls.
+That covers the dashboard's own usage and anything else routed
+through the Gizmo replica.
 
-- **Recurrent queries** — the same pattern run repeatedly from
-  scripts, notebooks, or operational tools.
-- **Known slow queries** — anywhere you've thought "this should be
-  faster than it is."
-- **Aspirational queries** — things you've wanted to ask of
-  mpc_sbn but skipped because they were too slow or awkward to
-  write.
+What it doesn't capture is *Sibyl*'s year+ of workload from
+notebooks, ad-hoc psql sessions, and scripts that never ran on
+Gizmo. To complement the automatic capture:
 
-Five to ten representative queries are enough to:
+- **Check Sibyl** for `pg_stat_statements` (recipe in A3). If on,
+  pull the top-N and compare to Gizmo's profile. Significant
+  divergence tells us where Gizmo's index inventory may be
+  optimized for the dashboard at the expense of other shapes.
+- **Drop representative `.sql` files into `sql/examples/`** — one
+  query per file, top-of-file comment about purpose and any known
+  pain. The shapes that help most:
+  - **Recurrent queries** that script-driven workloads run often.
+  - **Known slow queries** — anywhere you've thought "this should
+    be faster than it is."
+  - **Aspirational queries** — things you've wanted to ask of
+    mpc_sbn but skipped because they were too slow or awkward to
+    write.
 
-- Decide which composite indexes are worth the maintenance cost
-  vs. over-indexing the table.
+Five to ten representative queries — combined with the automatic
+top-N from `pg_stat_statements` — are enough to:
+
+- Decide which (additional) composite indexes are worth the
+  maintenance cost vs. over-indexing the table.
 - Identify what should land in `css_utilities` as a helper
   function vs. stay client-side.
-- Spot what should become a matview vs. an on-demand query.
-
-Once `pg_stat_statements` is running on Gizmo (and if it's already
-on Sibyl), this curated list is complemented by automatically-
-captured workload data; together they give a much sharper picture
-than either alone.
+- Spot what should become a matview vs. an on-demand query (A0
+  is the obvious first such finding).
