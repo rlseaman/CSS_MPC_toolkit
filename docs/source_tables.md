@@ -53,6 +53,7 @@ of a solar system object. This is the largest table in the database.
 | `mag` | numeric | Reported apparent magnitude (nullable) |
 | `band` | text | Photometric band code (e.g., `'V'`, `'G'`, `'o'`) |
 | `disc` | char(1) | Discovery flag: `'*'` marks the discovery observation |
+| `ref`  | text    | Current MPC publication reference for this observation, e.g. `"MPS  2267054"`, `"MPEC 2024-A12"`, `"MPC 12345"` (mutable — see below) |
 
 **Key behaviors:**
 - An object's observations may be stored under `permid` (if numbered),
@@ -61,6 +62,60 @@ of a solar system object. This is the largest table in the database.
   observation by the MPC
 - `trksub` groups observations into tracklets; when NULL, tracklet
   membership cannot be determined from this field alone
+- **`ref` is mutable** and reflects only the *current* publication
+  pointer — see the next subsection.
+
+#### `obs_sbn.ref` is not a permanent publication record
+
+Important gotcha for any "what MPECs has site X been in?" question:
+the `ref` field is **rewritten** when the observation gets republished
+in a Minor Planet Supplement (MPS), which typically happens within
+about a year of the original submission. So an observation that was
+originally announced in `MPEC 2024-A12` (a discovery announcement)
+will, after the next MPS batch, carry the MPS reference instead and
+the MPEC link is lost from `obs_sbn`.
+
+Empirical confirmation, V00 NEO discovery observations as of
+2026-04-29:
+
+| Discovery year | with MPEC ref | with MPS ref | other / none |
+|---:|---:|---:|---:|
+| 2019 |   0 |   5 | 0 |
+| 2020 |   0 |  30 | 0 |
+| 2021 |   0 | 103 | 0 |
+| 2022 |   0 | 212 | 0 |
+| 2023 |   0 | 195 | 0 |
+| 2024 |   0 | 215 | 0 |
+| 2025 |   0 | 351 | 0 |
+| **2026** | **173** | 0 | 0 |
+
+Only the current year retains the original MPEC refs. Everything
+older has been demoted to MPS. By extension, queries like "all
+distinct MPECs that reference this site" return at most a rolling
+~one-year snapshot, not a historical total.
+
+Implications:
+
+- **You can answer current-snapshot questions directly from
+  `obs_sbn.ref`** — what MPECs is this site tagged in *right now*,
+  what's the MPS publication backlog (rows with NULL or empty ref).
+- **You cannot answer historical-MPEC questions from `obs_sbn`
+  alone.** The MPEC archive itself
+  (https://minorplanetcenter.net/iau/lists/MPECs.html and the
+  per-year listings) is the immutable source of truth and the
+  natural reconciliation target; cross-reference by designation +
+  observation date to pair each historical discovery with its
+  announcing MPEC. This is the right path for a "site-publication
+  audit" feature, not snapshotting `ref` daily.
+- **MPS refs *are* persistent** once written — supplements don't get
+  re-published — so the routine-astrometric-publication count
+  (distinct MPS refs per site) is a reliable historical figure.
+- The discovery count itself (`disc = '*'`) is also persistent,
+  even though its associated `ref` rotates. So "number of
+  discovery MPECs" can be approximated as "number of distinct
+  discovery tracklets", under the assumption that nearly every NEO
+  discovery from a major survey generates exactly one announcement
+  MPEC at submission time.
 
 ### numbered_identifications
 
