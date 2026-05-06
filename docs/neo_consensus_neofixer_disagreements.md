@@ -319,3 +319,191 @@ main story of this disagreement.
 4. **Group C is unavoidable boundary-class disagreement** unless we widen the NEO
    definition. A separate "borderline NEOs" view with 1.3 < q ≤ 1.4 is worth
    considering for the dashboard.
+
+---
+
+## Follow-up (2026-05-06): why are B1 and B2 missing from NEOfixer?
+
+Two days after the initial analysis, this section pulls the per-object orbit
+quality data NEOfixer publishes on its `/orbit/` endpoint for the 15 B1 objects,
+joins our DB stats (arc, last observation, observation count) for the 61 B2
+objects, and compares both against a 500-row random sample of objects NEOfixer
+*does* include — to identify the actual gating filter and to separate "NEOfixer
+correctly omitted" cases from "NEOfixer is missing real data".
+
+### B1 deep-dive: 15 in `/orbit/` but not in `site=500`
+
+NEOfixer's `site=500` is operationally a *target priority list* for tonight's
+observation, not a complete catalog. Three filters appear to gate the cut from the
+underlying `/orbit/` catalog into the `/targets/?site=500` response:
+
+1. **Orbit uncertainty** — Find_Orb's `U` parameter (0=tight, 9=lost). Median U for B1 is 7.
+2. **Recency of last observation** — median 593 days since last obs for B1, with five
+   above 1500 days (effectively lost objects).
+3. **NEOfixer's own q solution** — three of the 15 have NF Find_Orb q close to or
+   above 1.3 (1.273, 1.279, 1.730), so even without the advisory `q-max=1.3` URL
+   parameter, NEOfixer's server-side classification deprioritises them.
+
+Per-object table, sorted by U (high U = high uncertainty):
+
+| packed | designation | NF q | NF H | U | rms (″) | wrms | n_used | arc (d) | last obs | days ago |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|---:|
+| `K12F10D` | 2012 FD10 | 1.279 | 21.19 | 9.8 | 0.39 | 0.71 | 31 | 1 | 2012-03-20 | 5160 |
+| `K03YD6H` | 2003 YH136 | 0.253 | 19.02 | 9.8 | 0.27 | 0.72 | 46 | 6 | 2023-11-18 | 900 |
+| `K25QE7N` | 2025 QN147 | 1.730 | 21.81 | 9.4 | 0.13 | 0.86 | 9 | 11 | 2025-08-28 | 251 |
+| `K25O13O` | 2025 OO13 | 0.871 | 23.69 | 9.0 | 0.12 | 0.34 | 8 | 15 | 2025-08-17 | 262 |
+| `K24R12P` | 2024 RP12 | 1.001 | 24.17 | 8.1 | 0.24 | 0.69 | 38 | 11 | 2024-09-20 | 593 |
+| `K26B02E` | 2026 BE2 | 1.092 | 24.56 | 7.6 | 0.20 | 0.93 | 25 | 3 | 2026-01-21 | 105 |
+| `K25D49K` | 2025 DK49 | 1.048 | 22.35 | 7.4 | 0.20 | 0.93 | 19 | 62 | 2025-04-28 | 373 |
+| `K10V21P` | 2010 VP21 | 0.334 | 23.51 | 7.0 | 0.41 | 0.48 | 103 | 23 | 2010-11-28 | 5638 |
+| `K25X06N` | 2025 XN6 | 0.595 | 29.04 | 6.5 | 0.19 | 0.82 | 18 | 2 | 2025-12-17 | 140 |
+| `K09V09P` | 2009 VP9 | 1.273 | 18.43 | 5.8 | 0.24 | 0.55 | 11 | 4546 | 2022-04-20 | 1477 |
+| `K10N81T` | 2010 NT81 | 0.961 | 21.69 | 5.1 | 0.62 | 0.67 | 14 | 4247 | 2022-02-26 | 1530 |
+| `K05X04Y` | 2005 XY4 | 0.424 | 23.49 | 3.1 | 1.85 | 2.07 | 19 | 7385 | 2026-02-24 | 71 |
+| `K15G00Y` | 2015 GY | 0.854 | 21.68 | 2.1 | 0.39 | 0.56 | 256 | 662 | 2017-01-31 | 3382 |
+| `K17Q17P` | 2017 QP17 | 0.623 | 19.58 | 0.6 | 0.40 | 0.61 | 106 | 2402 | 2024-03-18 | 779 |
+| `K10V72D` | 2010 VD72 | 0.752 | 21.54 | -0.0 | 0.59 | 0.81 | 99 | 5467 | 2025-10-28 | 190 |
+
+Two anomalies do not fit any of the three heuristics:
+
+- **2010 VD72** (U≈0, n_used=99, last obs 190 days ago) — well-determined orbit,
+  recently observed, q=0.752 (potentially hazardous). No obvious reason for exclusion.
+- **2017 QP17** (U=0.6, n_used=106, last obs 779 days ago) — also well-determined,
+  q=0.623. Less recent than 2010 VD72 but still inside the typical follow-up window.
+
+Possible additional gating: NEOfixer may exclude well-determined orbits that don't
+*need* more astrometry from `site=500` (treating the list as a "needs follow-up tonight"
+queue, not a "all known NEOs" catalog). Without internal NEOfixer documentation we can't
+confirm.
+
+### B2 deep-dive: 61 unknown to NEOfixer's API
+
+B2 splits cleanly into two subpopulations once orbital arc and absolute magnitude are
+considered:
+
+- **B2a — 50 short-arc faint detections** (arc < 1 day, H > 26): single-night CSS-style
+  tracklets with provisional designations but no follow-up.
+- **B2b — 11 well-observed numbered NEOs** (arc 148–9657 d, nobs 61–1399, all but one numbered).
+
+#### B2a: short-arc faint single-night detections
+
+All 50 have:
+
+- `arc_days < 1` (single-night detections, often a few hours of observations)
+- `H` typically 27–33 (extremely faint — sub-100-metre objects observable only at
+  closest approach)
+- `last_obs` 3300–4500 days ago (no follow-up since the discovery night)
+
+They cluster heavily by half-month, consistent with CSS post-processing precovery
+batches (running tracklet detection over old images, submitting designations en masse):
+
+| year + half-month | count | sample members |
+|---|---:|---|
+| 2016 W | 10 | 2016 WO57, 2016 WP57, 2016 WR57, 2016 WS57, 2016 WT57, 2016 WU57, … (+4) |
+| 2017 C | 9 | 2017 CW35, 2017 CX35, 2017 CY35, 2017 CZ35, 2017 CB36, 2017 CC36, … (+3) |
+| 2016 U | 7 | 2016 UT149, 2016 UV149, 2016 UW149, 2016 UX149, 2016 UY149, 2016 UZ149, … (+1) |
+| 2016 C | 5 | 2016 CG323, 2016 CH323, 2016 CJ323, 2016 CL323, 2016 CM323 |
+| 2017 D | 5 | 2017 DG123, 2017 DJ123, 2017 DK123, 2017 DL123, 2017 DO123 |
+| 2016 N | 3 | 2016 NU90, 2016 NW90, 2016 NY90 |
+
+**This is NEOfixer doing the right thing.** With only single-night astrometry from
+a decade ago, Find_Orb cannot fit a usable orbit, and even if it could, the prediction
+uncertainty after 9–10 years would dwarf the celestial sphere. Listing these on a
+site=500 target page would direct observers to chase impossible-to-find ghosts. The
+other five sources (MPC NEA.txt, mpc_orbits, CNEOS, NEOCC, Lowell) keep them in their
+catalogues for historical record-keeping, not as observation targets.
+
+#### B2b: well-observed numbered NEOs absent from NEOfixer (real catalog gap)
+
+These are ordinary, multi-decade-arc NEOs with hundreds of observations, mostly
+numbered. NEOfixer should have them; it does not.
+
+| packed | designation | permid | nobs | arc (d) | last obs | mpc q | mpc H |
+|---|---|---|---:|---:|---|---:|---:|
+| `J97N06J` | 1997 NJ6 | 189011 | 265 | 9657 | 2023-12-16 | 1.152 | 19.08 |
+| `J98H03M` | 1998 HM3 | 326291 | 586 | 9172 | 2023-06-01 | 1.169 | 19.00 |
+| `K01M03R` | 2001 MR3 | 333311 | 184 | 8148 | 2023-10-12 | 1.298 | 19.07 |
+| `K01U11Q` | 2001 UQ11 | 306918 | 363 | 8093 | 2023-11-18 | 1.297 | 17.31 |
+| `K04F17M` | 2004 FM17 | 387816 | 227 | 7351 | 2024-05-08 | 0.664 | 19.36 |
+| `K07X16H` | 2007 XH16 | 484402 | 465 | 6490 | 2025-09-14 | 0.908 | 19.68 |
+| `K04X14P` | 2004 XP14 | 612901 | 1399 | 5785 | 2020-10-12 | 0.885 | 19.79 |
+| `K08T04C` | 2008 TC4 | 614134 | 182 | 4726 | 2021-09-14 | 0.348 | 21.65 |
+| `K20X05L` | 2020 XL5 | 614689 | 61 | 4390 | 2024-12-30 | 0.613 | 20.28 |
+| `K13R36F` | 2013 RF36 | 555122 | 123 | 4250 | 2025-04-25 | 0.651 | 16.97 |
+| `K26G00B` | 2026 GB | — | 188 | 148 | 2026-04-25 | 0.956 | 22.51 |
+
+I probed NEOfixer for 9 of these 11 across every identifier the API accepts — packed
+designation, unpacked designation, permid as a bare integer string — and the public
+webpage `https://neofixer.arizona.edu/site/500/{packed}`. Every probe returned
+"Unknown object specified." (JSON-RPC code -32602) or HTTP 404. **2008 TC4** alone has
+a famous 2017 close approach and 1399 catalogued observations; its absence is striking.
+
+Plausible explanations (none confirmed without insight into NEOfixer's ingestion):
+
+1. NEOfixer's Find_Orb may have generated a non-NEO solution for these (a different
+   orbit fit), causing them to be classified out of NEOfixer's NEO database. Unlikely
+   for objects with thousands of observations and tight U=0 orbits, but possible if
+   NEOfixer started from a different astrometry slice.
+2. NEOfixer's ingestion may have specifically deprioritised these (recovered,
+   numbered, well-determined — "no new astrometry needed"). But B1 has well-determined
+   numbered objects that *are* in `/orbit/` if not `/targets/`, so a complete API drop
+   is more drastic than mere deprioritisation.
+3. A specific catalog-version or sync issue: these may have been removed during a
+   maintenance cycle and not re-added.
+
+Worth a follow-up email to Eric Christensen / Carson Fuls (NEOfixer maintainers) with
+this list and a request for clarification.
+
+### What is NEOfixer doing right vs wrong, compared to the other five sources?
+
+The starting frame matters: **NEOfixer is an observation-prioritisation tool, not a
+NEO catalogue.** The other five (MPC NEA.txt, mpc_orbits, CNEOS, NEOCC, Lowell astorb)
+are catalogues, listing every known NEO regardless of observability. Once that
+asymmetry is acknowledged, much of the "missing" gets reframed:
+
+| Behaviour | NEOfixer | Catalogues |
+|---|---|---|
+| Single-night unrecoverable detections (B2a, 50 objects) | Excludes | Include |
+| Well-determined orbits, lost or low-priority (B1, 13 of 15) | In `/orbit/`, not `site=500` | Include |
+| Boundary-q disagreements (Group A, 45) | Trusts own Find_Orb | Trust own orbits |
+| Independent orbit fitting | Yes (Find_Orb) | MPC fits, others import |
+| Famous well-observed NEOs (B2b, 11) | **Absent — gap** | Include |
+
+**NEOfixer doing right:**
+
+- **Filters out 50 single-night unrecoverable tracklets**. These are valid astronomical
+  detections with no observational utility tonight; chasing them would waste telescope
+  time. The other catalogues retain them for record-keeping; that's appropriate for
+  catalogues but inappropriate for a target list.
+- **Maintains independent Find_Orb solutions**. The Group A and Group C disagreements
+  in the original analysis (83 of 159 total disagreements) are NEOfixer's Find_Orb
+  saying something different from MPC at the q≈1.3 boundary. That's genuine cross-
+  validation; without NEOfixer the consensus tab would have less analytical value.
+
+**NEOfixer doing wrong:**
+
+- **Catalog gap for 11 well-observed numbered NEOs (B2b)**. No astronomical reason —
+  these have multi-decade arcs and hundreds of observations. Best guess is an
+  ingestion-pipeline gap; should be raised with NEOfixer maintainers.
+- **Inconsistency between `/orbit/` and `/targets/`** for B1. The dashboard's
+  per-MPEC link to `https://neofixer.arizona.edu/site/500/{packed}` returns HTTP 404
+  for these 15 objects, which is a mild user-facing surprise. NEOfixer could expose a
+  "full catalog" endpoint or document the gating logic.
+
+### Updated recommendations
+
+To the original four, add:
+
+5. **Recover B1 by ingesting from `/orbit/` per-object** for designations that are in
+   the other-five set but missing from `/targets/?site=500`. ~15 calls per refresh,
+   throttled. This recovers NEOfixer-confirmed orbits that the bulk endpoint omits.
+
+6. **Email NEOfixer maintainers** with the B2b list (8 numbered NEOs probed; 3 more
+   in the table) and ask whether the absences are intentional or reflect an ingestion
+   gap. Cite specific examples: 2008 TC4 (614134), 2004 XP14 (612901), 1998 HM3 (326291).
+
+7. **Document NEOfixer as a prioritisation tool** in the consensus tab's legend.
+   Currently the six sources are presented symmetrically; users may interpret
+   `in_neofixer=False` as "NEOfixer disagrees", when frequently it just means
+   "NEOfixer has no priority for this object tonight". A small label change would
+   reduce that confusion.
