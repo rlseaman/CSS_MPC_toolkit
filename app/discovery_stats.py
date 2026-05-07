@@ -2731,6 +2731,9 @@ _CONSENSUS_TABLE_COLUMNS = [
     {"name": "NEOCC",         "id": "in_neocc"},
     {"name": "NEOfixer",      "id": "in_neofixer"},
     {"name": "Lowell",        "id": "in_lowell"},
+    {"name": "NF q",          "id": "nf_q"},
+    {"name": "NF NEO%",       "id": "nf_neo_prob"},
+    {"name": "NF U",          "id": "nf_u"},
     {"name": "class",         "id": "class"},
     {"name": "q (AU)",        "id": "q"},
     {"name": "e",             "id": "e"},
@@ -2738,6 +2741,7 @@ _CONSENSUS_TABLE_COLUMNS = [
     {"name": "H",             "id": "h"},
     {"name": "U",             "id": "u_param"},
     {"name": "Nopp",          "id": "nopp"},
+    {"name": "Disc by",       "id": "disc_by"},
     {"name": "first_obs",     "id": "first_obs"},
     {"name": "last_obs",      "id": "last_obs"},
     {"name": "arc (d)",       "id": "arc"},
@@ -9127,10 +9131,29 @@ def enrich_mpec_detail(n_intervals, path, prev_data):
         except Exception:
             packed = ""
 
+    # Look up permid for this object — NEOfixer's /orbit/ endpoint
+    # rejects packed-provisional designations for objects that have been
+    # numbered. We need the permid to reach those records.
+    permid = None
+    if packed:
+        try:
+            with connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT permid FROM public.numbered_identifications "
+                        "WHERE packed_primary_provisional_designation = %s",
+                        (packed,),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        permid = row[0]
+        except Exception:
+            permid = None
+
     # Fetch from APIs (cached with 5-min TTL)
     sbdb = fetch_sbdb(designation) if designation else None
     sentry = fetch_sentry(designation) if designation else None
-    neofixer = fetch_neofixer_orbit(packed) if packed else None
+    neofixer = fetch_neofixer_orbit(packed, permid=permid) if packed else None
     neocc_risk = fetch_neocc_risk(designation) if designation else None
 
     # Track which sources responded (to decide whether to keep polling)
@@ -10455,6 +10478,9 @@ def _consensus_query(include, exclude, hide_all_agree=False,
                 v.packed_desig,
                 v.in_mpc, v.in_mpc_orbits, v.in_cneos,
                 v.in_neocc, v.in_neofixer, v.in_lowell,
+                v.nf_q::float        AS nf_q,
+                v.nf_neo_prob::float AS nf_neo_prob,
+                v.nf_u::float        AS nf_u,
                 css_utilities.classify_orbit(mo.q, mo.e, mo.i)
                     AS orbit_type_int,
                 mo.q::float       AS q,
@@ -10467,6 +10493,7 @@ def _consensus_query(include, exclude, hide_all_agree=False,
                 obs.last_obs,
                 obs.arc_days::int AS arc,
                 obs.nobs::int     AS nobs,
+                obs.disc_by       AS disc_by,
                 mpn.name          AS iau_name
               FROM css_neo_consensus.v_membership_wide v
               LEFT JOIN public.mpc_orbits mo
@@ -10506,15 +10533,19 @@ def _format_table_rows(df):
         display_df[col] = display_df[col].map({True: "✓", False: ""})
     # Round numeric columns for legibility.
     for col, fmt in [("q", "%.4f"), ("e", "%.4f"),
-                     ("i", "%.2f"), ("h", "%.2f")]:
+                     ("i", "%.2f"), ("h", "%.2f"),
+                     ("nf_q", "%.3f"), ("nf_u", "%.2f")]:
         display_df[col] = display_df[col].apply(
             lambda v, f=fmt: f % v if pd.notna(v) else "")
+    # NEOfixer's "neo" probability is 0..100 — render as integer percent.
+    display_df["nf_neo_prob"] = display_df["nf_neo_prob"].apply(
+        lambda v: f"{int(round(v))}" if pd.notna(v) else "")
     # MPC orbit_type_int → short label.
     display_df["class"] = display_df["orbit_type_int"].map(
         _ORBIT_TYPE_LABELS).fillna("")
     # Replace NaN with empty string so the table doesn't render "nan".
     for col in ["iau_name", "permid", "u_param", "nopp", "arc", "nobs",
-                "first_obs", "last_obs"]:
+                "first_obs", "last_obs", "disc_by"]:
         display_df[col] = display_df[col].fillna("").astype(object)
         if col in ("u_param", "nopp", "arc", "nobs"):
             display_df[col] = display_df[col].apply(

@@ -29,7 +29,14 @@ SELECT
     max(o.obstime)::date                              AS last_obs,
     EXTRACT(EPOCH FROM (max(o.obstime)
                       - min(o.obstime))) / 86400.0    AS arc_days,
-    count(*)                                          AS nobs
+    count(*)                                          AS nobs,
+    -- Discovery station: first stn (by obstime) on a discovery row
+    -- (obs_sbn.disc='*'). Tracklets normally carry 2-4 disc='*' rows
+    -- from the same station; min(...) FILTER picks one
+    -- deterministically. NULL when no discovery row is on file (rare:
+    -- some pre-MPC-replication objects have observations recorded
+    -- without disc flags in this replica).
+    min(o.stn) FILTER (WHERE o.disc = '*')            AS disc_by
   FROM (SELECT primary_desig, permid
           FROM css_neo_consensus.v_membership_wide) ct
   JOIN public.obs_sbn o

@@ -208,73 +208,117 @@ def fetch_sentry(designation):
 _NEOFIXER_BASE = "https://neofixerapi.arizona.edu"
 
 
-def fetch_neofixer_orbit(packed_desig):
+def fetch_neofixer_orbit(packed_desig, permid=None):
     """Fetch orbit from NEOfixer API.
 
+    NEOfixer's `/orbit/?object=` accepts a packed designation but, for
+    objects that have been numbered, indexes them under the packed
+    *numbered* form (e.g. ``"z4134"`` for (614134) 2008 TC4) and rejects
+    the packed *provisional* form ``"K08T04C"``. Pass `permid` whenever
+    the caller knows it; we'll prefer the numbered form. Otherwise we
+    try the packed designation as given, then fall back to the unpacked
+    form for objects whose NEOfixer record is keyed by provisional.
+
     Args:
-        packed_desig: MPC packed designation (e.g. "K26C03E")
+        packed_desig: MPC packed designation (e.g. "K26C03E").
+        permid: Optional MPC permanent number ("614134", or int).
+            For numbered NEOs this is what NEOfixer actually keys on.
 
     Returns:
         dict with orbital elements, MOIDs, H, U, RMS, n_obs, or None.
     """
-    encoded = urllib.parse.quote(packed_desig.strip())
-    url = f"{_NEOFIXER_BASE}/orbit/?object={encoded}"
+    from .mpc_convert import pack_designation, unpack_designation
+
+    candidates = []
+    if permid is not None and str(permid).strip():
+        try:
+            candidates.append(pack_designation(str(permid).strip()))
+        except Exception:
+            pass
+    pd_clean = packed_desig.strip() if packed_desig else ""
+    if pd_clean:
+        candidates.append(pd_clean)
+        try:
+            unpacked = unpack_designation(pd_clean)
+            if unpacked and unpacked != pd_clean:
+                candidates.append(unpacked)
+        except Exception:
+            pass
+    # De-duplicate while preserving order.
+    seen = set(); ordered = []
+    for c in candidates:
+        if c and c not in seen:
+            seen.add(c); ordered.append(c)
+    if not ordered:
+        return None
 
     def _fetch():
-        data = _get_json(url)
-        if not data:
-            return None
-        # JSON-RPC wrapper: result.objects.{packed}
-        packed_clean = packed_desig.strip()
-        if isinstance(data, dict) and "result" in data:
-            objects = data["result"].get("objects", {})
-            obj = objects.get(packed_clean)
-            if not obj:
-                return None
-        elif isinstance(data, list) and data:
-            obj = data[0]
-        elif isinstance(data, dict):
-            obj = data
-        else:
-            return None
+        for cand in ordered:
+            url = f"{_NEOFIXER_BASE}/orbit/?object={urllib.parse.quote(cand)}"
+            try:
+                data = _get_json(url)
+            except Exception:
+                continue
+            if not data:
+                continue
+            if isinstance(data, dict) and data.get("error"):
+                # JSON-RPC error (e.g. "Unknown object specified.") — try next.
+                continue
+            if isinstance(data, dict) and "result" in data:
+                objects = data["result"].get("objects", {})
+                if not objects:
+                    continue
+                # NEOfixer returns its canonical key, which may differ from
+                # `cand` (e.g. "2010 VD72" → "K10V72D"). Take whatever it
+                # gives us — there is exactly one object in the response.
+                obj = next(iter(objects.values()))
+            elif isinstance(data, list) and data:
+                obj = data[0]
+            elif isinstance(data, dict):
+                obj = data
+            else:
+                continue
+            return obj
+        return None
 
-        elem = obj.get("elements", {})
-        moids = elem.get("MOIDs", {})
-        obs_info = obj.get("observations", {})
+    raw = _cached(f"neofixer_orbit:{ordered[0]}|{permid or ''}", _fetch)
+    if raw is None:
+        return None
 
-        return {
-            "elements": {
-                "a": _float(elem.get("a")),
-                "e": _float(elem.get("e")),
-                "i": _float(elem.get("i")),
-                "node": _float(elem.get("asc_node")),
-                "peri": _float(elem.get("arg_per")),
-                "M": _float(elem.get("M")),
-                "q": _float(elem.get("q")),
-                "Q": _float(elem.get("Q")),
-                "epoch": elem.get("epoch_iso", ""),
-                "P": _float(elem.get("P")),
-            },
-            "H": _float(elem.get("H")),
-            "G": _float(elem.get("G")),
-            "U": _float(elem.get("U")),
-            "rms": _float(elem.get("rms_residual")),
-            "weighted_rms": _float(elem.get("weighted_rms_residual")),
-            "n_obs": obs_info.get("count", ""),
-            "n_used": obs_info.get("used", ""),
-            "arc_start": obs_info.get("earliest_used iso", ""),
-            "arc_end": obs_info.get("latest_used iso", ""),
-            "earth_moid": _float(moids.get("Earth")),
-            "venus_moid": _float(moids.get("Venus")),
-            "mars_moid": _float(moids.get("Mars")),
-            "jupiter_moid": _float(moids.get("Jupiter")),
-            "neo_prob": _float(obj.get("elements", {}).get("p_NEO")),
-            "orbit_class": "",  # NEOfixer doesn't classify
-            "source": "NEOfixer (Find_Orb)",
-            "_raw": obj,
-        }
-
-    return _cached(f"neofixer_orbit:{packed_desig}", _fetch)
+    elem = raw.get("elements", {})
+    moids = elem.get("MOIDs", {})
+    obs_info = raw.get("observations", {})
+    return {
+        "elements": {
+            "a": _float(elem.get("a")),
+            "e": _float(elem.get("e")),
+            "i": _float(elem.get("i")),
+            "node": _float(elem.get("asc_node")),
+            "peri": _float(elem.get("arg_per")),
+            "M": _float(elem.get("M")),
+            "q": _float(elem.get("q")),
+            "Q": _float(elem.get("Q")),
+            "epoch": elem.get("epoch_iso", ""),
+            "P": _float(elem.get("P")),
+        },
+        "H": _float(elem.get("H")),
+        "G": _float(elem.get("G")),
+        "U": _float(elem.get("U")),
+        "rms": _float(elem.get("rms_residual")),
+        "weighted_rms": _float(elem.get("weighted_rms_residual")),
+        "n_obs": obs_info.get("count", ""),
+        "n_used": obs_info.get("used", ""),
+        "arc_start": obs_info.get("earliest_used iso", ""),
+        "arc_end": obs_info.get("latest_used iso", ""),
+        "earth_moid": _float(moids.get("Earth")),
+        "venus_moid": _float(moids.get("Venus")),
+        "mars_moid": _float(moids.get("Mars")),
+        "jupiter_moid": _float(moids.get("Jupiter")),
+        "neo_prob": _float(elem.get("p_NEO")),
+        "orbit_class": "",  # NEOfixer doesn't classify
+        "source": "NEOfixer (Find_Orb)",
+        "_raw": raw,
+    }
 
 
 def fetch_neofixer_targets(site, packed_desig):

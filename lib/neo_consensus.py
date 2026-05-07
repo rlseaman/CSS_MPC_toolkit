@@ -46,6 +46,12 @@ class Canonical:
     desig_parsed: bool
     orbit_in_mpc: bool
     is_comet: bool
+    # NEOfixer-specific detail fields. Set by the NEOfixer ingestor
+    # only; left None for other sources. Stored alongside the
+    # membership flag so v_membership_wide can surface them.
+    nf_q: Optional[float] = None
+    nf_neo_prob: Optional[float] = None
+    nf_u: Optional[float] = None
 
 
 @contextmanager
@@ -233,6 +239,9 @@ def upsert_membership(
             now,
             now,
             now,
+            c.nf_q,
+            c.nf_neo_prob,
+            c.nf_u,
         )
         for c in canonicals
     ]
@@ -242,7 +251,8 @@ def upsert_membership(
         INSERT INTO css_neo_consensus.source_membership (
             source, primary_desig, packed_desig, permid,
             raw_string, desig_parsed, orbit_in_mpc, is_comet,
-            first_seen, last_seen, last_refreshed
+            first_seen, last_seen, last_refreshed,
+            nf_q, nf_neo_prob, nf_u
         ) VALUES %s
         ON CONFLICT (source, primary_desig) DO UPDATE SET
             packed_desig    = EXCLUDED.packed_desig,
@@ -252,7 +262,10 @@ def upsert_membership(
             orbit_in_mpc    = EXCLUDED.orbit_in_mpc,
             is_comet        = EXCLUDED.is_comet,
             last_seen       = EXCLUDED.last_seen,
-            last_refreshed  = EXCLUDED.last_refreshed
+            last_refreshed  = EXCLUDED.last_refreshed,
+            nf_q            = EXCLUDED.nf_q,
+            nf_neo_prob     = EXCLUDED.nf_neo_prob,
+            nf_u            = EXCLUDED.nf_u
     """
     with conn.cursor() as cur:
         psycopg2.extras.execute_values(cur, sql, rows, page_size=1000)
