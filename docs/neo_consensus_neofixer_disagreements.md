@@ -507,3 +507,134 @@ To the original four, add:
    `in_neofixer=False` as "NEOfixer disagrees", when frequently it just means
    "NEOfixer has no priority for this object tonight". A small label change would
    reduce that confusion.
+
+---
+
+## Correction (2026-05-07): NEOfixer indexes numbered objects by packed *numbered* designation
+
+Yesterday's addendum claimed B2b — 11 well-observed numbered NEOs (2008 TC4, 2004 XP14,
+1998 HM3, etc.) — was a "real catalog gap" in NEOfixer. **That claim was wrong.** Today's
+investigation reveals all 11 are present in NEOfixer's `/orbit/` catalog; my probes
+yesterday used the *provisional* packed designation (e.g. `K08T04C` for 2008 TC4) where
+NEOfixer requires the *numbered* packed designation (`z4134`).
+
+### Discovery
+
+NEOfixer's `/orbit/?object=` endpoint accepts multiple identifier forms but **rejects the
+packed provisional designation for objects that have been numbered**. For 2008 TC4
+(permanent number 614134), only `z4134` (packed numbered) and `2008 TC4` (unpacked) work;
+`K08T04C` returns "Unknown object specified". This is consistent across all 11 objects.
+
+Probe results (today, 2026-05-07):
+
+| object | permid | packed numbered | NF /orbit/ q via numbered key | in /targets/ cache? |
+|---|---:|---|---:|:---:|
+| 2008 TC4  | 614134 | `z4134` | 0.348 | no |
+| 2004 XP14 | 612901 | `z2901` | 0.885 | no |
+| 2007 XH16 | 484402 | `m4402` | 0.908 | no |
+| 1998 HM3  | 326291 | `W6291` | 1.169 | no |
+| 1997 NJ6  | 189011 | `I9011` | 1.152 | no |
+| 2001 MR3  | 333311 | `X3311` | 1.301 | yes priority=none |
+| 2001 UQ11 | 306918 | `U6918` | 1.313 | yes priority=none |
+| 2004 FM17 | 387816 | `c7816` | 0.665 | no |
+| 2013 RF36 | 555122 | `t5122` | 0.643 | no |
+| 2020 XL5  | 614689 | `z4689` | 0.613 | no |
+| 2026 GB   | none   | n/a     | n/a   | no (not in /orbit/ either) |
+
+NEOfixer's cache today (42,427 keys total) splits 38,335 packed-provisional + 3,178
+packed-numbered + 887 short-temporary + 27 comet-or-other. So 7.5% of cache uses the
+numbered key form. Our consensus ingestor's `canonicalize()` does correctly resolve
+numbered keys to the canonical packed designation (verified against the 5 "only-in-
+NEOfixer" boundary cases from yesterday — all are numbered-key cache entries, all of
+which propagated to `in_neofixer=True` correctly). The bug was not in our ingestor; it
+was in **my analysis scripts of yesterday**, which probed the cache and `/orbit/` using
+provisional packed designations only.
+
+### Re-classification of the 11
+
+| object | revised group | reason |
+|---|---|---|
+| 2001 MR3 | **Group A** (in cache, q > 1.3 filtered by our code) | NF q=1.301, neo=0 |
+| 2001 UQ11 | **Group A** | NF q=1.313, neo=0 |
+| 2008 TC4 | **Group B1** (in `/orbit/`, not in `/targets/`) | as `z4134` |
+| 2004 XP14 | **Group B1** | as `z2901` |
+| 2007 XH16 | **Group B1** | as `m4402` |
+| 1998 HM3 | **Group B1** | as `W6291` |
+| 1997 NJ6 | **Group B1** | as `I9011` |
+| 2004 FM17 | **Group B1** | as `c7816` |
+| 2013 RF36 | **Group B1** | as `t5122` |
+| 2020 XL5 | **Group B1** | as `z4689` |
+| 2026 GB | **Group B2** (genuinely not in NEOfixer) | last obs only 12 days ago — likely too recent for ingest |
+
+### Revised totals for the 121 missing-from-NEOfixer
+
+| Group | original | corrected | delta |
+|---|---:|---:|---:|
+| **A.** in cache, q > 1.3 (our q-filter drops) | 45 | **47** | +2 |
+| **B1.** in `/orbit/` but not in `/targets/` | 15 | **23** | +8 |
+| **B2.** genuinely not in NEOfixer | 61 | **51** | −10 |
+| **Total** | 121 | 121 | 0 |
+
+B2 is now almost entirely B2a (50 short-arc unrecoverable single-night CSS detections
+— NEOfixer correctly excludes), plus 2026 GB (recent object, likely just not yet ingested).
+
+### Two further insights from full cache inspection
+
+Inspecting the full `/targets/` cache entries for `X3311` (2001 MR3) and `U6918`
+(2001 UQ11) reveals fields not visible in the abridged dump our ingestor consumes:
+
+- `"neo": 0` — **NEOfixer's own NEO probability is 0%** for these two objects.
+  NEOfixer's Find_Orb gives them q just over 1.3 and classifies them as non-NEO.
+  They appear in `/targets/?site=500` with `priority=none, score=0` because the
+  endpoint returns NEOfixer's broader catalog, not just objects with `neo=100`.
+- For 2010 VD72 and 2017 QP17 (the two B1 anomalies highlighted yesterday), NEOfixer
+  has **two separate orbit fits** — one indexed by packed provisional (`K10V72D`,
+  `K17Q17P`) and one by packed numbered (`~152D`, `~0F9j`). The two fits return
+  slightly different q values (e.g. 0.7518140992121 vs 0.7518141031038 for 2010 VD72),
+  hinting that NEOfixer maintains parallel orbital solutions for the same physical
+  object.
+
+### Mechanism of `/targets/` exclusion
+
+NEOfixer's API documentation at `https://neofixer.arizona.edu/api-info` confirms that
+`/targets/` returns "highest scoring targets first" with scores evaluated against tonight's
+observability. The endpoint accepts dozens of filter parameters (`score-min`, `cost-max`,
+`elong-min`, `numbered`, `mult-opp`, etc.) but lacks any per-object lookup. Probing with
+`?score-min=-99` or `?all=true` does not surface excluded objects, which means the
+exclusion is enforced at the catalog-build step, not at the response-filter step.
+
+NEOfixer offers seven endpoints total: `activity`, `ephem`, `obs`, `orbit`, `report`,
+`targets`, `uncert`. There is no catalog-dump endpoint. The only way to know whether
+NEOfixer has a given object is to probe `/orbit/?object=` with the right identifier.
+
+### Updated recommendations
+
+Recommendations 1–4 (original analysis) and 5–7 (yesterday's addendum) all stand,
+except **withdraw recommendation 6** ("email NEOfixer maintainers about the B2b real
+catalog gap") — there is no such gap.
+
+New recommendations from today's findings:
+
+8. **Audit `lib/api_clients.py:fetch_neofixer_orbit`** for the same packed-provisional
+   bias. The function is called by the MPEC Browser tab to fetch a NEOfixer orbit per
+   MPEC body. For numbered NEOs, the URL `/orbit/?object={packed_provisional}` returns
+   "Unknown object specified". The caller must either supply the packed numbered
+   designation or the unpacked form, or the function must fall back through both.
+
+9. **Surface NEOfixer's `neo` probability field** in the consensus tab. Ingesting and
+   exposing the `neo: 0..100` field would allow disagreements like 2001 MR3
+   (NEOfixer says 0% NEO; MPC NEA, mpc_orbits, CNEOS, NEOCC, Lowell all agree it is
+   a NEO with q ≈ 1.30) to be presented as honest scientific disagreements rather than
+   "NEOfixer is missing this object".
+
+10. **2026 GB tracking**: re-probe in ~30 days. If still absent, ask NEOfixer about
+   ingestion latency for newly-discovered NEOs.
+
+### Note on yesterday's "B2b famous catalog gap" claim
+
+Yesterday's addendum (commit `4a0e36b`) leant heavily on the framing "NEOfixer is
+missing 2008 TC4 — striking absence". That framing is now retracted. The lesson:
+when probing a third-party catalog with a designation that returns "not found", confirm
+the negative across **all common identifier encodings**, not just the one used in our
+local schema. The packed-numbered/packed-provisional split is well-known to MPC
+tooling but I missed it in the original probe sweep.
