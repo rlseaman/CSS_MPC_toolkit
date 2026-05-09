@@ -4564,24 +4564,24 @@ app.layout = html.Div(
                                             style={"width": "180px"},
                                         ),
                                     ]),
-                                    html.Div(
-                                        style={"flex": "1 1 320px"},
-                                        children=[
-                                            html.Label(
-                                                "Sites for bar chart "
-                                                "(blank = top 20)",
-                                                style=LABEL_STYLE),
-                                            dcc.Dropdown(
-                                                id="fuc-site-select",
-                                                options=[],
-                                                value=[],
-                                                multi=True,
-                                                placeholder=(
-                                                    "Type a site code to "
-                                                    "add (e.g. I52, J95)"),
-                                            ),
-                                        ],
-                                    ),
+                                    html.Div(children=[
+                                        html.Label("Color scale",
+                                                   style=LABEL_STYLE),
+                                        dcc.RadioItems(
+                                            id="fuc-cscale",
+                                            options=[
+                                                {"label": " Log",
+                                                 "value": "log"},
+                                                {"label": " Linear",
+                                                 "value": "linear"},
+                                            ],
+                                            value="log",
+                                            inline=True,
+                                            style=RADIO_STYLE,
+                                            labelStyle=
+                                                RADIO_LABEL_STYLE,
+                                        ),
+                                    ]),
                                     html.Div(
                                         style={"alignSelf": "flex-end"},
                                         children=[
@@ -4608,12 +4608,50 @@ app.layout = html.Div(
                                        "marginBottom": "10px",
                                        "fontSize": "12px"},
                             ),
+                            # Stats card
+                            html.Div(
+                                id="fuc-stats",
+                                style={
+                                    "border":
+                                        "1px solid var(--hr-color, #ccc)",
+                                    "borderRadius": "8px",
+                                    "padding": "10px 14px",
+                                    "marginBottom": "12px",
+                                    "fontFamily": "sans-serif",
+                                    "fontSize": "13px",
+                                },
+                            ),
                             dcc.Loading(
                                 type="default",
                                 children=[
                                     dcc.Graph(
                                         id="fuc-world-map",
                                         config=GRAPH_CONFIG),
+                                    # Site selector — sits between map
+                                    # and bar chart per UX request:
+                                    # the bar chart is the thing it
+                                    # controls, so it should live
+                                    # adjacent to it.
+                                    html.Div(
+                                        style={"marginTop": "12px",
+                                               "marginBottom": "8px",
+                                               "maxWidth": "640px"},
+                                        children=[
+                                            html.Label(
+                                                "Sites for bar chart "
+                                                "(blank = top 20)",
+                                                style=LABEL_STYLE),
+                                            dcc.Dropdown(
+                                                id="fuc-site-select",
+                                                options=[],
+                                                value=[],
+                                                multi=True,
+                                                placeholder=(
+                                                    "Type a site code to "
+                                                    "add (e.g. I52, J95)"),
+                                            ),
+                                        ],
+                                    ),
                                     dcc.Graph(
                                         id="fuc-bar",
                                         config=GRAPH_CONFIG),
@@ -5647,6 +5685,110 @@ app.layout = html.Div(
                                                       "lineHeight": "1.6"}),
                                         ],
                                     ),
+                                    # ── Release notes ──
+                                    html.Div(
+                                        style={
+                                            "border":
+                                                "1px solid var(--hr-color, #ccc)",
+                                            "borderRadius": "8px",
+                                            "padding": "14px 16px",
+                                            "backgroundColor":
+                                                "var(--paper-bg, white)",
+                                        },
+                                        children=[
+                                            html.Div(
+                                                html.Span(
+                                                    "Release notes",
+                                                    style={
+                                                        "fontWeight": "600",
+                                                        "fontSize": "16px"}),
+                                                style={"marginBottom":
+                                                       "12px"}),
+                                            html.Ul(
+                                                style={"fontSize": "14px",
+                                                       "lineHeight": "1.55",
+                                                       "paddingLeft":
+                                                           "18px",
+                                                       "margin": "0"},
+                                                children=[
+                                                    html.Li([
+                                                        html.Strong(
+                                                            "2026-05-09 — "),
+                                                        "Follow-up "
+                                                        "Comparison tab "
+                                                        "(Phase 1) lands "
+                                                        "on dev: world "
+                                                        "map of MPC "
+                                                        "obscodes, "
+                                                        "selectable "
+                                                        "projection, "
+                                                        "log/linear "
+                                                        "color-by-NEO-"
+                                                        "count, "
+                                                        "follow-up "
+                                                        "window selector "
+                                                        "(1 d / 1 wk / "
+                                                        "1 lunation / "
+                                                        "100 d / 200 d), "
+                                                        "post-discovery vs "
+                                                        "include-"
+                                                        "precoveries "
+                                                        "toggle.",
+                                                    ]),
+                                                    html.Li([
+                                                        html.Strong(
+                                                            "2026-05-07 — "),
+                                                        "NEO Consensus: "
+                                                        "smarter NEOfixer "
+                                                        "rule (smart q-"
+                                                        "rule keeps long-"
+                                                        "arc divergences, "
+                                                        "drops boundary "
+                                                        "disagreements); "
+                                                        "tab gains NF q / "
+                                                        "NEO% / U columns "
+                                                        "and a 'Disc by' "
+                                                        "column from the "
+                                                        "new obs_summary "
+                                                        "matview.",
+                                                    ]),
+                                                    html.Li([
+                                                        html.Strong(
+                                                            "2026-04-28 — "),
+                                                        "NEO Consensus + "
+                                                        "banner-level "
+                                                        "source-membership "
+                                                        "filter promoted "
+                                                        "to prod; default "
+                                                        "filter is "
+                                                        "all_six.",
+                                                    ]),
+                                                    html.Li([
+                                                        html.Strong(
+                                                            "2026-04-27 — "),
+                                                        "Production "
+                                                        "hardening: dash "
+                                                        "under launchd, "
+                                                        "waitress WSGI, "
+                                                        "first pip-audit "
+                                                        "pass.",
+                                                    ]),
+                                                    html.Li([
+                                                        html.Strong(
+                                                            "2026-04-24 — "),
+                                                        "Gizmo replica "
+                                                        "(PostgreSQL 18.3 "
+                                                        "on NVMe) is now "
+                                                        "the dev "
+                                                        "platform. "
+                                                        "obs_sbn_neo "
+                                                        "matview drives "
+                                                        "LOAD_SQL / "
+                                                        "APPARITION_SQL.",
+                                                    ]),
+                                                ]),
+                                        ],
+                                    ),
                                 ],
                             ),
                             # ── FAQ card (below the grid) ───────────────
@@ -5720,6 +5862,48 @@ app.layout = html.Div(
                                         "raw orbit_type_int column is "
                                         "missing for ~35% of objects, "
                                         "so we don't rely on it."
+                                    ], style={"fontSize": "15px",
+                                              "lineHeight": "1.6",
+                                              "marginBottom": "10px"}),
+                                    # Q: map projections
+                                    html.Div([
+                                        html.Strong(
+                                            "Which map projection "
+                                            "should I pick? "),
+                                        html.Em("Equirectangular"),
+                                        " is the simplest "
+                                        "(lat/lon = x/y) and good for "
+                                        "side-by-side numerical "
+                                        "comparison. ",
+                                        html.Em("Natural earth"),
+                                        " (default) and ",
+                                        html.Em("Robinson"),
+                                        " are general-purpose "
+                                        "compromises that minimize "
+                                        "shape and area distortion "
+                                        "globally. ",
+                                        html.Em("Mollweide"),
+                                        " is equal-area — useful when "
+                                        "you care about relative "
+                                        "geographic coverage. ",
+                                        html.Em("Mercator"),
+                                        " preserves angles and is "
+                                        "familiar from web maps but "
+                                        "wildly inflates polar "
+                                        "regions. ",
+                                        html.Em("Miller"),
+                                        " is a Mercator variant that "
+                                        "tames polar inflation. ",
+                                        html.Em("Kavrayskiy VII"),
+                                        " is a pseudo-cylindrical "
+                                        "compromise favored by Soviet "
+                                        "atlases. ",
+                                        html.Em("Orthographic"),
+                                        " shows the Earth as a globe "
+                                        "from a fixed viewpoint — "
+                                        "great for visualizing one "
+                                        "hemisphere at a time, "
+                                        "useless for the other.",
                                     ], style={"fontSize": "15px",
                                               "lineHeight": "1.6",
                                               "marginBottom": "10px"}),
@@ -11783,11 +11967,6 @@ def _station_non_neo_dl(_n):
 # all recompute. Tiny DataFrame; not worth invalidating.
 _FUC_COUNT_CACHE = {}
 
-# Map height is forced — the map is the primary artifact on this tab
-# and needs vertical room to be legible regardless of the banner's
-# Plot-height setting (which still drives the bar chart).
-_FUC_MAP_HEIGHT = 900
-
 _FUC_TYPE_COLOR = {
     "optical":     "#1f77b4",
     "satellite":   "#d62728",
@@ -11870,12 +12049,14 @@ def _window_label(window_days):
     Input("fuc-precovery", "value"),
     Input("fuc-site-type", "value"),
     Input("fuc-projection", "value"),
+    Input("fuc-cscale", "value"),
     Input("theme-toggle", "value"),
+    Input("plot-height", "value"),
 )
 def _fuc_render_map(year_range, window_days, precovery_mode,
-                    site_type, projection, theme_name):
+                    site_type, projection, cscale, theme_name, ph):
     t = theme(theme_name or "light")
-    height = _FUC_MAP_HEIGHT
+    height = max(int(ph), 400) if ph else 900
     obs = load_obscodes()
     if obs is None or obs.empty:
         return _empty_figure("Obscodes not loaded", t, height)
@@ -11892,9 +12073,6 @@ def _fuc_render_map(year_range, window_days, precovery_mode,
 
     fig = go.Figure()
 
-    # Sites with no follow-up activity in this window — small grey
-    # markers so the user sees "where else there's a site that didn't
-    # contribute". Goes underneath so colored markers paint over.
     inactive = merged[merged["n_followup"] == 0]
     if not inactive.empty:
         fig.add_trace(go.Scattergeo(
@@ -11918,19 +12096,51 @@ def _fuc_render_map(year_range, window_days, precovery_mode,
             showlegend=True,
         ))
 
-    # Sites with ≥1 follow-up — colored by log10(n) with a single
+    # Sites with ≥1 follow-up — colored by NEO count with a single
     # colorbar. Uniform marker size so small contributors aren't
-    # buried under the giants.
+    # buried under the giants. Both cmin and cmax track the data
+    # so the colorscale uses its full range whatever the filter is.
     active = merged[merged["n_followup"] > 0]
     if not active.empty:
-        log_n = np.log10(active["n_followup"].astype(float))
-        cmax = float(log_n.max())
-        # Build human-readable colorbar ticks at log decades.
-        decades = [d for d in range(0, int(np.ceil(cmax)) + 1) if d <= cmax]
-        if not decades:
-            decades = [0]
-        tickvals = decades
-        ticktext = [f"{10**d:,.0f}" for d in decades]
+        n = active["n_followup"].astype(float)
+        if cscale == "log":
+            vals = np.log10(n)
+            cmin = float(vals.min())
+            cmax = float(vals.max())
+            # Decade ticks within [cmin, cmax], plus the endpoints
+            # if they don't coincide with a decade.
+            lo = int(np.floor(cmin))
+            hi = int(np.ceil(cmax))
+            decades = [d for d in range(lo, hi + 1)
+                       if cmin - 1e-9 <= d <= cmax + 1e-9]
+            tickvals = decades or [cmin, cmax]
+            ticktext = [f"{10**d:,.0f}" for d in tickvals]
+            cbar_title = "NEOs<br>(log)"
+        else:
+            vals = n
+            cmin = float(vals.min())
+            cmax = float(vals.max())
+            tickvals = None
+            ticktext = None
+            cbar_title = "NEOs"
+        marker_kwargs = dict(
+            size=8,
+            color=vals,
+            colorscale="Viridis",
+            cmin=cmin,
+            cmax=cmax if cmax > cmin else cmin + 1,
+            opacity=0.9,
+            line=dict(width=0.4, color="#222"),
+            colorbar=dict(
+                title=cbar_title,
+                thickness=14,
+                len=0.7,
+                yanchor="middle", y=0.5,
+            ),
+        )
+        if tickvals is not None:
+            marker_kwargs["colorbar"]["tickvals"] = tickvals
+            marker_kwargs["colorbar"]["ticktext"] = ticktext
         fig.add_trace(go.Scattergeo(
             lon=active["longitude_180"],
             lat=active["latitude"],
@@ -11943,23 +12153,7 @@ def _fuc_render_map(year_range, window_days, precovery_mode,
             hovertemplate="%{text}<extra></extra>",
             mode="markers",
             name=f"with follow-up ({len(active):,})",
-            marker=dict(
-                size=8,
-                color=log_n,
-                colorscale="Viridis",
-                cmin=0,
-                cmax=cmax if cmax > 0 else 1,
-                opacity=0.9,
-                line=dict(width=0.4, color="#222"),
-                colorbar=dict(
-                    title="NEOs<br>(log)",
-                    tickvals=tickvals,
-                    ticktext=ticktext,
-                    thickness=14,
-                    len=0.7,
-                    yanchor="middle", y=0.5,
-                ),
-            ),
+            marker=marker_kwargs,
             showlegend=True,
         ))
 
@@ -11969,6 +12163,10 @@ def _fuc_render_map(year_range, window_days, precovery_mode,
         template=t["template"],
         paper_bgcolor=t["paper"], plot_bgcolor=bg,
         height=height,
+        # uirevision tied to projection only — changing year/window/
+        # precovery/type/scale preserves zoom & pan; changing
+        # projection swaps geometry, so reset is appropriate.
+        uirevision=f"fuc-map-{projection or 'default'}",
         title=(f"MPC observatory sites — follow-up NEOs "
                f"{year_range[0]}–{year_range[1]}, "
                f"window {_window_label(window_days)} "
@@ -11990,6 +12188,113 @@ def _fuc_render_map(year_range, window_days, precovery_mode,
         ),
     )
     return fig
+
+
+# Stats card
+@app.callback(
+    Output("fuc-stats", "children"),
+    Input("fuc-year-range", "value"),
+    Input("fuc-window", "value"),
+    Input("fuc-precovery", "value"),
+    Input("fuc-site-type", "value"),
+    Input("theme-toggle", "value"),
+)
+def _fuc_render_stats(year_range, window_days, precovery_mode,
+                      site_type, theme_name):
+    obs = load_obscodes()
+    if obs is None or obs.empty or df is None or df_apparition is None:
+        return html.Span("Loading…",
+                         style={"color":
+                                "var(--subtext-color, #888)"})
+    type_obs = (obs if site_type == "all"
+                else obs[obs["observations_type"] == site_type])
+    counts = _fuc_followup_counts(year_range, window_days, precovery_mode)
+    counts_typed = counts.merge(
+        type_obs[["obscode"]], left_on="station_code",
+        right_on="obscode", how="inner")
+    y0, y1 = year_range
+    eligible = df[(df["disc_year"] >= y0) & (df["disc_year"] <= y1)]
+    n_neos = int(len(eligible))
+
+    # NEOs that received any follow-up at a site of the chosen type
+    # in this window.
+    if not counts_typed.empty:
+        disc_station = eligible.set_index("designation")["station_code"]
+        app = df_apparition[
+            df_apparition["designation"].isin(disc_station.index)
+            & df_apparition["station_code"].isin(
+                set(counts_typed["station_code"]))
+        ].copy()
+        app["disc_station"] = app["designation"].map(disc_station)
+        app = app[app["station_code"] != app["disc_station"]]
+        w = int(window_days)
+        if precovery_mode == "include":
+            app = app[
+                app["days_from_disc"].between(-w, w)
+                | app["post_disc_days"].between(0, w)
+            ]
+        else:
+            app = app[app["post_disc_days"].between(0, w)]
+        followed_neos = app["designation"].nunique()
+        per_neo = (app.groupby("designation")["station_code"]
+                   .nunique())
+        med_sites = float(per_neo.median()) if len(per_neo) else 0.0
+    else:
+        followed_neos = 0
+        med_sites = 0.0
+
+    pct = (100.0 * followed_neos / n_neos) if n_neos else 0.0
+    pmode_label = ("post-discovery"
+                   if precovery_mode == "post_only"
+                   else "incl. precoveries")
+
+    def tile(label, value):
+        return html.Div(
+            style={"display": "flex", "flexDirection": "column",
+                   "minWidth": "140px"},
+            children=[
+                html.Div(value,
+                         style={"fontSize": "20px",
+                                "fontWeight": "600",
+                                "lineHeight": "1.1"}),
+                html.Div(label,
+                         className="subtext",
+                         style={"fontSize": "11px",
+                                "color":
+                                    "var(--subtext-color, #888)"}),
+            ])
+
+    return html.Div(
+        style={"display": "flex", "flexWrap": "wrap",
+               "gap": "20px 32px", "alignItems": "center"},
+        children=[
+            tile(f"sites of type {site_type}",
+                 f"{len(type_obs):,}"),
+            tile(f"with follow-up in window "
+                 f"({_window_label(window_days)}, {pmode_label})",
+                 f"{len(counts_typed):,}"),
+            tile(f"NEOs discovered {y0}–{y1}",
+                 f"{n_neos:,}"),
+            tile("NEOs with any follow-up here",
+                 f"{followed_neos:,} ({pct:.1f} %)"),
+            tile("Median follow-up sites per NEO",
+                 f"{med_sites:.1f}"),
+        ])
+
+
+# When the user navigates to this tab, default the global Plot-height
+# control to "Tall" — the world map needs the room. They can still
+# pick Normal/Short and the map shrinks accordingly. Switching tabs
+# and back resets to Tall (acceptable per-tab default semantics).
+@app.callback(
+    Output("plot-height", "value"),
+    Input("tabs", "value"),
+    prevent_initial_call=True,
+)
+def _fuc_default_plot_height(active_tab):
+    if active_tab == "tab-followup-compare":
+        return "900"
+    raise PreventUpdate
 
 
 @app.callback(
