@@ -12349,7 +12349,10 @@ def _fuc_render_map(year_range, window_days, precovery_mode,
     # colorbar. Uniform marker size so small contributors aren't
     # buried under the giants. Both cmin and cmax track the data
     # so the colorscale uses its full range whatever the filter is.
-    active = merged[merged["n_followup"] > 0]
+    # Sort ASCENDING by n_followup so Plotly draws the most
+    # productive sites last → on top → never occluded by smaller
+    # neighbors.
+    active = merged[merged["n_followup"] > 0].sort_values("n_followup")
     if not active.empty:
         n = active["n_followup"].astype(float)
         if cscale == "log":
