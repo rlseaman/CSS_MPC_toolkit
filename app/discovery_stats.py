@@ -4669,41 +4669,44 @@ app.layout = html.Div(
                                     "fontSize": "13px",
                                 },
                             ),
+                            # Map + bar each in their own Loading
+                            # wrapper with delay_show so fast updates
+                            # (radio toggles, dropdowns) don't blink
+                            # the contents. Spinner only appears if
+                            # the callback actually takes >600 ms.
                             dcc.Loading(
-                                type="default",
+                                type="circle",
+                                delay_show=600,
+                                children=dcc.Graph(
+                                    id="fuc-world-map",
+                                    config=GRAPH_CONFIG),
+                            ),
+                            html.Div(
+                                style={"marginTop": "12px",
+                                       "marginBottom": "8px",
+                                       "maxWidth": "640px"},
                                 children=[
-                                    dcc.Graph(
-                                        id="fuc-world-map",
-                                        config=GRAPH_CONFIG),
-                                    # Site selector — sits between map
-                                    # and bar chart per UX request:
-                                    # the bar chart is the thing it
-                                    # controls, so it should live
-                                    # adjacent to it.
-                                    html.Div(
-                                        style={"marginTop": "12px",
-                                               "marginBottom": "8px",
-                                               "maxWidth": "640px"},
-                                        children=[
-                                            html.Label(
-                                                "Sites for bar chart "
-                                                "(blank = top 20)",
-                                                style=LABEL_STYLE),
-                                            dcc.Dropdown(
-                                                id="fuc-site-select",
-                                                options=[],
-                                                value=[],
-                                                multi=True,
-                                                placeholder=(
-                                                    "Type a site code to "
-                                                    "add (e.g. I52, J95)"),
-                                            ),
-                                        ],
+                                    html.Label(
+                                        "Sites for bar chart "
+                                        "(blank = top 20)",
+                                        style=LABEL_STYLE),
+                                    dcc.Dropdown(
+                                        id="fuc-site-select",
+                                        options=[],
+                                        value=[],
+                                        multi=True,
+                                        placeholder=(
+                                            "Type a site code to "
+                                            "add (e.g. I52, J95)"),
                                     ),
-                                    dcc.Graph(
-                                        id="fuc-bar",
-                                        config=GRAPH_CONFIG),
                                 ],
+                            ),
+                            dcc.Loading(
+                                type="circle",
+                                delay_show=600,
+                                children=dcc.Graph(
+                                    id="fuc-bar",
+                                    config=GRAPH_CONFIG),
                             ),
                             dcc.Download(id="dl-fuc"),
                         ]),
@@ -12283,6 +12286,7 @@ def _fuc_render_map(year_range, window_days, precovery_mode,
         # precovery/type/scale preserves zoom & pan; changing
         # projection swaps geometry, so reset is appropriate.
         uirevision=f"fuc-map-{projection or 'default'}",
+        transition=dict(duration=350, easing="cubic-in-out"),
         title=(f"MPC observatory sites — follow-up NEOs "
                f"{year_range[0]}–{year_range[1]}, "
                f"window {_window_label(window_days)} "
