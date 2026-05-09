@@ -12138,17 +12138,40 @@ def _fuc_merge_view_state(prev, relayout):
     Plotly fires partial updates — modebar zoom-in sends only
     geo.projection.scale, pan sends only geo.center.{lon,lat},
     drag-zoom sends both axis ranges. We accumulate so a partial
-    update combines with whatever was already known. Returns the
-    new state dict (always a dict, never None)."""
+    update combines with whatever was already known.
+
+    Important: when scale or center changes WITHOUT new axis
+    ranges in the same event, the cached lon/lat ranges are
+    stale (they describe the prior viewport, not the new one).
+    Invalidate them so bbox derivation falls back to center +
+    scale — approximate but at least current. Otherwise a
+    drag-zoom followed by a modebar zoom-out would keep filtering
+    against the old tight rectangle and drop sites that are now
+    well inside the visible area."""
     state = dict(prev or {})
     if not isinstance(relayout, dict):
         return state
-    lon_range = relayout.get("geo.lonaxis.range")
-    if lon_range and len(lon_range) == 2:
-        state["lon_range"] = [float(lon_range[0]), float(lon_range[1])]
-    lat_range = relayout.get("geo.lataxis.range")
-    if lat_range and len(lat_range) == 2:
-        state["lat_range"] = [float(lat_range[0]), float(lat_range[1])]
+
+    new_lon_range = relayout.get("geo.lonaxis.range")
+    new_lat_range = relayout.get("geo.lataxis.range")
+    has_new_ranges = bool(
+        new_lon_range and len(new_lon_range) == 2
+        and new_lat_range and len(new_lat_range) == 2)
+    has_scale_or_center = (
+        "geo.projection.scale" in relayout
+        or "geo.center.lon" in relayout
+        or "geo.center.lat" in relayout)
+
+    if has_scale_or_center and not has_new_ranges:
+        state.pop("lon_range", None)
+        state.pop("lat_range", None)
+
+    if new_lon_range and len(new_lon_range) == 2:
+        state["lon_range"] = [float(new_lon_range[0]),
+                              float(new_lon_range[1])]
+    if new_lat_range and len(new_lat_range) == 2:
+        state["lat_range"] = [float(new_lat_range[0]),
+                              float(new_lat_range[1])]
     if "geo.center.lon" in relayout:
         state["center_lon"] = float(relayout["geo.center.lon"])
     if "geo.center.lat" in relayout:
