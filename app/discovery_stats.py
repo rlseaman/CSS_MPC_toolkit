@@ -4669,6 +4669,16 @@ app.layout = html.Div(
                                     "fontSize": "13px",
                                 },
                             ),
+                            # Persistent viewport bbox. Plotly fires
+                            # a relayoutData event for every pan,
+                            # zoom, AND map click — but click events
+                            # carry no axis info, which would clear
+                            # the bbox and snap the bar/stats back to
+                            # 'global' even though the map is still
+                            # zoomed. We funnel relayoutData through
+                            # a Store that only updates when a real
+                            # viewport change came in.
+                            dcc.Store(id="fuc-viewport", data=None),
                             # Map + bar each in their own Loading
                             # wrapper with delay_show so fast updates
                             # (radio toggles, dropdowns) don't blink
@@ -12397,10 +12407,30 @@ def _fuc_render_map(year_range, window_days, precovery_mode,
     return fig
 
 
-# Stats card — responsive to year/window/type/sites-filter AND to the
-# map's pan/zoom (via relayoutData). Bbox filtering is best-effort:
-# for projections that expose lon/lat axis ranges we get a clean
-# rectangle; for those that only expose center+scale we approximate.
+# Persist viewport bbox across relayoutData events that don't carry
+# viewport info (clicks, autosize, …). The Store carries [lon_min,
+# lon_max, lat_min, lat_max] or None.
+@app.callback(
+    Output("fuc-viewport", "data"),
+    Input("fuc-world-map", "relayoutData"),
+    Input("fuc-projection", "value"),
+)
+def _fuc_track_viewport(relayout, _projection):
+    # On projection change, Plotly resets the view; clear the bbox
+    # so downstream callbacks recompute from scratch.
+    if ctx.triggered_id == "fuc-projection":
+        return None
+    bbox = _fuc_bbox_from_relayout(relayout)
+    if bbox is None:
+        # No viewport info in this relayout payload — preserve the
+        # previous bbox so a click on the map doesn't undo the
+        # user's zoom-to-region.
+        raise PreventUpdate
+    return list(bbox)
+
+
+# Stats card — responsive to year/window/type/sites-filter AND the
+# persisted viewport bbox.
 @app.callback(
     Output("fuc-stats", "children"),
     Input("fuc-year-range", "value"),
@@ -12408,11 +12438,11 @@ def _fuc_render_map(year_range, window_days, precovery_mode,
     Input("fuc-precovery", "value"),
     Input("fuc-site-type", "value"),
     Input("fuc-sites-filter", "value"),
-    Input("fuc-world-map", "relayoutData"),
+    Input("fuc-viewport", "data"),
     Input("theme-toggle", "value"),
 )
 def _fuc_render_stats(year_range, window_days, precovery_mode,
-                      site_type, sites_filter, relayout, theme_name):
+                      site_type, sites_filter, viewport, theme_name):
     obs = load_obscodes()
     if obs is None or obs.empty or df is None or df_apparition is None:
         return html.Span("Loading…",
@@ -12421,7 +12451,7 @@ def _fuc_render_stats(year_range, window_days, precovery_mode,
     type_obs = (obs if site_type == "all"
                 else obs[obs["observations_type"] == site_type])
     type_obs = _fuc_apply_sites_filter(type_obs, sites_filter)
-    bbox = _fuc_bbox_from_relayout(relayout)
+    bbox = tuple(viewport) if viewport else None
     viewport_obs = _fuc_apply_bbox(type_obs, bbox)
     bbox_active = bbox is not None and len(viewport_obs) < len(type_obs)
 
@@ -12579,13 +12609,13 @@ def _fuc_paste_codes(text, current):
     Input("fuc-cscale", "value"),
     Input("fuc-colormap", "value"),
     Input("fuc-max-bars", "value"),
-    Input("fuc-world-map", "relayoutData"),
+    Input("fuc-viewport", "data"),
     Input("theme-toggle", "value"),
     Input("plot-height", "value"),
 )
 def _fuc_render_bar(year_range, window_days, precovery_mode,
                     sites, site_type, sites_filter, cscale, colormap,
-                    max_bars, relayout, theme_name, ph):
+                    max_bars, viewport, theme_name, ph):
     t = theme(theme_name or "light")
     # Bar chart height scales with the bar count rather than the
     # banner Plot-height. ~22 px per bar plus 80 px overhead for
@@ -12624,7 +12654,7 @@ def _fuc_render_bar(year_range, window_days, precovery_mode,
     else:
         cmin, cmax = 0.0, 1.0
 
-    bbox = _fuc_bbox_from_relayout(relayout)
+    bbox = tuple(viewport) if viewport else None
     merged = _fuc_apply_bbox(merged, bbox)
     bbox_active = bbox is not None
 
