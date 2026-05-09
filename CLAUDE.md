@@ -41,7 +41,7 @@ University of Arizona.
 
 ```
 app/                          # Interactive Dash web application
-  discovery_stats.py          #   NEO discovery explorer (8 tabs, ~9100 lines)
+  discovery_stats.py          #   NEO discovery explorer (12 tabs, ~12,800 lines)
   assets/                     #   CSS, logo, static files
 lib/                          # Python library layer
   db.py                       #   DB connections, timed queries, QueryLog
@@ -70,7 +70,11 @@ sandbox/                      # Analysis notes, exploratory outputs
 
 ## Interactive App (`app/discovery_stats.py`)
 
-Dash web application at http://127.0.0.1:8050/ with ten tabbed pages:
+Dash web application at http://127.0.0.1:8050/ (prod) and
+http://127.0.0.1:8051/ (dev/`--rnd`) with twelve tabbed pages.
+Tab indices below are the layout order on the `station-report` dev
+branch; on prod (`main`) the two newest tabs (Follow-up Comparison
+and Station Report) aren't yet present and the indices shift.
 
 ### Tab 0: MPEC Browser
 - Searchable list of recent Minor Planet Electronic Circulars
@@ -126,7 +130,38 @@ Dash web application at http://127.0.0.1:8050/ with ten tabbed pages:
 - Data: `APPARITION_SQL` uses `CROSS JOIN LATERAL` with
   `AS MATERIALIZED` CTEs for indexed scans (~1-2 min query)
 
-### Tab 5: Follow-up Timing
+### Tab 5: Follow-up Comparison (dev only)
+- Per-site (not per-survey) follow-up activity. Sister tab to
+  Multi-survey Comparison and Follow-up Timing, but pivoting on
+  individual MPC site code rather than survey group.
+- World map (Plotly Scattergeo) of all ~2,675 MPC obscodes with
+  valid lat/lon, colored by follow-up volume on a Viridis (or
+  user-selected) colormap. Selectable map projection (8 options;
+  default equirectangular for precise viewport bbox); log/linear
+  color scale; site-type filter (default Optical, ~99% of codes);
+  NEO-active filter (default On — restricts to ~500 sites that
+  have ever observed a NEO in a discovery apparition).
+- Stats card responsive to map pan/zoom: tallies of sites in
+  viewport, NEOs in window, NEOs with follow-up there, median
+  follow-up sites per NEO. Bbox derivation is exact for
+  equirectangular/mercator/miller (axis ranges); approximate for
+  others (center + scale).
+- Bar chart of distinct NEOs followed up at each site, with
+  multi-select (typed or pasted as a list), top-N selector
+  (default 10), and colors matched to the map's colormap and
+  domain.
+- Follow-up window selector: 1 d / 1 wk / 1 lunation / 100 d /
+  200 d (capped by the apparition cache's ±200 d window).
+  Post-discovery vs include-precoveries radio.
+- Phase 1 definition: "follow-up" = distinct NEOs observed at a
+  site other than the discovery site, within the chosen window.
+  Reuses `apparition_cache`. Tracklet/observation counts and
+  multi-apparition recovery are Phase 2.
+- Data: live obscodes table + `apparition_cache`. New 1-day
+  parquet cache `obscodes_cache`.
+- See `docs/2026-05-09_followup_comparison_scoping.md`.
+
+### Tab 6: Follow-up Timing
 - Response curve (CDF): fraction of NEOs observed by 1st/2nd/3rd
   follow-up survey within N days of discovery
 - Box plots of follow-up time by survey (excludes discoverer's own
@@ -134,7 +169,7 @@ Dash web application at http://127.0.0.1:8050/ with ten tabbed pages:
 - Follow-up network heatmap: discoverer -> first follow-up survey
 - Median follow-up time trend by discovery year with IQR band
 
-### Tab 6: Discovery Circumstances
+### Tab 7: Discovery Circumstances
 - Sky map (RA/Dec scatter) of discovery positions with ecliptic and
   galactic plane overlays; WebGL for ~40K points
 - Apparent V magnitude histogram (band-corrected) at discovery
@@ -144,7 +179,7 @@ Dash web application at http://127.0.0.1:8050/ with ten tabbed pages:
 - Data: `tracklet_obs_all` and `discovery_tracklet_stats` CTEs added
   to `LOAD_SQL`; same ~44K rows, 6 new columns
 
-### Tab 7: Asteroid Classes
+### Tab 8: Asteroid Classes
 - Cross-tabulation of the full `mpc_orbits` catalog (~1.5M objects,
   all classes — not just NEOs) by orbit type and selected attributes.
 - Class grouping: Fine (21), Standard (17), Coarse (7) MPC orbit
@@ -158,7 +193,7 @@ Dash web application at http://127.0.0.1:8050/ with ten tabbed pages:
   identifications join). Same ~1.5M rows that drive boxscore-class
   callbacks elsewhere.
 
-### Tab 8: Tools
+### Tab 9: Tools
 - Standalone calculators and converters for planetary-defense work.
   No data dependencies; all pure Python computation via `lib/`.
 - Currently 10 cards:
@@ -174,10 +209,26 @@ Dash web application at http://127.0.0.1:8050/ with ten tabbed pages:
   conversion primitives the SQL `css_utilities` schema exposes
   server-side.
 
-### Tab 9: About
+### Tab 10: Station Report (dev only)
+- Per-site deep-dive — site code + optional date range yields a
+  summary line, year × class breakdown for NEOs (Atira / Aten /
+  Apollo / Amor) and non-NEOs, and an MPEC-publications stub
+  (Phase 2, ADS-backed). Phase 1 lives at `lib/station_report.py`
+  + `sql/station_report.sql`. NEO/non-NEO split is taken from the
+  `obs_sbn_neo` matview (q ≤ 1.3 with no e bound; resolves
+  designations through `current_identifications`/`numbered_
+  identifications`).
+- Currently paused pending Phase 2 ADS integration. Q7-style
+  per-site forensic stats from the Follow-up Comparison scoping
+  doc are intended to land here as context for the literature
+  search.
+
+### Tab 11: About
 - Static project page: short description, GitHub repo link, contact
   email (`contact@hotwireduniverse.org` via Cloudflare Email Routing),
-  maintainer line. No state, no callbacks.
+  maintainer line. Release notes card + FAQ (data freshness, NEO
+  definition, six-source rationale, orbit-class derivation, map
+  projections, mobile, contact). No state, no callbacks.
 
 ### Survey Groupings
 Stations are mapped to project groups via `STATION_TO_PROJECT`:
@@ -255,6 +306,21 @@ waitress WSGI server. A daily launchd agent
      port rebinds; acceptable for a low-traffic outreach window).
 Total elapsed ~14–16 min in normal operation. See `docs/disaster_recovery.md`
 for what to do if a stage fails.
+
+### Dev surface
+A second Dash instance runs alongside prod for staging in-flight
+work. Served from `dev.hotwireduniverse.org` via the same
+Cloudflare tunnel, gated by a Cloudflare Access email allow-list.
+launchd label `com.rlseaman.dashboard-rnd`, port 8051, run with
+`--rnd` (R&D-only surfaces enabled, e.g. NEO Consensus tab). The
+plist's WorkingDirectory points at the git worktree
+`~/CSS_MPC_toolkit_dev` (currently on `station-report`); parquet
+caches are symlinked from the primary checkout so dev sees the
+nightly refresh's output without re-querying. To deploy a
+station-report change: push to origin, `git pull` in the
+worktree, `launchctl kickstart -k gui/$(id -u)/com.rlseaman.
+dashboard-rnd`. Logs at
+`~/Claude/mpc_sbn/logs/dashboard-rnd_<timestamp>.log`.
 
 ## Development Conventions
 

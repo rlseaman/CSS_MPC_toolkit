@@ -18,21 +18,34 @@ libraries, and derived data products useful to the NEO community.
 **App:** [`app/discovery_stats.py`](app/discovery_stats.py)
 
 Interactive Dash web application for exploring NEO discovery statistics,
-survey performance, and follow-up timing. Six tabbed pages:
+survey reach, follow-up activity, and the cross-source NEO consensus
+catalog. Twelve tabbed pages (the last two are dev-only on the
+`station-report` branch):
 
 | Tab | Content |
 |-----|---------|
 | **MPEC Browser** | Live feed of recent Minor Planet Electronic Circulars with parsed observations, orbital elements, residuals, and observer credits. Auto-selects latest discovery MPEC. Enrichment from JPL SBDB/Sentry, NEOfixer (Find\_Orb), and ESA NEOCC with per-object risk assessment. Site-specific short-term observability chart via NEOfixer ephemeris API. |
+| **NEO Consensus** | Cross-source membership view of the `css_neo_consensus` schema (MPC NEA.txt, mpc_orbits, JPL CNEOS, ESA NEOCC, CSS NEOfixer, Lowell astorb). Filterable per-source booleans, disagreement breakdown, UpSet plot, snapshot stats card. |
 | **Discoveries by Year** | Stacked bar chart by year/survey/size class with annual or cumulative views; size distribution histogram; top-15 stations table |
 | **Size Distribution vs. NEOMOD3** | Half-magnitude bin chart comparing MPC discoveries to the NEOMOD3 population model (Nesvorny et al. 2024, Icarus 411); completeness curve with 1-sigma errors; reference table |
 | **Multi-survey Comparison** | Venn diagrams (1–3 surveys) showing co-detection during discovery apparitions (±200 days); pairwise co-detection heatmap; survey reach |
+| **Follow-up Comparison** *(dev)* | Per-site (not per-survey) follow-up activity. World map of MPC obscodes colored by follow-up volume with selectable projection / colormap / scale; viewport-aware stats card; bar chart of distinct NEOs followed up at each site with multi-select and matched colors. Configurable follow-up window (1 day / 1 week / 1 lunation / 100 days / 200 days) and post-discovery vs include-precoveries radio. |
 | **Follow-up Timing** | Response curves showing how quickly other surveys observe newly-discovered NEOs; per-survey response time distributions; follow-up network heatmap; trend by year |
 | **Discovery Circumstances** | Sky map (RA/Dec) of discovery positions with ecliptic and galactic plane overlays; apparent V magnitude histogram; rate of motion vs. H scatter; position angle rose diagram |
+| **Asteroid Classes** | Cross-tabulation of the full `mpc_orbits` catalog (~1.5M objects, all classes) by orbit type and selected attributes. Class grouping (Fine / Standard / Coarse), NEO/PHA/retrograde filters, H histogram, a–e scatter. |
+| **Tools** | Standalone calculators and converters for planetary-defense work — pack/unpack/validate designation, H↔diameter, Tisserand, orbit classification, parse obs80, date conversions, airmass↔altitude. |
+| **Station Report** *(dev)* | Per-site deep-dive: site code + optional date range yields summary line, year × class breakdown for NEOs and non-NEOs, MPEC-publications stub (Phase 2, ADS-backed). |
+| **About** | Project description, GitHub repo link, contact email, maintainer line, release notes card, FAQ. |
 
 Each tab has a **Download CSV** button that exports the currently filtered
-data. Shared banner controls: survey grouping, plot height, light/dark theme,
-service health indicators, reset buttons. Data sourced from two SQL queries
-cached to CSV with 1-day auto-invalidation.
+data. Shared banner controls: NEO source filter (per-consensus-source
+membership), survey grouping, plot height, light/dark theme, service
+health indicators, reset buttons. Data is sourced from five caches —
+discovery tracklets (`LOAD_SQL`), apparition observations
+(`APPARITION_SQL`), object catalog (`BOXSCORE_SQL`), NEO consensus
+membership, and MPC obscodes — all stored as Parquet with 1-day
+auto-invalidation; falls back to legacy CSV when Parquet isn't yet
+generated.
 
 **Survey groupings:** Catalina Survey (703, G96, E12), Catalina Follow-up
 (I52, V06, G84), Pan-STARRS (F51, F52), ATLAS (T05, T07, T08, T03, M22,
@@ -168,7 +181,7 @@ CSS_MPC_toolkit/
 ├── README.md                           # This file
 ├── CLAUDE.md                           # Claude Code project guide
 ├── app/                                # Interactive Dash web application
-│   ├── discovery_stats.py              #   NEO discovery explorer (6 tabs)
+│   ├── discovery_stats.py              #   NEO discovery explorer (12 tabs)
 │   └── assets/                         #   CSS, logo, static files
 ├── lib/                                # Python library layer
 │   ├── db.py                           #   DB connections, timed queries
@@ -204,10 +217,16 @@ CSS_MPC_toolkit/
 │   ├── general.xsd
 │   └── submit.xsd
 ├── sandbox/                            #   Analysis notes, exploratory outputs
-└── docs/
-    ├── deployment.md                   #   Server provisioning and operations guide
+└── docs/                               #   Operations + scoping notes
+    ├── deployment.md                   #   Server provisioning and operations
+    ├── disaster_recovery.md            #   Nightly-refresh failure playbook
     ├── source_tables.md                #   Required MPC/SBN tables and columns
-    └── band_corrections.md             #   Photometric band-to-V corrections
+    ├── band_corrections.md             #   Photometric band-to-V corrections
+    ├── neo_consensus.md                #   Six-source NEO membership design
+    ├── neo_consensus_neofixer_*.md     #   NEOfixer disagreement deep-dive
+    ├── mpec_access.md                  #   Historical-MPEC scoping
+    ├── 2026-05-09_followup_compari…md  #   Follow-up Comparison tab scoping
+    └── …                               #   See docs/ for the full set
 ```
 
 ## Quick Start
