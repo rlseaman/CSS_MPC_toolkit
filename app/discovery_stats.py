@@ -5881,13 +5881,34 @@ app.layout = html.Div(
                                                 children=[
                                                     html.Li([
                                                         html.Strong(
-                                                            "2026-05-09 — "),
+                                                            "2026-05-09 "
+                                                            "(Phase 2A) — "),
+                                                        "Follow-up "
+                                                        "Comparison adds "
+                                                        "a Metric "
+                                                        "selector "
+                                                        "(NEOs / "
+                                                        "Tracklets / "
+                                                        "Observations). "
+                                                        "Tracklet and "
+                                                        "observation "
+                                                        "counts come "
+                                                        "from 28 pre-"
+                                                        "aggregated "
+                                                        "FILTER columns "
+                                                        "added to the "
+                                                        "apparition "
+                                                        "cache.",
+                                                    ]),
+                                                    html.Li([
+                                                        html.Strong(
+                                                            "2026-05-09 "
+                                                            "(Phase 1) — "),
                                                         "Follow-up "
                                                         "Comparison tab "
-                                                        "(Phase 1) lands "
-                                                        "on dev: world "
-                                                        "map of MPC "
-                                                        "obscodes, "
+                                                        "lands on dev: "
+                                                        "world map of "
+                                                        "MPC obscodes, "
                                                         "selectable "
                                                         "projection, "
                                                         "log/linear "

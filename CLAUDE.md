@@ -146,17 +146,25 @@ and Station Report) aren't yet present and the indices shift.
   follow-up sites per NEO. Bbox derivation is exact for
   equirectangular/mercator/miller (axis ranges); approximate for
   others (center + scale).
-- Bar chart of distinct NEOs followed up at each site, with
-  multi-select (typed or pasted as a list), top-N selector
-  (default 10), and colors matched to the map's colormap and
-  domain.
+- Bar chart with multi-select (typed or pasted as a list), top-N
+  selector (default 10), and colors matched to the map's colormap
+  and domain.
 - Follow-up window selector: 1 d / 1 wk / 1 lunation / 100 d /
   200 d (capped by the apparition cache's ±200 d window).
   Post-discovery vs include-precoveries radio.
-- Phase 1 definition: "follow-up" = distinct NEOs observed at a
-  site other than the discovery site, within the chosen window.
-  Reuses `apparition_cache`. Tracklet/observation counts and
-  multi-apparition recovery are Phase 2.
+- **Metric radio** (Phase 2A, 2026-05-09): NEOs (default) /
+  Tracklets / Observations. Drives the map colorbar, hover, bar
+  values, and stats card uniformly. Tracklets and observations
+  come from 28 pre-aggregated FILTER columns added to
+  APPARITION_SQL — `n_trk_post_W` / `n_trk_any_W` / `n_obs_post_W`
+  / `n_obs_any_W` for W in {1, 7, 29, 50, 100, 150, 200} (the
+  union of FUC's and Multi-survey's window selectors). Continuous
+  windows would require a per-tracklet cache; the pre-agg approach
+  was chosen because the discrete dropdowns are stable.
+- Phase 1 definition: "follow-up" = activity at a site other than
+  the discovery site, within the chosen window, for an object
+  discovered in the year range. Multi-apparition recovery is
+  Phase 2B (deferred — needs a separate lifetime cache).
 - Data: live obscodes table + `apparition_cache`. New 1-day
   parquet cache `obscodes_cache`.
 - See `docs/2026-05-09_followup_comparison_scoping.md`.
@@ -261,10 +269,15 @@ Stations are mapped to project groups via `STATION_TO_PROJECT`:
     Scans `obs_sbn_neo` (matview) on Gizmo: **~0.4 s**. Raw `obs_sbn`
     on Sibyl: ~1 min.
   - `APPARITION_SQL` — station-level observations within +/-200 days
-    of discovery (~370K station rows). Scans `obs_sbn_neo` on Gizmo:
+    of discovery (~373K station rows). Scans `obs_sbn_neo` on Gizmo:
     **~4:40**. Raw `obs_sbn` on Sibyl: ~55 s. (LATERAL probes don't
     fully fit in Gizmo's 16 GB even after the matview shrink — Sibyl's
-    251 GB RAM still wins for this shape.)
+    251 GB RAM still wins for this shape.) Phase 2A (2026-05-09)
+    extended this with 28 pre-aggregated FILTER columns
+    (`n_trk_{post,any}_W`, `n_obs_{post,any}_W` for 7 windows),
+    bumping cache parquet from ~19 MB to ~21 MB and the SQL hash
+    from `031b17ad` to `811ddeb6`. Query time unchanged — the
+    FILTER aggregations run on rows already in the LATERAL.
   - `BOXSCORE_SQL` — full mpc_orbits + numbered_identifications JOIN
     (~1.5M rows, all object classes). Doesn't touch obs_sbn. Gizmo
     NVMe: **~0.7 s**. Sibyl: **~3 s**. (CLAUDE.md prior to 2026-04-24
