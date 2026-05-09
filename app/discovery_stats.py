@@ -12420,6 +12420,33 @@ def _fuc_track_viewport(relayout, _projection):
     # so downstream callbacks recompute from scratch.
     if ctx.triggered_id == "fuc-projection":
         return None
+    if not relayout or not isinstance(relayout, dict):
+        raise PreventUpdate
+
+    # Reset detection — clear the bbox so bars and stats go global.
+    # Plotly's modebar reset / double-click reset usually fires
+    # geo.lonaxis.autorange (and/or geo.lataxis.autorange) rather
+    # than concrete axis ranges. Without this, the bar/stats
+    # callbacks would stay filtered to the prior viewport even
+    # though the map has been zoomed all the way out.
+    if (relayout.get("geo.lonaxis.autorange") is True
+            or relayout.get("geo.lataxis.autorange") is True):
+        return None
+
+    # Some reset paths send concrete numbers that happen to be the
+    # default view (scale ≈ 1, centered at origin). Treat that as a
+    # reset too. A user who panned exactly back to the default view
+    # is functionally indistinguishable from a reset, and the bbox
+    # would cover the entire globe in either case.
+    scale = relayout.get("geo.projection.scale")
+    lon_c = relayout.get("geo.center.lon")
+    lat_c = relayout.get("geo.center.lat")
+    if (scale is not None
+            and abs(float(scale) - 1.0) < 0.01
+            and lon_c is not None and abs(float(lon_c)) < 0.5
+            and lat_c is not None and abs(float(lat_c)) < 0.5):
+        return None
+
     bbox = _fuc_bbox_from_relayout(relayout)
     if bbox is None:
         # No viewport info in this relayout payload — preserve the
