@@ -1214,6 +1214,42 @@ def _apply_source_filter(df_in, source):
 
 
 # ---------------------------------------------------------------------------
+# MPC obscodes loader — small reference catalog (~2,700 sites) used by
+# the Follow-up Comparison tab world map.
+# ---------------------------------------------------------------------------
+
+OBSCODES_SQL = """
+SELECT obscode, longitude, rhocosphi, rhosinphi,
+       name, observations_type
+FROM   obscodes
+WHERE  longitude IS NOT NULL
+  AND  rhocosphi IS NOT NULL
+  AND  rhosinphi IS NOT NULL
+"""
+
+_df_obscodes = None
+
+
+def load_obscodes():
+    """Load MPC observatory catalog. Adds latitude (deg, geocentric) and
+    longitude_180 (deg, -180..180) columns derived from the parallax
+    constants. Cached as parquet with the same 1-day TTL."""
+    global _df_obscodes
+    if _df_obscodes is not None:
+        return _df_obscodes
+    df, _ = _load_cached_query(OBSCODES_SQL, "obscodes_cache", "MPC obscodes")
+    df = df.copy()
+    rho_cos = pd.to_numeric(df["rhocosphi"], errors="coerce")
+    rho_sin = pd.to_numeric(df["rhosinphi"], errors="coerce")
+    df["latitude"] = np.degrees(np.arctan2(rho_sin, rho_cos))
+    lon = pd.to_numeric(df["longitude"], errors="coerce")
+    df["longitude_180"] = ((lon + 180.0) % 360.0) - 180.0
+    _df_obscodes = df
+    print(f"Loaded {len(df):,} MPC obscodes")
+    return _df_obscodes
+
+
+# ---------------------------------------------------------------------------
 # Boxscore: object catalog loader
 # ---------------------------------------------------------------------------
 
@@ -2608,6 +2644,7 @@ if _REFRESH_ONLY:
     df_apparition = load_apparition_data()
     load_boxscore_data()
     load_consensus_membership()
+    load_obscodes()
     print("Cache refresh complete.")
     sys.exit(0)
 
@@ -2641,6 +2678,7 @@ def _load_all_data():
             print(f"Source membership attached: {len(membership):,} "
                   f"v_membership_wide rows; df all-six count = "
                   f"{int(df['all_six_agree'].sum()):,}")
+        load_obscodes()
     except Exception as e:
         _data_error = str(e)
         print(f"ERROR loading data: {e}")
@@ -4383,6 +4421,155 @@ app.layout = html.Div(
                                         config=GRAPH_CONFIG),
                                 ],
                             ),
+                        ]),
+                    ],
+                ),
+                # ━━━ Follow-up Comparison ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                # Per-site (not per-survey) follow-up activity. World map
+                # of all MPC obscodes; bar chart of follow-up tracklets
+                # per site. Phase 1: discovery-apparition only (reuses
+                # apparition_cache). See
+                # docs/2026-05-09_followup_comparison_scoping.md.
+                dcc.Tab(
+                    label="Follow-up Comparison",
+                    value="tab-followup-compare",
+                    className="nav-tab",
+                    selected_className="nav-tab--selected",
+                    children=[
+                        html.Div(style={"paddingTop": "15px"}, children=[
+                            # Year-range slider
+                            html.Div(
+                                style={"marginBottom": "10px"},
+                                children=[
+                                    html.Label("Discovery years",
+                                               style=LABEL_STYLE),
+                                    dcc.RangeSlider(
+                                        id="fuc-year-range",
+                                        min=year_min,
+                                        max=year_max,
+                                        value=[2004, year_max],
+                                        marks={
+                                            y: {"label": str(y)}
+                                            for y in range(
+                                                year_min,
+                                                year_max + 1, 5)
+                                        },
+                                        tooltip={
+                                            "placement": "bottom",
+                                            "always_visible": False},
+                                    ),
+                                ],
+                            ),
+                            # Controls row
+                            html.Div(
+                                style={"display": "flex", "gap": "20px",
+                                       "flexWrap": "wrap",
+                                       "alignItems": "flex-end",
+                                       "marginBottom": "15px"},
+                                children=[
+                                    html.Div(children=[
+                                        html.Label("Site type",
+                                                   style=LABEL_STYLE),
+                                        dcc.Dropdown(
+                                            id="fuc-site-type",
+                                            options=[
+                                                {"label": "All types",
+                                                 "value": "all"},
+                                                {"label": "Optical",
+                                                 "value": "optical"},
+                                                {"label": "Satellite",
+                                                 "value": "satellite"},
+                                                {"label": "Radar",
+                                                 "value": "radar"},
+                                                {"label": "Occultation",
+                                                 "value": "occultation"},
+                                                {"label": "Roving",
+                                                 "value": "roving"},
+                                            ],
+                                            value="all",
+                                            clearable=False,
+                                            style={"width": "180px"},
+                                        ),
+                                    ]),
+                                    html.Div(children=[
+                                        html.Label(
+                                            "Min follow-up NEOs (map)",
+                                            style=LABEL_STYLE),
+                                        dcc.Dropdown(
+                                            id="fuc-min-followup",
+                                            options=[
+                                                {"label": "Any (all sites)",
+                                                 "value": 0},
+                                                {"label": "≥ 1",
+                                                 "value": 1},
+                                                {"label": "≥ 10",
+                                                 "value": 10},
+                                                {"label": "≥ 100",
+                                                 "value": 100},
+                                                {"label": "≥ 1000",
+                                                 "value": 1000},
+                                            ],
+                                            value=1,
+                                            clearable=False,
+                                            style={"width": "190px"},
+                                        ),
+                                    ]),
+                                    html.Div(
+                                        style={"flex": "1 1 320px"},
+                                        children=[
+                                            html.Label(
+                                                "Sites for bar chart "
+                                                "(blank = top 20)",
+                                                style=LABEL_STYLE),
+                                            dcc.Dropdown(
+                                                id="fuc-site-select",
+                                                options=[],
+                                                value=[],
+                                                multi=True,
+                                                placeholder=(
+                                                    "Type a site code to "
+                                                    "add (e.g. I52, J95)"),
+                                            ),
+                                        ],
+                                    ),
+                                    html.Div(
+                                        style={"alignSelf": "flex-end"},
+                                        children=[
+                                            html.Button(
+                                                "Download CSV",
+                                                id="btn-download-fuc",
+                                                n_clicks=0,
+                                                style=DOWNLOAD_BTN_STYLE,
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            html.P(
+                                "Phase 1: “follow-up” means a "
+                                "tracklet at a site other than the "
+                                "discovery site, within the discovery "
+                                "apparition (±200 days). "
+                                "Multi-apparition recovery and "
+                                "follow-up groups (LCO, ARO, …) are "
+                                "Phase 2.",
+                                className="subtext",
+                                style={"fontFamily": "sans-serif",
+                                       "marginBottom": "10px",
+                                       "fontSize": "12px"},
+                            ),
+                            dcc.Loading(
+                                type="default",
+                                children=[
+                                    dcc.Graph(
+                                        id="fuc-world-map",
+                                        config=GRAPH_CONFIG),
+                                    dcc.Graph(
+                                        id="fuc-bar",
+                                        config=GRAPH_CONFIG),
+                                ],
+                            ),
+                            dcc.Download(id="dl-fuc"),
                         ]),
                     ],
                 ),
@@ -11535,6 +11722,221 @@ def _station_non_neo_dl(_n):
     return send_data_frame(
         non_neo_df.to_csv,
         f"station_report_{site}_non_neo.csv", index=False)
+
+
+# ---------------------------------------------------------------------------
+# Follow-up Comparison callbacks (Phase 1)
+# ---------------------------------------------------------------------------
+
+# Cache the per-site follow-up NEO counts keyed by year-range so the map
+# and bar chart don't both recompute. Tiny DataFrame; not worth invalidating.
+_FUC_COUNT_CACHE = {}
+
+
+def _fuc_followup_counts(year_range):
+    """Per-site count of distinct NEOs followed up at that site,
+    excluding NEOs whose discovery site IS that site. Discovery-
+    apparition only (reuses df_apparition's ±200-day join)."""
+    key = tuple(year_range)
+    cached = _FUC_COUNT_CACHE.get(key)
+    if cached is not None:
+        return cached
+    if df is None or df_apparition is None:
+        return pd.DataFrame(columns=["station_code", "n_followup"])
+    y0, y1 = year_range
+    eligible = df[(df["disc_year"] >= y0) & (df["disc_year"] <= y1)]
+    disc_station = eligible.set_index("designation")["station_code"]
+    app = df_apparition[
+        df_apparition["designation"].isin(disc_station.index)].copy()
+    app["disc_station"] = app["designation"].map(disc_station)
+    fu = app[app["station_code"] != app["disc_station"]]
+    counts = (fu.groupby("station_code")["designation"].nunique()
+              .reset_index(name="n_followup"))
+    _FUC_COUNT_CACHE[key] = counts
+    return counts
+
+
+@app.callback(
+    Output("fuc-site-select", "options"),
+    Input("fuc-year-range", "value"),
+)
+def _fuc_site_options(year_range):
+    counts = _fuc_followup_counts(year_range)
+    obs = load_obscodes()
+    merged = counts.merge(
+        obs[["obscode", "name"]], left_on="station_code",
+        right_on="obscode", how="left")
+    merged = merged.sort_values("n_followup", ascending=False)
+    return [
+        {"label": f"{row.station_code} — {row.name or '(unnamed)'} "
+                  f"({int(row.n_followup):,} NEOs)",
+         "value": row.station_code}
+        for row in merged.itertuples()
+    ]
+
+
+@app.callback(
+    Output("fuc-world-map", "figure"),
+    Input("fuc-year-range", "value"),
+    Input("fuc-site-type", "value"),
+    Input("fuc-min-followup", "value"),
+    Input("theme-toggle", "value"),
+    Input("plot-height", "value"),
+)
+def _fuc_render_map(year_range, site_type, min_followup, theme_name, ph):
+    t = theme(theme_name or "light")
+    height = max(int(ph), 400) if ph else 520
+    obs = load_obscodes()
+    if obs is None or obs.empty:
+        return _empty_figure("Obscodes not loaded", t, height)
+    if site_type and site_type != "all":
+        obs = obs[obs["observations_type"] == site_type]
+    counts = _fuc_followup_counts(year_range)
+    merged = obs.merge(
+        counts, left_on="obscode", right_on="station_code", how="left")
+    merged["n_followup"] = merged["n_followup"].fillna(0).astype(int)
+    if min_followup and min_followup > 0:
+        merged = merged[merged["n_followup"] >= min_followup]
+
+    type_color = {
+        "optical":     "#1f77b4",
+        "satellite":   "#d62728",
+        "radar":       "#9467bd",
+        "occultation": "#2ca02c",
+        "roving":      "#ff7f0e",
+    }
+    fig = go.Figure()
+    for typ, sub in merged.groupby("observations_type"):
+        # Marker size: sqrt-scaled by NEO count, min size for visibility.
+        # Sites with 0 follow-up render as small fixed markers when
+        # min_followup=0 so the user can still see "where everything is".
+        sizes = np.sqrt(sub["n_followup"].clip(lower=0)) * 1.4 + 5
+        fig.add_trace(go.Scattergeo(
+            lon=sub["longitude_180"],
+            lat=sub["latitude"],
+            text=sub.apply(
+                lambda r: f"<b>{r['obscode']}</b> — "
+                          f"{r['name'] or '(unnamed)'}<br>"
+                          f"Type: {r['observations_type']}<br>"
+                          f"Follow-up NEOs: {int(r['n_followup']):,}",
+                axis=1),
+            hovertemplate="%{text}<extra></extra>",
+            mode="markers",
+            name=f"{typ} ({len(sub):,})",
+            marker=dict(
+                size=sizes,
+                color=type_color.get(typ, "#888888"),
+                opacity=0.75,
+                line=dict(width=0.5, color="#333"),
+            ),
+        ))
+
+    bg = t["plot"]
+    land = "#2a2a2a" if theme_name == "dark" else "#f0f0f0"
+    coast = "#666" if theme_name == "dark" else "#999"
+    fig.update_layout(
+        template=t["template"],
+        paper_bgcolor=t["paper"], plot_bgcolor=bg,
+        height=height,
+        title=(f"MPC observatory sites — follow-up NEOs "
+               f"{year_range[0]}–{year_range[1]} "
+               f"(Phase 1: discovery apparition only)"),
+        margin=dict(l=10, r=10, t=50, b=10),
+        legend=dict(yanchor="bottom", y=0.02, xanchor="left", x=0.02,
+                    bgcolor="rgba(0,0,0,0)"),
+        geo=dict(
+            projection_type="equirectangular",
+            showland=True, landcolor=land,
+            showocean=True, oceancolor=bg,
+            showcountries=True, countrycolor=coast,
+            coastlinecolor=coast,
+            lataxis=dict(range=[-65, 80]),
+            bgcolor=bg,
+        ),
+    )
+    return fig
+
+
+@app.callback(
+    Output("fuc-bar", "figure"),
+    Input("fuc-year-range", "value"),
+    Input("fuc-site-select", "value"),
+    Input("fuc-site-type", "value"),
+    Input("theme-toggle", "value"),
+    Input("plot-height", "value"),
+)
+def _fuc_render_bar(year_range, sites, site_type, theme_name, ph):
+    t = theme(theme_name or "light")
+    height = max(int(ph), 400) if ph else 520
+    counts = _fuc_followup_counts(year_range)
+    if counts.empty:
+        return _empty_figure("No follow-up data in window", t, height)
+    obs = load_obscodes()
+    merged = counts.merge(
+        obs[["obscode", "name", "observations_type"]],
+        left_on="station_code", right_on="obscode", how="left")
+    if site_type and site_type != "all":
+        merged = merged[merged["observations_type"] == site_type]
+    if sites:
+        merged = merged[merged["station_code"].isin(sites)]
+        title_suffix = f" ({len(sites)} selected)"
+    else:
+        merged = merged.nlargest(20, "n_followup")
+        title_suffix = " (top 20 by follow-up volume)"
+    merged = merged.sort_values("n_followup")
+
+    type_color = {
+        "optical":     "#1f77b4",
+        "satellite":   "#d62728",
+        "radar":       "#9467bd",
+        "occultation": "#2ca02c",
+        "roving":      "#ff7f0e",
+    }
+    colors = [type_color.get(typ, "#888888")
+              for typ in merged["observations_type"]]
+    labels = [f"{c} — {n or '(unnamed)'}"
+              for c, n in zip(merged["station_code"], merged["name"])]
+
+    fig = go.Figure(go.Bar(
+        x=merged["n_followup"], y=labels, orientation="h",
+        marker_color=colors,
+        hovertemplate="%{y}<br>%{x:,} NEOs<extra></extra>",
+    ))
+    fig.update_layout(
+        template=t["template"],
+        paper_bgcolor=t["paper"], plot_bgcolor=t["plot"],
+        height=height,
+        title=(f"Follow-up NEOs per site, "
+               f"{year_range[0]}–{year_range[1]}{title_suffix}"),
+        xaxis=dict(title="Distinct NEOs followed up"),
+        yaxis=dict(title="", automargin=True),
+        margin=dict(l=20, r=20, t=60, b=60),
+    )
+    return fig
+
+
+@app.callback(
+    Output("dl-fuc", "data"),
+    Input("btn-download-fuc", "n_clicks"),
+    State("fuc-year-range", "value"),
+    State("fuc-site-type", "value"),
+    State("fuc-site-select", "value"),
+    prevent_initial_call=True,
+)
+def _fuc_download(_n, year_range, site_type, sites):
+    counts = _fuc_followup_counts(year_range)
+    obs = load_obscodes()
+    merged = counts.merge(
+        obs[["obscode", "name", "observations_type",
+             "latitude", "longitude_180"]],
+        left_on="station_code", right_on="obscode", how="left")
+    if site_type and site_type != "all":
+        merged = merged[merged["observations_type"] == site_type]
+    if sites:
+        merged = merged[merged["station_code"].isin(sites)]
+    merged = merged.sort_values("n_followup", ascending=False)
+    fname = (f"followup_comparison_{year_range[0]}_{year_range[1]}.csv")
+    return send_data_frame(merged.to_csv, fname, index=False)
 
 
 # ---------------------------------------------------------------------------
