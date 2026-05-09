@@ -4468,15 +4468,58 @@ app.layout = html.Div(
                                        "marginBottom": "15px"},
                                 children=[
                                     html.Div(children=[
+                                        html.Label("Follow-up window",
+                                                   style=LABEL_STYLE),
+                                        dcc.Dropdown(
+                                            id="fuc-window",
+                                            options=[
+                                                {"label": "1 day",
+                                                 "value": 1},
+                                                {"label": "1 week",
+                                                 "value": 7},
+                                                {"label": "1 lunation "
+                                                          "(29 d)",
+                                                 "value": 29},
+                                                {"label": "100 days",
+                                                 "value": 100},
+                                                {"label": "200 days",
+                                                 "value": 200},
+                                            ],
+                                            value=200,
+                                            clearable=False,
+                                            style={"width": "180px"},
+                                        ),
+                                    ]),
+                                    html.Div(children=[
+                                        html.Label("Precovery",
+                                                   style=LABEL_STYLE),
+                                        dcc.RadioItems(
+                                            id="fuc-precovery",
+                                            options=[
+                                                {"label":
+                                                    " Post-discovery",
+                                                 "value": "post_only"},
+                                                {"label":
+                                                    " Include precoveries",
+                                                 "value": "include"},
+                                            ],
+                                            value="post_only",
+                                            inline=True,
+                                            style=RADIO_STYLE,
+                                            labelStyle=
+                                                RADIO_LABEL_STYLE,
+                                        ),
+                                    ]),
+                                    html.Div(children=[
                                         html.Label("Site type",
                                                    style=LABEL_STYLE),
                                         dcc.Dropdown(
                                             id="fuc-site-type",
                                             options=[
-                                                {"label": "All types",
-                                                 "value": "all"},
                                                 {"label": "Optical",
                                                  "value": "optical"},
+                                                {"label": "All types",
+                                                 "value": "all"},
                                                 {"label": "Satellite",
                                                  "value": "satellite"},
                                                 {"label": "Radar",
@@ -4486,32 +4529,39 @@ app.layout = html.Div(
                                                 {"label": "Roving",
                                                  "value": "roving"},
                                             ],
-                                            value="all",
+                                            value="optical",
                                             clearable=False,
-                                            style={"width": "180px"},
+                                            style={"width": "150px"},
                                         ),
                                     ]),
                                     html.Div(children=[
-                                        html.Label(
-                                            "Min follow-up NEOs (map)",
-                                            style=LABEL_STYLE),
+                                        html.Label("Map projection",
+                                                   style=LABEL_STYLE),
                                         dcc.Dropdown(
-                                            id="fuc-min-followup",
+                                            id="fuc-projection",
                                             options=[
-                                                {"label": "Any (all sites)",
-                                                 "value": 0},
-                                                {"label": "≥ 1",
-                                                 "value": 1},
-                                                {"label": "≥ 10",
-                                                 "value": 10},
-                                                {"label": "≥ 100",
-                                                 "value": 100},
-                                                {"label": "≥ 1000",
-                                                 "value": 1000},
+                                                {"label": "Equirectangular",
+                                                 "value":
+                                                    "equirectangular"},
+                                                {"label": "Natural earth",
+                                                 "value":
+                                                    "natural earth"},
+                                                {"label": "Robinson",
+                                                 "value": "robinson"},
+                                                {"label": "Mollweide",
+                                                 "value": "mollweide"},
+                                                {"label": "Mercator",
+                                                 "value": "mercator"},
+                                                {"label": "Miller",
+                                                 "value": "miller"},
+                                                {"label": "Kavrayskiy VII",
+                                                 "value": "kavrayskiy7"},
+                                                {"label": "Orthographic",
+                                                 "value": "orthographic"},
                                             ],
-                                            value=1,
+                                            value="natural earth",
                                             clearable=False,
-                                            style={"width": "190px"},
+                                            style={"width": "180px"},
                                         ),
                                     ]),
                                     html.Div(
@@ -4546,13 +4596,13 @@ app.layout = html.Div(
                                 ],
                             ),
                             html.P(
-                                "Phase 1: “follow-up” means a "
-                                "tracklet at a site other than the "
-                                "discovery site, within the discovery "
-                                "apparition (±200 days). "
-                                "Multi-apparition recovery and "
-                                "follow-up groups (LCO, ARO, …) are "
-                                "Phase 2.",
+                                "Phase 1: “follow-up” = distinct NEOs "
+                                "observed at a site other than the "
+                                "discovery site, within the chosen "
+                                "follow-up window (capped by the "
+                                "±200-day apparition cache). "
+                                "Tracklet/observation counts and "
+                                "multi-apparition recovery are Phase 2.",
                                 className="subtext",
                                 style={"fontFamily": "sans-serif",
                                        "marginBottom": "10px",
@@ -11728,16 +11778,36 @@ def _station_non_neo_dl(_n):
 # Follow-up Comparison callbacks (Phase 1)
 # ---------------------------------------------------------------------------
 
-# Cache the per-site follow-up NEO counts keyed by year-range so the map
-# and bar chart don't both recompute. Tiny DataFrame; not worth invalidating.
+# Cache the per-site follow-up NEO counts keyed by (year-range, window,
+# precovery flag) so the map, bar chart, dropdown, and download don't
+# all recompute. Tiny DataFrame; not worth invalidating.
 _FUC_COUNT_CACHE = {}
 
+# Map height is forced — the map is the primary artifact on this tab
+# and needs vertical room to be legible regardless of the banner's
+# Plot-height setting (which still drives the bar chart).
+_FUC_MAP_HEIGHT = 900
 
-def _fuc_followup_counts(year_range):
-    """Per-site count of distinct NEOs followed up at that site,
-    excluding NEOs whose discovery site IS that site. Discovery-
-    apparition only (reuses df_apparition's ±200-day join)."""
-    key = tuple(year_range)
+_FUC_TYPE_COLOR = {
+    "optical":     "#1f77b4",
+    "satellite":   "#d62728",
+    "radar":       "#9467bd",
+    "occultation": "#2ca02c",
+    "roving":      "#ff7f0e",
+}
+
+
+def _fuc_followup_counts(year_range, window_days, precovery_mode):
+    """Per-site count of distinct NEOs observed at that site within
+    `window_days` of discovery, excluding NEOs whose discovery site
+    IS that site. Discovery-apparition only (the underlying
+    apparition cache is hard-capped at ±200 d).
+
+    precovery_mode: "post_only" (default) or "include" — when
+    "include", a station also qualifies as a follow-up site if its
+    first observation is *before* discovery (a precovery) within the
+    window."""
+    key = (tuple(year_range), int(window_days), str(precovery_mode))
     cached = _FUC_COUNT_CACHE.get(key)
     if cached is not None:
         return cached
@@ -11750,6 +11820,16 @@ def _fuc_followup_counts(year_range):
         df_apparition["designation"].isin(disc_station.index)].copy()
     app["disc_station"] = app["designation"].map(disc_station)
     fu = app[app["station_code"] != app["disc_station"]]
+
+    w = int(window_days)
+    if precovery_mode == "include":
+        fu = fu[
+            fu["days_from_disc"].between(-w, w)
+            | fu["post_disc_days"].between(0, w)
+        ]
+    else:
+        fu = fu[fu["post_disc_days"].between(0, w)]
+
     counts = (fu.groupby("station_code")["designation"].nunique()
               .reset_index(name="n_followup"))
     _FUC_COUNT_CACHE[key] = counts
@@ -11759,9 +11839,11 @@ def _fuc_followup_counts(year_range):
 @app.callback(
     Output("fuc-site-select", "options"),
     Input("fuc-year-range", "value"),
+    Input("fuc-window", "value"),
+    Input("fuc-precovery", "value"),
 )
-def _fuc_site_options(year_range):
-    counts = _fuc_followup_counts(year_range)
+def _fuc_site_options(year_range, window_days, precovery_mode):
+    counts = _fuc_followup_counts(year_range, window_days, precovery_mode)
     obs = load_obscodes()
     merged = counts.merge(
         obs[["obscode", "name"]], left_on="station_code",
@@ -11775,46 +11857,84 @@ def _fuc_site_options(year_range):
     ]
 
 
+def _window_label(window_days):
+    return {1: "1 d", 7: "1 wk", 29: "1 lunation",
+            100: "100 d", 200: "200 d"}.get(int(window_days),
+                                            f"{window_days} d")
+
+
 @app.callback(
     Output("fuc-world-map", "figure"),
     Input("fuc-year-range", "value"),
+    Input("fuc-window", "value"),
+    Input("fuc-precovery", "value"),
     Input("fuc-site-type", "value"),
-    Input("fuc-min-followup", "value"),
+    Input("fuc-projection", "value"),
     Input("theme-toggle", "value"),
-    Input("plot-height", "value"),
 )
-def _fuc_render_map(year_range, site_type, min_followup, theme_name, ph):
+def _fuc_render_map(year_range, window_days, precovery_mode,
+                    site_type, projection, theme_name):
     t = theme(theme_name or "light")
-    height = max(int(ph), 400) if ph else 520
+    height = _FUC_MAP_HEIGHT
     obs = load_obscodes()
     if obs is None or obs.empty:
         return _empty_figure("Obscodes not loaded", t, height)
     if site_type and site_type != "all":
         obs = obs[obs["observations_type"] == site_type]
-    counts = _fuc_followup_counts(year_range)
+    counts = _fuc_followup_counts(year_range, window_days, precovery_mode)
     merged = obs.merge(
         counts, left_on="obscode", right_on="station_code", how="left")
     merged["n_followup"] = merged["n_followup"].fillna(0).astype(int)
-    if min_followup and min_followup > 0:
-        merged = merged[merged["n_followup"] >= min_followup]
 
-    type_color = {
-        "optical":     "#1f77b4",
-        "satellite":   "#d62728",
-        "radar":       "#9467bd",
-        "occultation": "#2ca02c",
-        "roving":      "#ff7f0e",
-    }
+    bg = t["plot"]
+    land = "#2a2a2a" if theme_name == "dark" else "#f0f0f0"
+    coast = "#666" if theme_name == "dark" else "#999"
+
     fig = go.Figure()
-    for typ, sub in merged.groupby("observations_type"):
-        # Marker size: sqrt-scaled by NEO count, min size for visibility.
-        # Sites with 0 follow-up render as small fixed markers when
-        # min_followup=0 so the user can still see "where everything is".
-        sizes = np.sqrt(sub["n_followup"].clip(lower=0)) * 1.4 + 5
+
+    # Sites with no follow-up activity in this window — small grey
+    # markers so the user sees "where else there's a site that didn't
+    # contribute". Goes underneath so colored markers paint over.
+    inactive = merged[merged["n_followup"] == 0]
+    if not inactive.empty:
         fig.add_trace(go.Scattergeo(
-            lon=sub["longitude_180"],
-            lat=sub["latitude"],
-            text=sub.apply(
+            lon=inactive["longitude_180"],
+            lat=inactive["latitude"],
+            text=inactive.apply(
+                lambda r: f"<b>{r['obscode']}</b> — "
+                          f"{r['name'] or '(unnamed)'}<br>"
+                          f"Type: {r['observations_type']}<br>"
+                          f"No follow-up in window",
+                axis=1),
+            hovertemplate="%{text}<extra></extra>",
+            mode="markers",
+            name=f"no follow-up ({len(inactive):,})",
+            marker=dict(
+                size=4,
+                color=("rgba(180,180,180,0.5)" if theme_name == "dark"
+                       else "rgba(120,120,120,0.45)"),
+                line=dict(width=0),
+            ),
+            showlegend=True,
+        ))
+
+    # Sites with ≥1 follow-up — colored by log10(n) with a single
+    # colorbar. Uniform marker size so small contributors aren't
+    # buried under the giants.
+    active = merged[merged["n_followup"] > 0]
+    if not active.empty:
+        log_n = np.log10(active["n_followup"].astype(float))
+        cmax = float(log_n.max())
+        # Build human-readable colorbar ticks at log decades.
+        decades = [d for d in range(0, int(np.ceil(cmax)) + 1) if d <= cmax]
+        if not decades:
+            decades = [0]
+        tickvals = decades
+        ticktext = [f"{10**d:,.0f}" for d in decades]
+        fig.add_trace(go.Scattergeo(
+            lon=active["longitude_180"],
+            lat=active["latitude"],
+            text=active.apply(
                 lambda r: f"<b>{r['obscode']}</b> — "
                           f"{r['name'] or '(unnamed)'}<br>"
                           f"Type: {r['observations_type']}<br>"
@@ -11822,35 +11942,50 @@ def _fuc_render_map(year_range, site_type, min_followup, theme_name, ph):
                 axis=1),
             hovertemplate="%{text}<extra></extra>",
             mode="markers",
-            name=f"{typ} ({len(sub):,})",
+            name=f"with follow-up ({len(active):,})",
             marker=dict(
-                size=sizes,
-                color=type_color.get(typ, "#888888"),
-                opacity=0.75,
-                line=dict(width=0.5, color="#333"),
+                size=8,
+                color=log_n,
+                colorscale="Viridis",
+                cmin=0,
+                cmax=cmax if cmax > 0 else 1,
+                opacity=0.9,
+                line=dict(width=0.4, color="#222"),
+                colorbar=dict(
+                    title="NEOs<br>(log)",
+                    tickvals=tickvals,
+                    ticktext=ticktext,
+                    thickness=14,
+                    len=0.7,
+                    yanchor="middle", y=0.5,
+                ),
             ),
+            showlegend=True,
         ))
 
-    bg = t["plot"]
-    land = "#2a2a2a" if theme_name == "dark" else "#f0f0f0"
-    coast = "#666" if theme_name == "dark" else "#999"
+    pmode_label = ("post-discovery" if precovery_mode == "post_only"
+                   else "post + precoveries")
     fig.update_layout(
         template=t["template"],
         paper_bgcolor=t["paper"], plot_bgcolor=bg,
         height=height,
         title=(f"MPC observatory sites — follow-up NEOs "
-               f"{year_range[0]}–{year_range[1]} "
-               f"(Phase 1: discovery apparition only)"),
+               f"{year_range[0]}–{year_range[1]}, "
+               f"window {_window_label(window_days)} "
+               f"({pmode_label})"),
         margin=dict(l=10, r=10, t=50, b=10),
         legend=dict(yanchor="bottom", y=0.02, xanchor="left", x=0.02,
                     bgcolor="rgba(0,0,0,0)"),
         geo=dict(
-            projection_type="equirectangular",
+            projection_type=projection or "natural earth",
             showland=True, landcolor=land,
             showocean=True, oceancolor=bg,
             showcountries=True, countrycolor=coast,
             coastlinecolor=coast,
-            lataxis=dict(range=[-65, 80]),
+            lataxis=dict(range=[-65, 80])
+                if (projection or "") in
+                ("equirectangular", "mercator", "miller")
+                else dict(),
             bgcolor=bg,
         ),
     )
@@ -11860,15 +11995,18 @@ def _fuc_render_map(year_range, site_type, min_followup, theme_name, ph):
 @app.callback(
     Output("fuc-bar", "figure"),
     Input("fuc-year-range", "value"),
+    Input("fuc-window", "value"),
+    Input("fuc-precovery", "value"),
     Input("fuc-site-select", "value"),
     Input("fuc-site-type", "value"),
     Input("theme-toggle", "value"),
     Input("plot-height", "value"),
 )
-def _fuc_render_bar(year_range, sites, site_type, theme_name, ph):
+def _fuc_render_bar(year_range, window_days, precovery_mode,
+                    sites, site_type, theme_name, ph):
     t = theme(theme_name or "light")
     height = max(int(ph), 400) if ph else 520
-    counts = _fuc_followup_counts(year_range)
+    counts = _fuc_followup_counts(year_range, window_days, precovery_mode)
     if counts.empty:
         return _empty_figure("No follow-up data in window", t, height)
     obs = load_obscodes()
@@ -11885,18 +12023,13 @@ def _fuc_render_bar(year_range, sites, site_type, theme_name, ph):
         title_suffix = " (top 20 by follow-up volume)"
     merged = merged.sort_values("n_followup")
 
-    type_color = {
-        "optical":     "#1f77b4",
-        "satellite":   "#d62728",
-        "radar":       "#9467bd",
-        "occultation": "#2ca02c",
-        "roving":      "#ff7f0e",
-    }
-    colors = [type_color.get(typ, "#888888")
+    colors = [_FUC_TYPE_COLOR.get(typ, "#888888")
               for typ in merged["observations_type"]]
     labels = [f"{c} — {n or '(unnamed)'}"
               for c, n in zip(merged["station_code"], merged["name"])]
 
+    pmode_label = ("post-disc" if precovery_mode == "post_only"
+                   else "post+pre")
     fig = go.Figure(go.Bar(
         x=merged["n_followup"], y=labels, orientation="h",
         marker_color=colors,
@@ -11907,7 +12040,9 @@ def _fuc_render_bar(year_range, sites, site_type, theme_name, ph):
         paper_bgcolor=t["paper"], plot_bgcolor=t["plot"],
         height=height,
         title=(f"Follow-up NEOs per site, "
-               f"{year_range[0]}–{year_range[1]}{title_suffix}"),
+               f"{year_range[0]}–{year_range[1]}, "
+               f"{_window_label(window_days)} {pmode_label}"
+               f"{title_suffix}"),
         xaxis=dict(title="Distinct NEOs followed up"),
         yaxis=dict(title="", automargin=True),
         margin=dict(l=20, r=20, t=60, b=60),
@@ -11919,12 +12054,15 @@ def _fuc_render_bar(year_range, sites, site_type, theme_name, ph):
     Output("dl-fuc", "data"),
     Input("btn-download-fuc", "n_clicks"),
     State("fuc-year-range", "value"),
+    State("fuc-window", "value"),
+    State("fuc-precovery", "value"),
     State("fuc-site-type", "value"),
     State("fuc-site-select", "value"),
     prevent_initial_call=True,
 )
-def _fuc_download(_n, year_range, site_type, sites):
-    counts = _fuc_followup_counts(year_range)
+def _fuc_download(_n, year_range, window_days, precovery_mode,
+                  site_type, sites):
+    counts = _fuc_followup_counts(year_range, window_days, precovery_mode)
     obs = load_obscodes()
     merged = counts.merge(
         obs[["obscode", "name", "observations_type",
@@ -11935,7 +12073,8 @@ def _fuc_download(_n, year_range, site_type, sites):
     if sites:
         merged = merged[merged["station_code"].isin(sites)]
     merged = merged.sort_values("n_followup", ascending=False)
-    fname = (f"followup_comparison_{year_range[0]}_{year_range[1]}.csv")
+    fname = (f"followup_comparison_{year_range[0]}_{year_range[1]}_"
+             f"{int(window_days)}d_{precovery_mode}.csv")
     return send_data_frame(merged.to_csv, fname, index=False)
 
 
