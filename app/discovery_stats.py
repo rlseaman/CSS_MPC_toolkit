@@ -4565,6 +4565,26 @@ app.layout = html.Div(
                                         ),
                                     ]),
                                     html.Div(children=[
+                                        html.Label("Sites shown",
+                                                   style=LABEL_STYLE),
+                                        dcc.RadioItems(
+                                            id="fuc-sites-filter",
+                                            options=[
+                                                {"label":
+                                                    " NEO-active only",
+                                                 "value": "neo_active"},
+                                                {"label":
+                                                    " All MPC sites",
+                                                 "value": "all"},
+                                            ],
+                                            value="neo_active",
+                                            inline=True,
+                                            style=RADIO_STYLE,
+                                            labelStyle=
+                                                RADIO_LABEL_STYLE,
+                                        ),
+                                    ]),
+                                    html.Div(children=[
                                         html.Label("Color scale",
                                                    style=LABEL_STYLE),
                                         dcc.RadioItems(
@@ -4580,6 +4600,34 @@ app.layout = html.Div(
                                             style=RADIO_STYLE,
                                             labelStyle=
                                                 RADIO_LABEL_STYLE,
+                                        ),
+                                    ]),
+                                    html.Div(children=[
+                                        html.Label("Colormap",
+                                                   style=LABEL_STYLE),
+                                        dcc.Dropdown(
+                                            id="fuc-colormap",
+                                            options=[
+                                                {"label": "Viridis",
+                                                 "value": "Viridis"},
+                                                {"label": "Plasma",
+                                                 "value": "Plasma"},
+                                                {"label": "Cividis",
+                                                 "value": "Cividis"},
+                                                {"label": "Turbo",
+                                                 "value": "Turbo"},
+                                                {"label": "Magma",
+                                                 "value": "Magma"},
+                                                {"label": "Inferno",
+                                                 "value": "Inferno"},
+                                                {"label": "RdYlBu (rev.)",
+                                                 "value": "RdYlBu_r"},
+                                                {"label": "Spectral (rev.)",
+                                                 "value": "Spectral_r"},
+                                            ],
+                                            value="Viridis",
+                                            clearable=False,
+                                            style={"width": "150px"},
                                         ),
                                     ]),
                                     html.Div(
@@ -11975,6 +12023,70 @@ _FUC_TYPE_COLOR = {
     "roving":      "#ff7f0e",
 }
 
+_FUC_NEO_ACTIVE_SET = None
+
+
+def _fuc_neo_active_codes():
+    """Set of station codes that ever submitted NEO astrometry within
+    a discovery apparition (i.e. appear in df_apparition). Cached
+    once — df_apparition is loaded once at startup and stable."""
+    global _FUC_NEO_ACTIVE_SET
+    if _FUC_NEO_ACTIVE_SET is None:
+        if df_apparition is None:
+            return set()
+        _FUC_NEO_ACTIVE_SET = set(
+            df_apparition["station_code"].dropna().unique())
+    return _FUC_NEO_ACTIVE_SET
+
+
+def _fuc_apply_sites_filter(obs_df, sites_filter):
+    """Restrict obscodes to NEO-active stations if requested."""
+    if sites_filter == "neo_active":
+        active = _fuc_neo_active_codes()
+        if active:
+            return obs_df[obs_df["obscode"].isin(active)]
+    return obs_df
+
+
+def _fuc_bbox_from_relayout(relayout):
+    """Best-effort viewport bbox from Scattergeo relayoutData.
+    Returns (lon_min, lon_max, lat_min, lat_max) or None.
+    Some projections expose lon/lat axis ranges directly; others
+    only expose center + scale, which we project linearly to a bbox
+    over the default ±180/±90 extents."""
+    if not relayout or not isinstance(relayout, dict):
+        return None
+    lon_range = relayout.get("geo.lonaxis.range")
+    lat_range = relayout.get("geo.lataxis.range")
+    if lon_range and lat_range and len(lon_range) == 2 and len(lat_range) == 2:
+        return (float(lon_range[0]), float(lon_range[1]),
+                float(lat_range[0]), float(lat_range[1]))
+    lon_c = relayout.get("geo.center.lon")
+    lat_c = relayout.get("geo.center.lat")
+    scale = relayout.get("geo.projection.scale")
+    if lon_c is not None and lat_c is not None and scale and scale > 0:
+        lon_w = 180.0 / float(scale)
+        lat_w = 90.0 / float(scale)
+        return (float(lon_c) - lon_w, float(lon_c) + lon_w,
+                float(lat_c) - lat_w, float(lat_c) + lat_w)
+    return None
+
+
+def _fuc_apply_bbox(obs_df, bbox):
+    """Filter obscodes to those whose lat/lon fall within bbox."""
+    if bbox is None:
+        return obs_df
+    lon_min, lon_max, lat_min, lat_max = bbox
+    # Longitude wraps; handle both straightforward and crossed-180
+    # cases. (Most projections give us a non-wrapping range.)
+    if lon_min <= lon_max:
+        lon_mask = obs_df["longitude_180"].between(lon_min, lon_max)
+    else:
+        lon_mask = ((obs_df["longitude_180"] >= lon_min)
+                    | (obs_df["longitude_180"] <= lon_max))
+    lat_mask = obs_df["latitude"].between(lat_min, lat_max)
+    return obs_df[lon_mask & lat_mask]
+
 
 def _fuc_followup_counts(year_range, window_days, precovery_mode):
     """Per-site count of distinct NEOs observed at that site within
@@ -12048,13 +12160,16 @@ def _window_label(window_days):
     Input("fuc-window", "value"),
     Input("fuc-precovery", "value"),
     Input("fuc-site-type", "value"),
+    Input("fuc-sites-filter", "value"),
     Input("fuc-projection", "value"),
     Input("fuc-cscale", "value"),
+    Input("fuc-colormap", "value"),
     Input("theme-toggle", "value"),
     Input("plot-height", "value"),
 )
 def _fuc_render_map(year_range, window_days, precovery_mode,
-                    site_type, projection, cscale, theme_name, ph):
+                    site_type, sites_filter, projection, cscale,
+                    colormap, theme_name, ph):
     t = theme(theme_name or "light")
     height = max(int(ph), 400) if ph else 900
     obs = load_obscodes()
@@ -12062,6 +12177,7 @@ def _fuc_render_map(year_range, window_days, precovery_mode,
         return _empty_figure("Obscodes not loaded", t, height)
     if site_type and site_type != "all":
         obs = obs[obs["observations_type"] == site_type]
+    obs = _fuc_apply_sites_filter(obs, sites_filter)
     counts = _fuc_followup_counts(year_range, window_days, precovery_mode)
     merged = obs.merge(
         counts, left_on="obscode", right_on="station_code", how="left")
@@ -12126,7 +12242,7 @@ def _fuc_render_map(year_range, window_days, precovery_mode,
         marker_kwargs = dict(
             size=8,
             color=vals,
-            colorscale="Viridis",
+            colorscale=colormap or "Viridis",
             cmin=cmin,
             cmax=cmax if cmax > cmin else cmin + 1,
             opacity=0.9,
@@ -12190,17 +12306,22 @@ def _fuc_render_map(year_range, window_days, precovery_mode,
     return fig
 
 
-# Stats card
+# Stats card — responsive to year/window/type/sites-filter AND to the
+# map's pan/zoom (via relayoutData). Bbox filtering is best-effort:
+# for projections that expose lon/lat axis ranges we get a clean
+# rectangle; for those that only expose center+scale we approximate.
 @app.callback(
     Output("fuc-stats", "children"),
     Input("fuc-year-range", "value"),
     Input("fuc-window", "value"),
     Input("fuc-precovery", "value"),
     Input("fuc-site-type", "value"),
+    Input("fuc-sites-filter", "value"),
+    Input("fuc-world-map", "relayoutData"),
     Input("theme-toggle", "value"),
 )
 def _fuc_render_stats(year_range, window_days, precovery_mode,
-                      site_type, theme_name):
+                      site_type, sites_filter, relayout, theme_name):
     obs = load_obscodes()
     if obs is None or obs.empty or df is None or df_apparition is None:
         return html.Span("Loading…",
@@ -12208,16 +12329,19 @@ def _fuc_render_stats(year_range, window_days, precovery_mode,
                                 "var(--subtext-color, #888)"})
     type_obs = (obs if site_type == "all"
                 else obs[obs["observations_type"] == site_type])
+    type_obs = _fuc_apply_sites_filter(type_obs, sites_filter)
+    bbox = _fuc_bbox_from_relayout(relayout)
+    viewport_obs = _fuc_apply_bbox(type_obs, bbox)
+    bbox_active = bbox is not None and len(viewport_obs) < len(type_obs)
+
     counts = _fuc_followup_counts(year_range, window_days, precovery_mode)
     counts_typed = counts.merge(
-        type_obs[["obscode"]], left_on="station_code",
+        viewport_obs[["obscode"]], left_on="station_code",
         right_on="obscode", how="inner")
     y0, y1 = year_range
     eligible = df[(df["disc_year"] >= y0) & (df["disc_year"] <= y1)]
     n_neos = int(len(eligible))
 
-    # NEOs that received any follow-up at a site of the chosen type
-    # in this window.
     if not counts_typed.empty:
         disc_station = eligible.set_index("designation")["station_code"]
         app = df_apparition[
@@ -12247,6 +12371,15 @@ def _fuc_render_stats(year_range, window_days, precovery_mode,
     pmode_label = ("post-discovery"
                    if precovery_mode == "post_only"
                    else "incl. precoveries")
+    sites_filter_label = ("NEO-active" if sites_filter == "neo_active"
+                          else "all MPC")
+    if bbox_active:
+        scope_label = (
+            f"viewport: lon {bbox[0]:.0f}…{bbox[1]:.0f}, "
+            f"lat {bbox[2]:.0f}…{bbox[3]:.0f}"
+        )
+    else:
+        scope_label = "scope: global (pan/zoom the map to filter)"
 
     def tile(label, value):
         return html.Div(
@@ -12264,22 +12397,33 @@ def _fuc_render_stats(year_range, window_days, precovery_mode,
                                     "var(--subtext-color, #888)"}),
             ])
 
-    return html.Div(
-        style={"display": "flex", "flexWrap": "wrap",
-               "gap": "20px 32px", "alignItems": "center"},
-        children=[
-            tile(f"sites of type {site_type}",
-                 f"{len(type_obs):,}"),
-            tile(f"with follow-up in window "
-                 f"({_window_label(window_days)}, {pmode_label})",
-                 f"{len(counts_typed):,}"),
-            tile(f"NEOs discovered {y0}–{y1}",
-                 f"{n_neos:,}"),
-            tile("NEOs with any follow-up here",
-                 f"{followed_neos:,} ({pct:.1f} %)"),
-            tile("Median follow-up sites per NEO",
-                 f"{med_sites:.1f}"),
-        ])
+    badge_color = ("#1f77b4" if bbox_active
+                   else "var(--subtext-color, #888)")
+
+    return html.Div(children=[
+        html.Div(
+            style={"display": "flex", "flexWrap": "wrap",
+                   "gap": "20px 32px", "alignItems": "center"},
+            children=[
+                tile(f"{site_type} sites ({sites_filter_label})",
+                     f"{len(viewport_obs):,}"),
+                tile(f"with follow-up in window "
+                     f"({_window_label(window_days)}, {pmode_label})",
+                     f"{len(counts_typed):,}"),
+                tile(f"NEOs discovered {y0}–{y1}",
+                     f"{n_neos:,}"),
+                tile("NEOs with any follow-up here",
+                     f"{followed_neos:,} ({pct:.1f} %)"),
+                tile("Median follow-up sites per NEO",
+                     f"{med_sites:.1f}"),
+            ]),
+        html.Div(
+            scope_label,
+            style={"marginTop": "8px",
+                   "fontSize": "11px",
+                   "fontStyle": "italic",
+                   "color": badge_color}),
+    ])
 
 
 # When the user navigates to this tab, default the global Plot-height
@@ -12304,20 +12448,22 @@ def _fuc_default_plot_height(active_tab):
     Input("fuc-precovery", "value"),
     Input("fuc-site-select", "value"),
     Input("fuc-site-type", "value"),
+    Input("fuc-sites-filter", "value"),
     Input("theme-toggle", "value"),
     Input("plot-height", "value"),
 )
 def _fuc_render_bar(year_range, window_days, precovery_mode,
-                    sites, site_type, theme_name, ph):
+                    sites, site_type, sites_filter, theme_name, ph):
     t = theme(theme_name or "light")
     height = max(int(ph), 400) if ph else 520
     counts = _fuc_followup_counts(year_range, window_days, precovery_mode)
     if counts.empty:
         return _empty_figure("No follow-up data in window", t, height)
     obs = load_obscodes()
+    obs = _fuc_apply_sites_filter(obs, sites_filter)
     merged = counts.merge(
         obs[["obscode", "name", "observations_type"]],
-        left_on="station_code", right_on="obscode", how="left")
+        left_on="station_code", right_on="obscode", how="inner")
     if site_type and site_type != "all":
         merged = merged[merged["observations_type"] == site_type]
     if sites:
@@ -12362,24 +12508,26 @@ def _fuc_render_bar(year_range, window_days, precovery_mode,
     State("fuc-window", "value"),
     State("fuc-precovery", "value"),
     State("fuc-site-type", "value"),
+    State("fuc-sites-filter", "value"),
     State("fuc-site-select", "value"),
     prevent_initial_call=True,
 )
 def _fuc_download(_n, year_range, window_days, precovery_mode,
-                  site_type, sites):
+                  site_type, sites_filter, sites):
     counts = _fuc_followup_counts(year_range, window_days, precovery_mode)
     obs = load_obscodes()
+    obs = _fuc_apply_sites_filter(obs, sites_filter)
     merged = counts.merge(
         obs[["obscode", "name", "observations_type",
              "latitude", "longitude_180"]],
-        left_on="station_code", right_on="obscode", how="left")
+        left_on="station_code", right_on="obscode", how="inner")
     if site_type and site_type != "all":
         merged = merged[merged["observations_type"] == site_type]
     if sites:
         merged = merged[merged["station_code"].isin(sites)]
     merged = merged.sort_values("n_followup", ascending=False)
     fname = (f"followup_comparison_{year_range[0]}_{year_range[1]}_"
-             f"{int(window_days)}d_{precovery_mode}.csv")
+             f"{int(window_days)}d_{precovery_mode}_{sites_filter}.csv")
     return send_data_frame(merged.to_csv, fname, index=False)
 
 
