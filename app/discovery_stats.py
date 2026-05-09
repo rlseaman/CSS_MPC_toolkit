@@ -4559,7 +4559,7 @@ app.layout = html.Div(
                                                 {"label": "Orthographic",
                                                  "value": "orthographic"},
                                             ],
-                                            value="natural earth",
+                                            value="equirectangular",
                                             clearable=False,
                                             style={"width": "180px"},
                                         ),
@@ -4689,26 +4689,6 @@ app.layout = html.Div(
                                        "flexWrap": "wrap",
                                        "alignItems": "flex-end"},
                                 children=[
-                                    html.Div(
-                                        style={"flex": "1 1 480px",
-                                               "minWidth": "320px"},
-                                        children=[
-                                            html.Label(
-                                                "Sites for bar chart "
-                                                "(blank = top N)",
-                                                style=LABEL_STYLE),
-                                            dcc.Dropdown(
-                                                id="fuc-site-select",
-                                                options=[],
-                                                value=[],
-                                                multi=True,
-                                                placeholder=(
-                                                    "Type a site code "
-                                                    "to add (e.g. I52, "
-                                                    "J95)"),
-                                            ),
-                                        ],
-                                    ),
                                     html.Div(children=[
                                         html.Label("Bars to show",
                                                    style=LABEL_STYLE),
@@ -4731,6 +4711,47 @@ app.layout = html.Div(
                                             style={"width": "100px"},
                                         ),
                                     ]),
+                                    html.Div(
+                                        style={"flex": "1 1 360px",
+                                               "minWidth": "260px"},
+                                        children=[
+                                            html.Label(
+                                                "Sites for bar chart "
+                                                "(blank = top N)",
+                                                style=LABEL_STYLE),
+                                            dcc.Dropdown(
+                                                id="fuc-site-select",
+                                                options=[],
+                                                value=[],
+                                                multi=True,
+                                                placeholder=(
+                                                    "Click to pick "
+                                                    "(or paste a list "
+                                                    "→)"),
+                                            ),
+                                        ],
+                                    ),
+                                    html.Div(
+                                        style={"flex": "0 1 240px",
+                                               "minWidth": "200px"},
+                                        children=[
+                                            html.Label(
+                                                "Paste codes ↵",
+                                                style=LABEL_STYLE),
+                                            dcc.Input(
+                                                id="fuc-paste-codes",
+                                                type="text",
+                                                value="",
+                                                placeholder=(
+                                                    "I52 V06 J95 …"),
+                                                debounce=True,
+                                                style={"width": "100%",
+                                                       "padding": "6px",
+                                                       "fontFamily":
+                                                           "monospace"},
+                                            ),
+                                        ],
+                                    ),
                                 ],
                             ),
                             dcc.Loading(
@@ -5986,7 +6007,26 @@ app.layout = html.Div(
                                         "from a fixed viewpoint — "
                                         "great for visualizing one "
                                         "hemisphere at a time, "
-                                        "useless for the other.",
+                                        "useless for the other. ",
+                                        html.Em("Note: "),
+                                        "the Follow-up Comparison "
+                                        "tab's viewport-aware "
+                                        "filtering (stats card and "
+                                        "bar chart restricting to "
+                                        "the visible map area) is "
+                                        "exact for ",
+                                        html.Em("equirectangular"),
+                                        ", ",
+                                        html.Em("Mercator"),
+                                        ", and ",
+                                        html.Em("Miller"),
+                                        " — those projections expose "
+                                        "their viewport rectangle "
+                                        "directly. Other projections "
+                                        "use an approximate bbox "
+                                        "derived from center + zoom, "
+                                        "so the filter is "
+                                        "best-effort.",
                                     ], style={"fontSize": "15px",
                                               "lineHeight": "1.6",
                                               "marginBottom": "10px"}),
@@ -12086,9 +12126,21 @@ def _fuc_apply_sites_filter(obs_df, sites_filter):
 def _fuc_bbox_from_relayout(relayout):
     """Best-effort viewport bbox from Scattergeo relayoutData.
     Returns (lon_min, lon_max, lat_min, lat_max) or None.
-    Some projections expose lon/lat axis ranges directly; others
-    only expose center + scale, which we project linearly to a bbox
-    over the default ±180/±90 extents."""
+
+    Equirectangular / mercator / miller publish exact
+    geo.lonaxis.range + geo.lataxis.range — we use those.
+    Projections that don't (natural earth, mollweide, robinson,
+    orthographic, …) only publish center + projection.scale, so
+    we approximate. Empirically Plotly's `scale` for a Scattergeo
+    means the visible viewport spans about 90°/scale longitude
+    and 45°/scale latitude at the equator, NOT 180/90 — the
+    earlier 180/90 coefficients overshot by ~2× and let
+    far-away sites slip into 'viewport' filters at moderate
+    zoom. The new coefficients still aren't exact for non-
+    rectangular projections (where the visible region isn't a
+    lat/lon rectangle at all), but they're close enough for the
+    'show me the sites near here' use case. Switch to
+    equirectangular for precise filtering."""
     if not relayout or not isinstance(relayout, dict):
         return None
     lon_range = relayout.get("geo.lonaxis.range")
@@ -12100,8 +12152,8 @@ def _fuc_bbox_from_relayout(relayout):
     lat_c = relayout.get("geo.center.lat")
     scale = relayout.get("geo.projection.scale")
     if lon_c is not None and lat_c is not None and scale and scale > 0:
-        lon_w = 180.0 / float(scale)
-        lat_w = 90.0 / float(scale)
+        lon_w = 90.0 / float(scale)
+        lat_w = 45.0 / float(scale)
         return (float(lon_c) - lon_w, float(lon_c) + lon_w,
                 float(lat_c) - lat_w, float(lat_c) + lat_w)
     return None
@@ -12480,6 +12532,42 @@ def _fuc_default_plot_height(active_tab):
     raise PreventUpdate
 
 
+# Paste-codes input: parse a free-form list of obscodes (comma /
+# semicolon / whitespace separated), filter to codes that exist in
+# the obscodes catalog, append to the dropdown's current value, and
+# clear the input on success. Case-insensitive — obscodes are
+# canonical mixed-case (e.g. "I52", "G96"); we normalize with the
+# catalog's canonical form rather than uppercasing.
+@app.callback(
+    Output("fuc-site-select", "value"),
+    Output("fuc-paste-codes", "value"),
+    Input("fuc-paste-codes", "value"),
+    State("fuc-site-select", "value"),
+    prevent_initial_call=True,
+)
+def _fuc_paste_codes(text, current):
+    if not text:
+        raise PreventUpdate
+    raw = [t for t in re.split(r"[\s,;]+", text.strip()) if t]
+    if not raw:
+        raise PreventUpdate
+    obs = load_obscodes()
+    if obs is None or obs.empty:
+        raise PreventUpdate
+    canonical = {c.lower(): c for c in obs["obscode"].dropna().astype(str)}
+    matched = []
+    for r in raw:
+        c = canonical.get(r.lower())
+        if c and c not in (current or []) and c not in matched:
+            matched.append(c)
+    if not matched:
+        # Nothing valid — leave the input contents alone so the user
+        # can correct typos rather than silently lose what they
+        # typed.
+        raise PreventUpdate
+    return list(current or []) + matched, ""
+
+
 @app.callback(
     Output("fuc-bar", "figure"),
     Input("fuc-year-range", "value"),
@@ -12499,7 +12587,14 @@ def _fuc_render_bar(year_range, window_days, precovery_mode,
                     sites, site_type, sites_filter, cscale, colormap,
                     max_bars, relayout, theme_name, ph):
     t = theme(theme_name or "light")
-    height = max(int(ph), 400) if ph else 520
+    # Bar chart height scales with the bar count rather than the
+    # banner Plot-height. ~22 px per bar plus 80 px overhead for
+    # title and axis. Old behavior pinned the chart at 700–900 px
+    # regardless of bar count, leaving each 10-bar render with
+    # 60–80 px per bar — visually empty. New scheme gives readable
+    # bars without wasted space.
+    n_bars_target = int(max_bars) if max_bars else 10
+    height = max(220, n_bars_target * 22 + 80)
     counts = _fuc_followup_counts(year_range, window_days, precovery_mode)
     if counts.empty:
         return _empty_figure("No follow-up data in window", t, height)
