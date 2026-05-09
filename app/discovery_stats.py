@@ -12133,39 +12133,52 @@ def _fuc_apply_sites_filter(obs_df, sites_filter):
     return obs_df
 
 
-def _fuc_bbox_from_relayout(relayout):
-    """Best-effort viewport bbox from Scattergeo relayoutData.
-    Returns (lon_min, lon_max, lat_min, lat_max) or None.
-
-    Equirectangular / mercator / miller publish exact
-    geo.lonaxis.range + geo.lataxis.range — we use those.
-    Projections that don't (natural earth, mollweide, robinson,
-    orthographic, …) only publish center + projection.scale, so
-    we approximate. Empirically Plotly's `scale` for a Scattergeo
-    means the visible viewport spans about 90°/scale longitude
-    and 45°/scale latitude at the equator, NOT 180/90 — the
-    earlier 180/90 coefficients overshot by ~2× and let
-    far-away sites slip into 'viewport' filters at moderate
-    zoom. The new coefficients still aren't exact for non-
-    rectangular projections (where the visible region isn't a
-    lat/lon rectangle at all), but they're close enough for the
-    'show me the sites near here' use case. Switch to
-    equirectangular for precise filtering."""
-    if not relayout or not isinstance(relayout, dict):
-        return None
+def _fuc_merge_view_state(prev, relayout):
+    """Merge new relayoutData keys into the cumulative view state.
+    Plotly fires partial updates — modebar zoom-in sends only
+    geo.projection.scale, pan sends only geo.center.{lon,lat},
+    drag-zoom sends both axis ranges. We accumulate so a partial
+    update combines with whatever was already known. Returns the
+    new state dict (always a dict, never None)."""
+    state = dict(prev or {})
+    if not isinstance(relayout, dict):
+        return state
     lon_range = relayout.get("geo.lonaxis.range")
+    if lon_range and len(lon_range) == 2:
+        state["lon_range"] = [float(lon_range[0]), float(lon_range[1])]
     lat_range = relayout.get("geo.lataxis.range")
-    if lon_range and lat_range and len(lon_range) == 2 and len(lat_range) == 2:
-        return (float(lon_range[0]), float(lon_range[1]),
-                float(lat_range[0]), float(lat_range[1]))
-    lon_c = relayout.get("geo.center.lon")
-    lat_c = relayout.get("geo.center.lat")
-    scale = relayout.get("geo.projection.scale")
+    if lat_range and len(lat_range) == 2:
+        state["lat_range"] = [float(lat_range[0]), float(lat_range[1])]
+    if "geo.center.lon" in relayout:
+        state["center_lon"] = float(relayout["geo.center.lon"])
+    if "geo.center.lat" in relayout:
+        state["center_lat"] = float(relayout["geo.center.lat"])
+    if "geo.projection.scale" in relayout:
+        state["scale"] = float(relayout["geo.projection.scale"])
+    return state
+
+
+def _fuc_bbox_from_state(state):
+    """Best-effort viewport bbox from cumulative view state.
+    Returns (lon_min, lon_max, lat_min, lat_max) or None.
+    Lon/lat ranges (when present from equirectangular / mercator /
+    miller) are exact; otherwise we project center + scale linearly
+    to a rectangle (approximate for non-rectangular projections)."""
+    if not state or not isinstance(state, dict):
+        return None
+    lon_range = state.get("lon_range")
+    lat_range = state.get("lat_range")
+    if lon_range and lat_range:
+        return (lon_range[0], lon_range[1],
+                lat_range[0], lat_range[1])
+    lon_c = state.get("center_lon")
+    lat_c = state.get("center_lat")
+    scale = state.get("scale")
     if lon_c is not None and lat_c is not None and scale and scale > 0:
-        lon_w = 90.0 / float(scale)
-        lat_w = 45.0 / float(scale)
-        return (float(lon_c) - lon_w, float(lon_c) + lon_w,
-                float(lat_c) - lat_w, float(lat_c) + lat_w)
+        lon_w = 90.0 / scale
+        lat_w = 45.0 / scale
+        return (lon_c - lon_w, lon_c + lon_w,
+                lat_c - lat_w, lat_c + lat_w)
     return None
 
 
@@ -12414,30 +12427,24 @@ def _fuc_render_map(year_range, window_days, precovery_mode,
     Output("fuc-viewport", "data"),
     Input("fuc-world-map", "relayoutData"),
     Input("fuc-projection", "value"),
+    State("fuc-viewport", "data"),
 )
-def _fuc_track_viewport(relayout, _projection):
-    # On projection change, Plotly resets the view; clear the bbox
-    # so downstream callbacks recompute from scratch.
+def _fuc_track_viewport(relayout, _projection, prev_state):
+    # On projection change, Plotly resets the view; clear state.
     if ctx.triggered_id == "fuc-projection":
         return None
     if not relayout or not isinstance(relayout, dict):
         raise PreventUpdate
 
-    # Reset detection — clear the bbox so bars and stats go global.
-    # Plotly's modebar reset / double-click reset usually fires
-    # geo.lonaxis.autorange (and/or geo.lataxis.autorange) rather
-    # than concrete axis ranges. Without this, the bar/stats
-    # callbacks would stay filtered to the prior viewport even
-    # though the map has been zoomed all the way out.
+    # Reset detection — clear state so bars and stats go global.
+    # Modebar reset / double-click reset usually fires autorange
+    # flags rather than concrete axis ranges.
     if (relayout.get("geo.lonaxis.autorange") is True
             or relayout.get("geo.lataxis.autorange") is True):
         return None
 
-    # Some reset paths send concrete numbers that happen to be the
-    # default view (scale ≈ 1, centered at origin). Treat that as a
-    # reset too. A user who panned exactly back to the default view
-    # is functionally indistinguishable from a reset, and the bbox
-    # would cover the entire globe in either case.
+    # Default-view reset: scale ≈ 1 centered on origin. Same effect
+    # as autorange — the bbox would cover the entire globe.
     scale = relayout.get("geo.projection.scale")
     lon_c = relayout.get("geo.center.lon")
     lat_c = relayout.get("geo.center.lat")
@@ -12447,13 +12454,15 @@ def _fuc_track_viewport(relayout, _projection):
             and lat_c is not None and abs(float(lat_c)) < 0.5):
         return None
 
-    bbox = _fuc_bbox_from_relayout(relayout)
-    if bbox is None:
-        # No viewport info in this relayout payload — preserve the
-        # previous bbox so a click on the map doesn't undo the
-        # user's zoom-to-region.
+    # Otherwise: merge new keys into the previous state. A modebar
+    # zoom-in fires only scale, pan fires only center, drag-zoom
+    # fires both axis ranges — accumulating means each event
+    # refines the bbox rather than replacing it wholesale (which
+    # is what made scale-only events fall to PreventUpdate).
+    new_state = _fuc_merge_view_state(prev_state, relayout)
+    if not new_state or new_state == (prev_state or {}):
         raise PreventUpdate
-    return list(bbox)
+    return new_state
 
 
 # Stats card — responsive to year/window/type/sites-filter AND the
@@ -12478,7 +12487,7 @@ def _fuc_render_stats(year_range, window_days, precovery_mode,
     type_obs = (obs if site_type == "all"
                 else obs[obs["observations_type"] == site_type])
     type_obs = _fuc_apply_sites_filter(type_obs, sites_filter)
-    bbox = tuple(viewport) if viewport else None
+    bbox = _fuc_bbox_from_state(viewport)
     viewport_obs = _fuc_apply_bbox(type_obs, bbox)
     bbox_active = bbox is not None and len(viewport_obs) < len(type_obs)
 
@@ -12681,7 +12690,7 @@ def _fuc_render_bar(year_range, window_days, precovery_mode,
     else:
         cmin, cmax = 0.0, 1.0
 
-    bbox = tuple(viewport) if viewport else None
+    bbox = _fuc_bbox_from_state(viewport)
     merged = _fuc_apply_bbox(merged, bbox)
     bbox_active = bbox is not None
 
@@ -12705,8 +12714,21 @@ def _fuc_render_bar(year_range, window_days, precovery_mode,
     else:
         v_show = n_show
 
-    labels = [f"{c} — {n or '(unnamed)'}"
-              for c, n in zip(merged["station_code"], merged["name"])]
+    # Truncate long observatory names so labels don't crowd the
+    # bars. Full name is preserved in the hover tooltip below.
+    def _label(code, name):
+        if not name:
+            return code
+        n = name if len(name) <= 32 else name[:31] + "…"
+        return f"{code} — {n}"
+    labels = [_label(c, n) for c, n in
+              zip(merged["station_code"], merged["name"])]
+    full_hover = [
+        f"<b>{c}</b> — {n or '(unnamed)'}<br>{int(v):,} NEOs"
+        for c, n, v in
+        zip(merged["station_code"], merged["name"],
+            merged["n_followup"])
+    ]
     pmode_label = ("post-disc" if precovery_mode == "post_only"
                    else "post+pre")
     fig = go.Figure(go.Bar(
@@ -12718,21 +12740,24 @@ def _fuc_render_bar(year_range, window_days, precovery_mode,
             cmax=cmax,
             showscale=False,
         ),
-        hovertemplate="%{y}<br>%{x:,} NEOs<extra></extra>",
+        text=full_hover,
+        hovertemplate="%{text}<extra></extra>",
     ))
     fig.update_layout(
         template=t["template"],
         paper_bgcolor=t["paper"], plot_bgcolor=t["plot"],
         height=height,
-        # Match the map's right margin so the two charts visually
-        # align even though only the map carries the colorbar.
-        margin=dict(l=20, r=90, t=60, b=60),
+        # Generous left margin minimum for ~32-char labels; right
+        # margin matches the map's so the two charts visually align
+        # even though only the map carries the colorbar.
+        margin=dict(l=280, r=90, t=60, b=60),
         title=(f"Follow-up NEOs per site, "
                f"{year_range[0]}–{year_range[1]}, "
                f"{_window_label(window_days)} {pmode_label}"
                f"{title_suffix}"),
         xaxis=dict(title="Distinct NEOs followed up"),
-        yaxis=dict(title="", automargin=True),
+        yaxis=dict(title="", automargin=True,
+                   tickfont=dict(size=11)),
         transition=dict(duration=350, easing="cubic-in-out"),
     )
     return fig
