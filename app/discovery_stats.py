@@ -12654,13 +12654,10 @@ def _fuc_render_bar(year_range, window_days, precovery_mode,
                     max_bars, viewport, theme_name, ph):
     t = theme(theme_name or "light")
     # Bar chart height scales with the bar count rather than the
-    # banner Plot-height. ~22 px per bar plus 80 px overhead for
-    # title and axis. Old behavior pinned the chart at 700–900 px
-    # regardless of bar count, leaving each 10-bar render with
-    # 60–80 px per bar — visually empty. New scheme gives readable
-    # bars without wasted space.
+    # banner Plot-height. ~33 px per bar plus 80 px overhead for
+    # title and axis.
     n_bars_target = int(max_bars) if max_bars else 10
-    height = max(220, n_bars_target * 22 + 80)
+    height = max(280, n_bars_target * 33 + 80)
     counts = _fuc_followup_counts(year_range, window_days, precovery_mode)
     if counts.empty:
         return _empty_figure("No follow-up data in window", t, height)
