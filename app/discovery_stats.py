@@ -4684,21 +4684,53 @@ app.layout = html.Div(
                             html.Div(
                                 style={"marginTop": "12px",
                                        "marginBottom": "8px",
-                                       "maxWidth": "640px"},
+                                       "display": "flex",
+                                       "gap": "16px",
+                                       "flexWrap": "wrap",
+                                       "alignItems": "flex-end"},
                                 children=[
-                                    html.Label(
-                                        "Sites for bar chart "
-                                        "(blank = top 20)",
-                                        style=LABEL_STYLE),
-                                    dcc.Dropdown(
-                                        id="fuc-site-select",
-                                        options=[],
-                                        value=[],
-                                        multi=True,
-                                        placeholder=(
-                                            "Type a site code to "
-                                            "add (e.g. I52, J95)"),
+                                    html.Div(
+                                        style={"flex": "1 1 480px",
+                                               "minWidth": "320px"},
+                                        children=[
+                                            html.Label(
+                                                "Sites for bar chart "
+                                                "(blank = top N)",
+                                                style=LABEL_STYLE),
+                                            dcc.Dropdown(
+                                                id="fuc-site-select",
+                                                options=[],
+                                                value=[],
+                                                multi=True,
+                                                placeholder=(
+                                                    "Type a site code "
+                                                    "to add (e.g. I52, "
+                                                    "J95)"),
+                                            ),
+                                        ],
                                     ),
+                                    html.Div(children=[
+                                        html.Label("Bars to show",
+                                                   style=LABEL_STYLE),
+                                        dcc.Dropdown(
+                                            id="fuc-max-bars",
+                                            options=[
+                                                {"label": "5",
+                                                 "value": 5},
+                                                {"label": "10",
+                                                 "value": 10},
+                                                {"label": "20",
+                                                 "value": 20},
+                                                {"label": "50",
+                                                 "value": 50},
+                                                {"label": "100",
+                                                 "value": 100},
+                                            ],
+                                            value=10,
+                                            clearable=False,
+                                            style={"width": "100px"},
+                                        ),
+                                    ]),
                                 ],
                             ),
                             dcc.Loading(
@@ -12291,7 +12323,10 @@ def _fuc_render_map(year_range, window_days, precovery_mode,
                f"{year_range[0]}–{year_range[1]}, "
                f"window {_window_label(window_days)} "
                f"({pmode_label})"),
-        margin=dict(l=10, r=10, t=50, b=10),
+        # Right margin reserved for the colorbar + its widest plausible
+        # tick label so the plot area doesn't shift when log↔linear
+        # toggling changes label width.
+        margin=dict(l=10, r=90, t=50, b=10),
         legend=dict(yanchor="bottom", y=0.02, xanchor="left", x=0.02,
                     bgcolor="rgba(0,0,0,0)"),
         geo=dict(
@@ -12453,11 +12488,16 @@ def _fuc_default_plot_height(active_tab):
     Input("fuc-site-select", "value"),
     Input("fuc-site-type", "value"),
     Input("fuc-sites-filter", "value"),
+    Input("fuc-cscale", "value"),
+    Input("fuc-colormap", "value"),
+    Input("fuc-max-bars", "value"),
+    Input("fuc-world-map", "relayoutData"),
     Input("theme-toggle", "value"),
     Input("plot-height", "value"),
 )
 def _fuc_render_bar(year_range, window_days, precovery_mode,
-                    sites, site_type, sites_filter, theme_name, ph):
+                    sites, site_type, sites_filter, cscale, colormap,
+                    max_bars, relayout, theme_name, ph):
     t = theme(theme_name or "light")
     height = max(int(ph), 400) if ph else 520
     counts = _fuc_followup_counts(year_range, window_days, precovery_mode)
@@ -12466,41 +12506,82 @@ def _fuc_render_bar(year_range, window_days, precovery_mode,
     obs = load_obscodes()
     obs = _fuc_apply_sites_filter(obs, sites_filter)
     merged = counts.merge(
-        obs[["obscode", "name", "observations_type"]],
+        obs[["obscode", "name", "observations_type",
+             "longitude_180", "latitude"]],
         left_on="station_code", right_on="obscode", how="inner")
     if site_type and site_type != "all":
         merged = merged[merged["observations_type"] == site_type]
+
+    # Color domain comes from the FULL post-type+sites-filter set
+    # (pre-viewport, pre-top-N) so the same site is always the same
+    # color as on the map. Otherwise top-N restriction would clip
+    # the lower end of the scale and shift colors.
+    if not merged.empty:
+        n_full = merged["n_followup"].astype(float)
+        if cscale == "log":
+            v_full = np.log10(n_full)
+        else:
+            v_full = n_full
+        cmin = float(v_full.min())
+        cmax = float(v_full.max())
+        if cmax <= cmin:
+            cmax = cmin + 1
+    else:
+        cmin, cmax = 0.0, 1.0
+
+    bbox = _fuc_bbox_from_relayout(relayout)
+    merged = _fuc_apply_bbox(merged, bbox)
+    bbox_active = bbox is not None
+
     if sites:
         merged = merged[merged["station_code"].isin(sites)]
         title_suffix = f" ({len(sites)} selected)"
     else:
-        merged = merged.nlargest(20, "n_followup")
-        title_suffix = " (top 20 by follow-up volume)"
+        n = int(max_bars) if max_bars else 10
+        merged = merged.nlargest(n, "n_followup")
+        title_suffix = (f" (top {n} by follow-up volume"
+                        + (", viewport" if bbox_active else "")
+                        + ")")
     merged = merged.sort_values("n_followup")
 
-    colors = [_FUC_TYPE_COLOR.get(typ, "#888888")
-              for typ in merged["observations_type"]]
+    if merged.empty:
+        return _empty_figure("No sites in current viewport", t, height)
+
+    n_show = merged["n_followup"].astype(float)
+    if cscale == "log":
+        v_show = np.log10(n_show)
+    else:
+        v_show = n_show
+
     labels = [f"{c} — {n or '(unnamed)'}"
               for c, n in zip(merged["station_code"], merged["name"])]
-
     pmode_label = ("post-disc" if precovery_mode == "post_only"
                    else "post+pre")
     fig = go.Figure(go.Bar(
         x=merged["n_followup"], y=labels, orientation="h",
-        marker_color=colors,
+        marker=dict(
+            color=v_show,
+            colorscale=colormap or "Viridis",
+            cmin=cmin,
+            cmax=cmax,
+            showscale=False,
+        ),
         hovertemplate="%{y}<br>%{x:,} NEOs<extra></extra>",
     ))
     fig.update_layout(
         template=t["template"],
         paper_bgcolor=t["paper"], plot_bgcolor=t["plot"],
         height=height,
+        # Match the map's right margin so the two charts visually
+        # align even though only the map carries the colorbar.
+        margin=dict(l=20, r=90, t=60, b=60),
         title=(f"Follow-up NEOs per site, "
                f"{year_range[0]}–{year_range[1]}, "
                f"{_window_label(window_days)} {pmode_label}"
                f"{title_suffix}"),
         xaxis=dict(title="Distinct NEOs followed up"),
         yaxis=dict(title="", automargin=True),
-        margin=dict(l=20, r=20, t=60, b=60),
+        transition=dict(duration=350, easing="cubic-in-out"),
     )
     return fig
 
