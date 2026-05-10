@@ -6119,6 +6119,39 @@ app.layout = html.Div(
                                                 children=[
                                                     html.Li([
                                                         html.Strong(
+                                                            "2026-05-10 "
+                                                            "(Phase 2B) — "),
+                                                        "Follow-up "
+                                                        "Comparison adds "
+                                                        "a Time scope "
+                                                        "radio "
+                                                        "(Discovery "
+                                                        "apparition / "
+                                                        "All time / "
+                                                        "Recovery only). "
+                                                        "All-time and "
+                                                        "recovery modes "
+                                                        "are backed by "
+                                                        "a new lifetime "
+                                                        "cache covering "
+                                                        "every NEO × "
+                                                        "station ever, "
+                                                        "not just the "
+                                                        "discovery "
+                                                        "apparition. "
+                                                        "Multi-survey "
+                                                        "Comparison's "
+                                                        "Survey-reach "
+                                                        "chart also "
+                                                        "gains a Metric "
+                                                        "selector. "
+                                                        "Follow-up "
+                                                        "Comparison "
+                                                        "promoted to "
+                                                        "production.",
+                                                    ]),
+                                                    html.Li([
+                                                        html.Strong(
                                                             "2026-05-09 "
                                                             "(Phase 2A) — "),
                                                         "Follow-up "

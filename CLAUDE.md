@@ -161,10 +161,15 @@ and Station Report) aren't yet present and the indices shift.
   union of FUC's and Multi-survey's window selectors). Continuous
   windows would require a per-tracklet cache; the pre-agg approach
   was chosen because the discrete dropdowns are stable.
-- Phase 1 definition: "follow-up" = activity at a site other than
-  the discovery site, within the chosen window, for an object
-  discovered in the year range. Multi-apparition recovery is
-  Phase 2B (deferred — needs a separate lifetime cache).
+- **Time scope radio** (Phase 2B, 2026-05-10): Discovery
+  apparition (default — uses `apparition_cache`) / All time / Recovery
+  only. The latter two use a new `lifetime_cache` built from
+  LIFETIME_FOLLOWUP_SQL (same CTE chain, no ±200 d bound, ~503 K
+  rows, ~11 MB parquet, ~10 min on Gizmo). Recovery-only filters
+  to (NEO × station) rows where `last_obs > disc + 200 d`; for
+  tracklets/obs it subtracts the apparition's `n_trk_any_200` /
+  `n_obs_any_200` so the result is strictly recovery activity.
+  Window + Precovery controls disable when scope ≠ apparition.
 - Data: live obscodes table + `apparition_cache`. New 1-day
   parquet cache `obscodes_cache`.
 - See `docs/2026-05-09_followup_comparison_scoping.md`.
@@ -278,6 +283,12 @@ Stations are mapped to project groups via `STATION_TO_PROJECT`:
     bumping cache parquet from ~19 MB to ~21 MB and the SQL hash
     from `031b17ad` to `811ddeb6`. Query time unchanged — the
     FILTER aggregations run on rows already in the LATERAL.
+  - `LIFETIME_FOLLOWUP_SQL` — per (NEO × station × all-time)
+    with first/last obstime + tracklet/obs totals (~503 K rows,
+    ~11 MB parquet). Phase 2B addition (2026-05-10) for the FUC
+    Time scope radio. Same CTE chain as APPARITION_SQL but the
+    LATERAL has no ±200 d bound. Gizmo first run ~10 min;
+    subsequent loads ~few s from parquet.
   - `BOXSCORE_SQL` — full mpc_orbits + numbered_identifications JOIN
     (~1.5M rows, all object classes). Doesn't touch obs_sbn. Gizmo
     NVMe: **~0.7 s**. Sibyl: **~3 s**. (CLAUDE.md prior to 2026-04-24
@@ -325,7 +336,10 @@ A second Dash instance runs alongside prod for staging in-flight
 work. Served from `dev.hotwireduniverse.org` via the same
 Cloudflare tunnel, gated by a Cloudflare Access email allow-list.
 launchd label `com.rlseaman.dashboard-rnd`, port 8051, run with
-`--rnd` (R&D-only surfaces enabled, e.g. NEO Consensus tab). The
+`--rnd --dev-tabs`. `--rnd` is now also on prod (it's how NEO
+Consensus shipped); `--dev-tabs` is the new gate (2026-05-10)
+for tabs that aren't ready for prod, currently just Station
+Report. The
 plist's WorkingDirectory points at the git worktree
 `~/CSS_MPC_toolkit_dev` (currently on `station-report`); parquet
 caches are symlinked from the primary checkout so dev sees the

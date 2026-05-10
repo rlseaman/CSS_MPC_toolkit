@@ -8,9 +8,12 @@
 #   1. REFRESH MATERIALIZED VIEW CONCURRENTLY obs_sbn_neo  (~3.6 min)
 #   2. NEO consensus source_membership refresh (6 sources, best-effort)
 #   3. REFRESH MATERIALIZED VIEW CONCURRENTLY obs_summary  (~5 min, best-effort)
-#   4. python app/discovery_stats.py --refresh-only        (~5 min; all caches
-#                                                            including
-#                                                            consensus_membership)
+#   4. python app/discovery_stats.py --refresh-only        (~15 min; all caches
+#                                                            — including
+#                                                            consensus_membership,
+#                                                            obscodes_cache, and
+#                                                            lifetime_cache (the
+#                                                            Phase-2B addition))
 #   5. Restart Dash so it picks up the new caches
 #
 # Why this ordering: stages 2 + 3 land first so stage 4's parquet build
@@ -276,7 +279,7 @@ log "SUCCESS total ${TOTAL}s (stage1=${STAGE1_ELAPSED}s stage2=${STAGE2_ELAPSED}
 
 # Record cache file sizes as a sanity-check proxy.
 CACHE_SIZES=""
-for prefix in neo_cache apparition_cache boxscore_cache consensus_membership; do
+for prefix in neo_cache apparition_cache boxscore_cache consensus_membership obscodes_cache lifetime_cache; do
     f=$(ls -1t "$APP_DIR"/.${prefix}_*.parquet 2>/dev/null | head -1)
     if [[ -n "$f" ]]; then
         sz=$(stat -f %z "$f")
