@@ -41,7 +41,7 @@ University of Arizona.
 
 ```
 app/                          # Interactive Dash web application
-  discovery_stats.py          #   NEO discovery explorer (8 tabs, ~9100 lines)
+  discovery_stats.py          #   NEO discovery explorer (12 tabs, ~12,800 lines)
   assets/                     #   CSS, logo, static files
 lib/                          # Python library layer
   db.py                       #   DB connections, timed queries, QueryLog
@@ -70,7 +70,11 @@ sandbox/                      # Analysis notes, exploratory outputs
 
 ## Interactive App (`app/discovery_stats.py`)
 
-Dash web application at http://127.0.0.1:8050/ with ten tabbed pages:
+Dash web application at http://127.0.0.1:8050/ (prod) and
+http://127.0.0.1:8051/ (dev/`--rnd`) with twelve tabbed pages.
+Tab indices below are the layout order on the `station-report` dev
+branch; on prod (`main`) the two newest tabs (Follow-up Comparison
+and Station Report) aren't yet present and the indices shift.
 
 ### Tab 0: MPEC Browser
 - Searchable list of recent Minor Planet Electronic Circulars
@@ -126,7 +130,51 @@ Dash web application at http://127.0.0.1:8050/ with ten tabbed pages:
 - Data: `APPARITION_SQL` uses `CROSS JOIN LATERAL` with
   `AS MATERIALIZED` CTEs for indexed scans (~1-2 min query)
 
-### Tab 5: Follow-up Timing
+### Tab 5: Follow-up Comparison (dev only)
+- Per-site (not per-survey) follow-up activity. Sister tab to
+  Multi-survey Comparison and Follow-up Timing, but pivoting on
+  individual MPC site code rather than survey group.
+- World map (Plotly Scattergeo) of all ~2,675 MPC obscodes with
+  valid lat/lon, colored by follow-up volume on a Viridis (or
+  user-selected) colormap. Selectable map projection (8 options;
+  default equirectangular for precise viewport bbox); log/linear
+  color scale; site-type filter (default Optical, ~99% of codes);
+  NEO-active filter (default On — restricts to ~500 sites that
+  have ever observed a NEO in a discovery apparition).
+- Stats card responsive to map pan/zoom: tallies of sites in
+  viewport, NEOs in window, NEOs with follow-up there, median
+  follow-up sites per NEO. Bbox derivation is exact for
+  equirectangular/mercator/miller (axis ranges); approximate for
+  others (center + scale).
+- Bar chart with multi-select (typed or pasted as a list), top-N
+  selector (default 10), and colors matched to the map's colormap
+  and domain.
+- Follow-up window selector: 1 d / 1 wk / 1 lunation / 100 d /
+  200 d (capped by the apparition cache's ±200 d window).
+  Post-discovery vs include-precoveries radio.
+- **Metric radio** (Phase 2A, 2026-05-09): NEOs (default) /
+  Tracklets / Observations. Drives the map colorbar, hover, bar
+  values, and stats card uniformly. Tracklets and observations
+  come from 28 pre-aggregated FILTER columns added to
+  APPARITION_SQL — `n_trk_post_W` / `n_trk_any_W` / `n_obs_post_W`
+  / `n_obs_any_W` for W in {1, 7, 29, 50, 100, 150, 200} (the
+  union of FUC's and Multi-survey's window selectors). Continuous
+  windows would require a per-tracklet cache; the pre-agg approach
+  was chosen because the discrete dropdowns are stable.
+- **Time scope radio** (Phase 2B, 2026-05-10): Discovery
+  apparition (default — uses `apparition_cache`) / All time / Recovery
+  only. The latter two use a new `lifetime_cache` built from
+  LIFETIME_FOLLOWUP_SQL (same CTE chain, no ±200 d bound, ~503 K
+  rows, ~11 MB parquet, ~10 min on Gizmo). Recovery-only filters
+  to (NEO × station) rows where `last_obs > disc + 200 d`; for
+  tracklets/obs it subtracts the apparition's `n_trk_any_200` /
+  `n_obs_any_200` so the result is strictly recovery activity.
+  Window + Precovery controls disable when scope ≠ apparition.
+- Data: live obscodes table + `apparition_cache`. New 1-day
+  parquet cache `obscodes_cache`.
+- See `docs/2026-05-09_followup_comparison_scoping.md`.
+
+### Tab 6: Follow-up Timing
 - Response curve (CDF): fraction of NEOs observed by 1st/2nd/3rd
   follow-up survey within N days of discovery
 - Box plots of follow-up time by survey (excludes discoverer's own
@@ -134,7 +182,7 @@ Dash web application at http://127.0.0.1:8050/ with ten tabbed pages:
 - Follow-up network heatmap: discoverer -> first follow-up survey
 - Median follow-up time trend by discovery year with IQR band
 
-### Tab 6: Discovery Circumstances
+### Tab 7: Discovery Circumstances
 - Sky map (RA/Dec scatter) of discovery positions with ecliptic and
   galactic plane overlays; WebGL for ~40K points
 - Apparent V magnitude histogram (band-corrected) at discovery
@@ -144,7 +192,7 @@ Dash web application at http://127.0.0.1:8050/ with ten tabbed pages:
 - Data: `tracklet_obs_all` and `discovery_tracklet_stats` CTEs added
   to `LOAD_SQL`; same ~44K rows, 6 new columns
 
-### Tab 7: Asteroid Classes
+### Tab 8: Asteroid Classes
 - Cross-tabulation of the full `mpc_orbits` catalog (~1.5M objects,
   all classes — not just NEOs) by orbit type and selected attributes.
 - Class grouping: Fine (21), Standard (17), Coarse (7) MPC orbit
@@ -158,7 +206,7 @@ Dash web application at http://127.0.0.1:8050/ with ten tabbed pages:
   identifications join). Same ~1.5M rows that drive boxscore-class
   callbacks elsewhere.
 
-### Tab 8: Tools
+### Tab 9: Tools
 - Standalone calculators and converters for planetary-defense work.
   No data dependencies; all pure Python computation via `lib/`.
 - Currently 10 cards:
@@ -174,10 +222,26 @@ Dash web application at http://127.0.0.1:8050/ with ten tabbed pages:
   conversion primitives the SQL `css_utilities` schema exposes
   server-side.
 
-### Tab 9: About
+### Tab 10: Station Report (dev only)
+- Per-site deep-dive — site code + optional date range yields a
+  summary line, year × class breakdown for NEOs (Atira / Aten /
+  Apollo / Amor) and non-NEOs, and an MPEC-publications stub
+  (Phase 2, ADS-backed). Phase 1 lives at `lib/station_report.py`
+  + `sql/station_report.sql`. NEO/non-NEO split is taken from the
+  `obs_sbn_neo` matview (q ≤ 1.3 with no e bound; resolves
+  designations through `current_identifications`/`numbered_
+  identifications`).
+- Currently paused pending Phase 2 ADS integration. Q7-style
+  per-site forensic stats from the Follow-up Comparison scoping
+  doc are intended to land here as context for the literature
+  search.
+
+### Tab 11: About
 - Static project page: short description, GitHub repo link, contact
   email (`contact@hotwireduniverse.org` via Cloudflare Email Routing),
-  maintainer line. No state, no callbacks.
+  maintainer line. Release notes card + FAQ (data freshness, NEO
+  definition, six-source rationale, orbit-class derivation, map
+  projections, mobile, contact). No state, no callbacks.
 
 ### Survey Groupings
 Stations are mapped to project groups via `STATION_TO_PROJECT`:
@@ -210,10 +274,21 @@ Stations are mapped to project groups via `STATION_TO_PROJECT`:
     Scans `obs_sbn_neo` (matview) on Gizmo: **~0.4 s**. Raw `obs_sbn`
     on Sibyl: ~1 min.
   - `APPARITION_SQL` — station-level observations within +/-200 days
-    of discovery (~370K station rows). Scans `obs_sbn_neo` on Gizmo:
+    of discovery (~373K station rows). Scans `obs_sbn_neo` on Gizmo:
     **~4:40**. Raw `obs_sbn` on Sibyl: ~55 s. (LATERAL probes don't
     fully fit in Gizmo's 16 GB even after the matview shrink — Sibyl's
-    251 GB RAM still wins for this shape.)
+    251 GB RAM still wins for this shape.) Phase 2A (2026-05-09)
+    extended this with 28 pre-aggregated FILTER columns
+    (`n_trk_{post,any}_W`, `n_obs_{post,any}_W` for 7 windows),
+    bumping cache parquet from ~19 MB to ~21 MB and the SQL hash
+    from `031b17ad` to `811ddeb6`. Query time unchanged — the
+    FILTER aggregations run on rows already in the LATERAL.
+  - `LIFETIME_FOLLOWUP_SQL` — per (NEO × station × all-time)
+    with first/last obstime + tracklet/obs totals (~503 K rows,
+    ~11 MB parquet). Phase 2B addition (2026-05-10) for the FUC
+    Time scope radio. Same CTE chain as APPARITION_SQL but the
+    LATERAL has no ±200 d bound. Gizmo first run ~10 min;
+    subsequent loads ~few s from parquet.
   - `BOXSCORE_SQL` — full mpc_orbits + numbered_identifications JOIN
     (~1.5M rows, all object classes). Doesn't touch obs_sbn. Gizmo
     NVMe: **~0.7 s**. Sibyl: **~3 s**. (CLAUDE.md prior to 2026-04-24
@@ -255,6 +330,24 @@ waitress WSGI server. A daily launchd agent
      port rebinds; acceptable for a low-traffic outreach window).
 Total elapsed ~14–16 min in normal operation. See `docs/disaster_recovery.md`
 for what to do if a stage fails.
+
+### Dev surface
+A second Dash instance runs alongside prod for staging in-flight
+work. Served from `dev.hotwireduniverse.org` via the same
+Cloudflare tunnel, gated by a Cloudflare Access email allow-list.
+launchd label `com.rlseaman.dashboard-rnd`, port 8051, run with
+`--rnd --dev-tabs`. `--rnd` is now also on prod (it's how NEO
+Consensus shipped); `--dev-tabs` is the new gate (2026-05-10)
+for tabs that aren't ready for prod, currently just Station
+Report. The
+plist's WorkingDirectory points at the git worktree
+`~/CSS_MPC_toolkit_dev` (currently on `station-report`); parquet
+caches are symlinked from the primary checkout so dev sees the
+nightly refresh's output without re-querying. To deploy a
+station-report change: push to origin, `git pull` in the
+worktree, `launchctl kickstart -k gui/$(id -u)/com.rlseaman.
+dashboard-rnd`. Logs at
+`~/Claude/mpc_sbn/logs/dashboard-rnd_<timestamp>.log`.
 
 ## Development Conventions
 

@@ -46,6 +46,9 @@ from lib.sbdb_moid import load_sbdb_moid_lookup
 from lib.solar import (sun_altitude, classify_twilight,
                        _observer_latitude, TWILIGHT_ORDER)
 from lib.identifications import resolve_designation
+from lib.station_report import (fetch_station_report,
+                                split_neo_non_neo as _split_station_neo,
+                                summarize as _summarize_station)
 from lib.api_clients import (
     fetch_sbdb, fetch_sentry, fetch_neofixer_orbit, fetch_neocc_risk,
     fetch_neofixer_ephem, fetch_neofixer_ades, resolve_mps_url,
@@ -648,7 +651,35 @@ ORDER BY di.obstime
 """
 
 
-APPARITION_SQL = """
+# Pre-aggregation windows (days). The union of the Follow-up
+# Comparison tab's window selector (1, 7, 29, 100, 200) and Multi-
+# survey Comparison's apparition-window selector (50, 100, 150, 200).
+# Each entry generates four FILTER aggregation columns (n_trk_post_W,
+# n_trk_any_W, n_obs_post_W, n_obs_any_W); 4 × 7 = 28 new columns.
+# Adding a window value here invalidates the cache hash and triggers
+# a one-off rebuild on next refresh.
+_FUC_WINDOWS = (1, 7, 29, 50, 100, 150, 200)
+
+
+def _appar_filter_columns():
+    out = []
+    for w in _FUC_WINDOWS:
+        out.append(
+            f"COUNT(DISTINCT trkid) FILTER "
+            f"(WHERE dfd BETWEEN 0 AND {w})   AS n_trk_post_{w}")
+        out.append(
+            f"COUNT(DISTINCT trkid) FILTER "
+            f"(WHERE ABS(dfd) <= {w})         AS n_trk_any_{w}")
+        out.append(
+            f"COUNT(*)              FILTER "
+            f"(WHERE dfd BETWEEN 0 AND {w})   AS n_obs_post_{w}")
+        out.append(
+            f"COUNT(*)              FILTER "
+            f"(WHERE ABS(dfd) <= {w})         AS n_obs_any_{w}")
+    return ",\n           ".join(out)
+
+
+APPARITION_SQL = f"""
 WITH neo_list AS MATERIALIZED (
     SELECT
         mo.unpacked_primary_provisional_designation AS unpacked_desig,
@@ -695,21 +726,123 @@ neo_discovery AS MATERIALIZED (
     FROM discovery_info di
     JOIN neo_list neo ON neo.unpacked_desig = di.unpacked_desig
 )
-SELECT nd.designation, o.station_code, nd.disc_obstime,
-       o.first_obs, o.first_post_disc
+SELECT nd.designation, nd.disc_obstime, o.*
 FROM neo_discovery nd
 CROSS JOIN LATERAL (
     SELECT stn AS station_code,
            MIN(obstime) AS first_obs,
            MIN(CASE WHEN obstime >= nd.disc_obstime
-                    THEN obstime END) AS first_post_disc
-    FROM obs_sbn_neo
-    WHERE (permid = nd.asteroid_number OR provid = nd.provid_key)
-      AND obstime BETWEEN nd.disc_obstime - INTERVAL '200 days'
-                    AND nd.disc_obstime + INTERVAL '200 days'
+                    THEN obstime END) AS first_post_disc,
+           {_appar_filter_columns()}
+    FROM (
+        SELECT stn, obstime, trkid,
+               EXTRACT(EPOCH FROM (obstime - nd.disc_obstime))
+                 / 86400.0 AS dfd
+        FROM obs_sbn_neo
+        WHERE (permid = nd.asteroid_number OR provid = nd.provid_key)
+          AND obstime BETWEEN nd.disc_obstime - INTERVAL '200 days'
+                        AND nd.disc_obstime + INTERVAL '200 days'
+    ) src
     GROUP BY stn
 ) o
 """
+
+# ---------------------------------------------------------------------------
+# Lifetime follow-up cache (Phase 2B). Same shape as APPARITION_SQL but
+# without the ±200 d cap, so it captures multi-apparition recovery work
+# in addition to discovery-apparition observations. One row per
+# (NEO × station × all-time) with first/last obstime + tracklet/obs
+# totals. Joined against apparition_cache at consumer time to derive
+# "recovery only" = total − within-apparition.
+# ---------------------------------------------------------------------------
+
+LIFETIME_FOLLOWUP_SQL = """
+WITH neo_list AS MATERIALIZED (
+    SELECT
+        mo.unpacked_primary_provisional_designation AS unpacked_desig,
+        ni.permid IS NOT NULL AS is_numbered,
+        ni.permid AS asteroid_number,
+        CASE WHEN ni.permid IS NULL
+             THEN mo.unpacked_primary_provisional_designation
+        END AS provisional_desig,
+        ni.unpacked_primary_provisional_designation AS num_provid
+    FROM mpc_orbits mo
+    LEFT JOIN numbered_identifications ni
+        ON ni.packed_primary_provisional_designation
+         = mo.packed_primary_provisional_designation
+    WHERE mo.q <= 1.30
+),
+discovery_obs_all AS (
+    SELECT neo.unpacked_desig, obs.stn, obs.obstime
+    FROM neo_list neo
+    INNER JOIN obs_sbn_neo obs ON obs.permid = neo.asteroid_number
+    WHERE neo.is_numbered AND obs.disc = '*'
+    UNION ALL
+    SELECT neo.unpacked_desig, obs.stn, obs.obstime
+    FROM neo_list neo
+    INNER JOIN obs_sbn_neo obs ON obs.provid = neo.provisional_desig
+    WHERE NOT neo.is_numbered AND obs.disc = '*'
+    UNION ALL
+    SELECT neo.unpacked_desig, obs.stn, obs.obstime
+    FROM neo_list neo
+    INNER JOIN obs_sbn_neo obs ON obs.provid = neo.num_provid
+    WHERE neo.num_provid IS NOT NULL AND obs.disc = '*'
+),
+discovery_info AS (
+    SELECT DISTINCT ON (unpacked_desig)
+        unpacked_desig, stn, obstime
+    FROM discovery_obs_all
+    ORDER BY unpacked_desig, obstime
+),
+neo_discovery AS MATERIALIZED (
+    SELECT
+        di.unpacked_desig AS designation,
+        di.obstime AS disc_obstime,
+        neo.asteroid_number,
+        COALESCE(neo.provisional_desig, neo.num_provid) AS provid_key
+    FROM discovery_info di
+    JOIN neo_list neo ON neo.unpacked_desig = di.unpacked_desig
+)
+SELECT nd.designation, nd.disc_obstime, o.*
+FROM neo_discovery nd
+CROSS JOIN LATERAL (
+    SELECT stn AS station_code,
+           MIN(obstime) AS first_obs,
+           MAX(obstime) AS last_obs,
+           COUNT(*) AS n_obs_total,
+           COUNT(DISTINCT trkid) AS n_tracklets_total
+    FROM obs_sbn_neo
+    WHERE permid = nd.asteroid_number OR provid = nd.provid_key
+    GROUP BY stn
+) o
+"""
+
+_df_lifetime = None
+
+
+def _postprocess_lifetime(df_raw):
+    df_raw = df_raw.copy()
+    df_raw["disc_obstime"] = pd.to_datetime(df_raw["disc_obstime"])
+    df_raw["first_obs"] = pd.to_datetime(df_raw["first_obs"])
+    df_raw["last_obs"] = pd.to_datetime(df_raw["last_obs"])
+    df_raw["days_to_last_obs"] = (
+        (df_raw["last_obs"] - df_raw["disc_obstime"])
+        .dt.total_seconds() / 86400)
+    return df_raw
+
+
+def load_lifetime_followup():
+    """Load the all-time per-(NEO × station) cache. ~10 min on first
+    run; subsequent loads ~few s from parquet."""
+    global _df_lifetime
+    if _df_lifetime is not None:
+        return _df_lifetime
+    raw, _ = _load_cached_query(
+        LIFETIME_FOLLOWUP_SQL, "lifetime_cache", "lifetime follow-up")
+    _df_lifetime = _postprocess_lifetime(raw)
+    print(f"Loaded {len(_df_lifetime):,} lifetime (NEO × station) rows")
+    return _df_lifetime
+
 
 # ---------------------------------------------------------------------------
 # Boxscore: object catalog from mpc_orbits (all objects, ~1.5M rows)
@@ -765,6 +898,13 @@ if "--port" in sys.argv:
 _RND = "--rnd" in sys.argv
 if _RND:
     sys.argv.remove("--rnd")
+# --dev-tabs gates in-flight tabs that aren't ready for prod (Station
+# Report Phase-1 stub, etc.). Distinct from --rnd because prod now
+# runs with --rnd to expose NEO Consensus; we need a separate switch
+# for tabs that should still be hidden in prod.
+_DEV_TABS = "--dev-tabs" in sys.argv
+if _DEV_TABS:
+    sys.argv.remove("--dev-tabs")
 # --waitress runs the WSGI app under waitress instead of Flask's
 # built-in development server. Used for production deployment under
 # launchd; dev runs without the flag.
@@ -1211,6 +1351,42 @@ def _apply_source_filter(df_in, source):
 
 
 # ---------------------------------------------------------------------------
+# MPC obscodes loader — small reference catalog (~2,700 sites) used by
+# the Follow-up Comparison tab world map.
+# ---------------------------------------------------------------------------
+
+OBSCODES_SQL = """
+SELECT obscode, longitude, rhocosphi, rhosinphi,
+       name, observations_type
+FROM   obscodes
+WHERE  longitude IS NOT NULL
+  AND  rhocosphi IS NOT NULL
+  AND  rhosinphi IS NOT NULL
+"""
+
+_df_obscodes = None
+
+
+def load_obscodes():
+    """Load MPC observatory catalog. Adds latitude (deg, geocentric) and
+    longitude_180 (deg, -180..180) columns derived from the parallax
+    constants. Cached as parquet with the same 1-day TTL."""
+    global _df_obscodes
+    if _df_obscodes is not None:
+        return _df_obscodes
+    df, _ = _load_cached_query(OBSCODES_SQL, "obscodes_cache", "MPC obscodes")
+    df = df.copy()
+    rho_cos = pd.to_numeric(df["rhocosphi"], errors="coerce")
+    rho_sin = pd.to_numeric(df["rhosinphi"], errors="coerce")
+    df["latitude"] = np.degrees(np.arctan2(rho_sin, rho_cos))
+    lon = pd.to_numeric(df["longitude"], errors="coerce")
+    df["longitude_180"] = ((lon + 180.0) % 360.0) - 180.0
+    _df_obscodes = df
+    print(f"Loaded {len(df):,} MPC obscodes")
+    return _df_obscodes
+
+
+# ---------------------------------------------------------------------------
 # Boxscore: object catalog loader
 # ---------------------------------------------------------------------------
 
@@ -1319,6 +1495,52 @@ def build_survey_sets(df_main, df_app, year_range, size_filter,
     for proj, grp in tkl.groupby("project"):
         survey_sets[proj] = set(grp["designation"])
     return survey_sets, desig_set
+
+
+def build_survey_metric_totals(df_main, df_app, year_range, size_filter,
+                               exclude_precovery, window_days=200,
+                               group_col="project", metric="tracklets"):
+    """Per-survey totals from the APPARITION_SQL pre-aggregated columns
+    (n_trk_post_W, n_trk_any_W, n_obs_post_W, n_obs_any_W).
+
+    Mirrors build_survey_sets's filtering — same year range, size
+    class, group_col semantics, "Other Follow-up" bucket — but
+    returns dict[group → int total] rather than designation sets.
+    Use this for the survey-reach bar chart when the user picks
+    Tracklets or Observations as the metric.
+
+    Returns {} if the requested column isn't in df_app (cache
+    pre-Phase-2A); callers should treat that as "fall back to NEO
+    counts derived from build_survey_sets"."""
+    y0, y1 = year_range
+    eligible = df_main[
+        (df_main["disc_year"] >= y0) & (df_main["disc_year"] <= y1)]
+    if size_filter != "all":
+        eligible = eligible[eligible["size_class"] == size_filter]
+    desig_set = set(eligible["designation"])
+
+    tkl = df_app[df_app["designation"].isin(desig_set)]
+
+    mode = "post" if exclude_precovery else "any"
+    prefix = "n_trk" if metric == "tracklets" else "n_obs"
+    col = f"{prefix}_{mode}_{int(window_days)}"
+    if col not in tkl.columns:
+        return {}
+
+    if group_col == "station_code":
+        totals = {}
+        for stn, grp in tkl.groupby("station_code"):
+            proj = STATION_TO_PROJECT.get(stn)
+            if proj is None:
+                totals["Other Follow-up"] = (
+                    totals.get("Other Follow-up", 0)
+                    + int(grp[col].sum()))
+            else:
+                totals[stn] = int(grp[col].sum())
+        return totals
+
+    return {proj: int(grp[col].sum())
+            for proj, grp in tkl.groupby("project")}
 
 
 # ---------------------------------------------------------------------------
@@ -1811,10 +2033,24 @@ _BOTTOM_ORDER = ["Other Follow-up", "Other Surveys", "Historical",
 
 
 def _make_survey_reach(survey_sets, t, height, yr_tag="",
-                       color_map=None):
-    """Horizontal bar chart of unique NEOs detected per survey."""
+                       color_map=None, totals=None, metric="neos"):
+    """Horizontal bar chart of per-survey reach.
+    metric="neos"         → bar = |survey_sets[name]|
+    metric="tracklets"    → bar = totals[name] (sum of pre-agg col)
+    metric="observations" → bar = totals[name]"""
     if color_map is None:
         color_map = PROJECT_COLORS
+
+    def _value(name, desigs):
+        if metric == "neos" or totals is None:
+            return len(desigs)
+        return int(totals.get(name, 0))
+
+    metric_label = {"neos": "NEOs", "tracklets": "tracklets",
+                    "observations": "observations"}.get(metric, "NEOs")
+    metric_label_cap = (metric_label[:1].upper()
+                        + metric_label[1:])
+
     # Pin follow-up/other to bottom (works in both project & station mode)
     _bottom_keys = _BOTTOM_SURVEYS | {
         stn for stn, proj in STATION_TO_PROJECT.items()
@@ -1825,34 +2061,35 @@ def _make_survey_reach(survey_sets, t, height, yr_tag="",
     bottom.sort(key=lambda x: _bo.get(x[0], 999))
     rest = [(k, v) for k, v in survey_sets.items()
             if k not in _bottom_keys]
-    rest.sort(key=lambda x: len(x[1]))
+    rest.sort(key=lambda x: _value(x[0], x[1]))
     items = bottom + rest
     names = [k for k, v in items]
-    counts = [len(v) for k, v in items]
+    counts = [_value(k, v) for k, v in items]
     bar_colors = [color_map.get(n, "#a9a9a9") for n in names]
 
     # Build station list for hover tooltip
     hover_texts = []
     for name, desigs in items:
+        v = _value(name, desigs)
         stns = sorted(PROJECT_STATIONS.get(name, []))
         if stns and len(stns) > 15:
             hover_texts.append(
-                f"{name}: {len(desigs):,} NEOs"
+                f"{name}: {v:,} {metric_label}"
                 f" ({len(stns)} stations)")
         elif stns:
             stn_str = ", ".join(stns)
             hover_texts.append(
-                f"{name}: {len(desigs):,} NEOs"
+                f"{name}: {v:,} {metric_label}"
                 f"<br>Stations: {stn_str}")
         elif name in STATION_TO_PROJECT:
             # Individual station mode
             stn_name = STATION_NAMES.get(name, name)
             proj = STATION_TO_PROJECT[name]
             hover_texts.append(
-                f"{name} ({stn_name}): {len(desigs):,} NEOs"
+                f"{name} ({stn_name}): {v:,} {metric_label}"
                 f"<br>Project: {proj}")
         else:
-            hover_texts.append(f"{name}: {len(desigs):,} NEOs")
+            hover_texts.append(f"{name}: {v:,} {metric_label}")
 
     fig = go.Figure(go.Bar(
         y=names, x=counts, orientation="h",
@@ -1867,8 +2104,10 @@ def _make_survey_reach(survey_sets, t, height, yr_tag="",
     fig.update_layout(
         template=t["template"],
         paper_bgcolor=t["paper"], plot_bgcolor=t["plot"],
-        title=f"Discovery apparition: NEOs detected per survey {yr_tag}",
-        xaxis_title="Unique NEOs",
+        title=(f"Discovery apparition: {metric_label_cap} "
+               f"per survey {yr_tag}"),
+        xaxis_title=("Unique NEOs" if metric == "neos"
+                     else metric_label_cap),
         xaxis_range=[0, max_count * 1.15],
         height=height,
         margin=dict(l=120, r=60),
@@ -2605,12 +2844,15 @@ if _REFRESH_ONLY:
     df_apparition = load_apparition_data()
     load_boxscore_data()
     load_consensus_membership()
+    load_obscodes()
+    load_lifetime_followup()
     print("Cache refresh complete.")
     sys.exit(0)
 
 # For normal operation, load in background thread
 df = None
 df_apparition = None
+df_lifetime = None
 query_timestamp = "loading..."
 year_min, year_max = 1898, 2026
 _data_ready = threading.Event()
@@ -2621,7 +2863,8 @@ def _load_all_data():
     """Load both datasets in a background thread, then attach per-NEO
     source-membership booleans so the banner-level source filter has
     something to slice on."""
-    global df, df_apparition, query_timestamp, year_min, year_max, _data_error
+    global df, df_apparition, df_lifetime, query_timestamp
+    global year_min, year_max, _data_error
     try:
         df, query_timestamp = load_data()
         df_apparition = load_apparition_data()
@@ -2638,6 +2881,8 @@ def _load_all_data():
             print(f"Source membership attached: {len(membership):,} "
                   f"v_membership_wide rows; df all-six count = "
                   f"{int(df['all_six_agree'].sum()):,}")
+        load_obscodes()
+        df_lifetime = load_lifetime_followup()
     except Exception as e:
         _data_error = str(e)
         print(f"ERROR loading data: {e}")
@@ -4245,6 +4490,28 @@ app.layout = html.Div(
                                         ),
                                     ]),
                                     html.Div(children=[
+                                        html.Label(
+                                            "Metric (reach chart)",
+                                            style=LABEL_STYLE),
+                                        dcc.RadioItems(
+                                            id="comp-metric",
+                                            options=[
+                                                {"label": " NEOs",
+                                                 "value": "neos"},
+                                                {"label": " Tracklets",
+                                                 "value": "tracklets"},
+                                                {"label": " Obs",
+                                                 "value":
+                                                    "observations"},
+                                            ],
+                                            value="neos",
+                                            inline=True,
+                                            style=RADIO_STYLE,
+                                            labelStyle=
+                                                RADIO_LABEL_STYLE,
+                                        ),
+                                    ]),
+                                    html.Div(children=[
                                         html.Label("Group by",
                                                    style=LABEL_STYLE),
                                         dcc.RadioItems(
@@ -4384,6 +4651,419 @@ app.layout = html.Div(
                                         config=GRAPH_CONFIG),
                                 ],
                             ),
+                        ]),
+                    ],
+                ),
+                # ━━━ Follow-up Comparison ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                # Per-site (not per-survey) follow-up activity. World map
+                # of all MPC obscodes; bar chart of follow-up tracklets
+                # per site. Phase 1: discovery-apparition only (reuses
+                # apparition_cache). See
+                # docs/2026-05-09_followup_comparison_scoping.md.
+                dcc.Tab(
+                    label="Follow-up Comparison",
+                    value="tab-followup-compare",
+                    className="nav-tab",
+                    selected_className="nav-tab--selected",
+                    children=[
+                        html.Div(style={"paddingTop": "15px"}, children=[
+                            # Year-range slider
+                            html.Div(
+                                style={"marginBottom": "10px"},
+                                children=[
+                                    html.Label("Discovery years",
+                                               style=LABEL_STYLE),
+                                    dcc.RangeSlider(
+                                        id="fuc-year-range",
+                                        min=year_min,
+                                        max=year_max,
+                                        value=[2004, year_max],
+                                        marks={
+                                            y: {"label": str(y)}
+                                            for y in range(
+                                                year_min,
+                                                year_max + 1, 5)
+                                        },
+                                        tooltip={
+                                            "placement": "bottom",
+                                            "always_visible": False},
+                                    ),
+                                ],
+                            ),
+                            # Controls row
+                            html.Div(
+                                style={"display": "flex", "gap": "20px",
+                                       "flexWrap": "wrap",
+                                       "alignItems": "flex-end",
+                                       "marginBottom": "15px"},
+                                children=[
+                                    html.Div(children=[
+                                        html.Label("Time scope",
+                                                   style=LABEL_STYLE),
+                                        dcc.RadioItems(
+                                            id="fuc-time-scope",
+                                            options=[
+                                                {"label":
+                                                    " Discovery apparition",
+                                                 "value":
+                                                    "apparition"},
+                                                {"label": " All time",
+                                                 "value": "all_time"},
+                                                {"label":
+                                                    " Recovery only",
+                                                 "value": "recovery"},
+                                            ],
+                                            value="apparition",
+                                            inline=True,
+                                            style=RADIO_STYLE,
+                                            labelStyle=
+                                                RADIO_LABEL_STYLE,
+                                        ),
+                                    ]),
+                                    html.Div(children=[
+                                        html.Label("Follow-up window",
+                                                   style=LABEL_STYLE),
+                                        dcc.Dropdown(
+                                            id="fuc-window",
+                                            options=[
+                                                {"label": "1 day",
+                                                 "value": 1},
+                                                {"label": "1 week",
+                                                 "value": 7},
+                                                {"label": "1 lunation "
+                                                          "(29 d)",
+                                                 "value": 29},
+                                                {"label": "100 days",
+                                                 "value": 100},
+                                                {"label": "200 days",
+                                                 "value": 200},
+                                            ],
+                                            value=200,
+                                            clearable=False,
+                                            style={"width": "180px"},
+                                        ),
+                                    ]),
+                                    html.Div(children=[
+                                        html.Label("Precovery",
+                                                   style=LABEL_STYLE),
+                                        dcc.RadioItems(
+                                            id="fuc-precovery",
+                                            options=[
+                                                {"label":
+                                                    " Post-discovery",
+                                                 "value": "post_only"},
+                                                {"label":
+                                                    " Include precoveries",
+                                                 "value": "include"},
+                                            ],
+                                            value="post_only",
+                                            inline=True,
+                                            style=RADIO_STYLE,
+                                            labelStyle=
+                                                RADIO_LABEL_STYLE,
+                                        ),
+                                    ]),
+                                    html.Div(children=[
+                                        html.Label("Metric",
+                                                   style=LABEL_STYLE),
+                                        dcc.RadioItems(
+                                            id="fuc-metric",
+                                            options=[
+                                                {"label": " NEOs",
+                                                 "value": "neos"},
+                                                {"label": " Tracklets",
+                                                 "value": "tracklets"},
+                                                {"label": " Obs",
+                                                 "value":
+                                                    "observations"},
+                                            ],
+                                            value="neos",
+                                            inline=True,
+                                            style=RADIO_STYLE,
+                                            labelStyle=
+                                                RADIO_LABEL_STYLE,
+                                        ),
+                                    ]),
+                                    html.Div(children=[
+                                        html.Label("Site type",
+                                                   style=LABEL_STYLE),
+                                        dcc.Dropdown(
+                                            id="fuc-site-type",
+                                            options=[
+                                                {"label": "Optical",
+                                                 "value": "optical"},
+                                                {"label": "All types",
+                                                 "value": "all"},
+                                                {"label": "Satellite",
+                                                 "value": "satellite"},
+                                                {"label": "Radar",
+                                                 "value": "radar"},
+                                                {"label": "Occultation",
+                                                 "value": "occultation"},
+                                                {"label": "Roving",
+                                                 "value": "roving"},
+                                            ],
+                                            value="optical",
+                                            clearable=False,
+                                            style={"width": "150px"},
+                                        ),
+                                    ]),
+                                    html.Div(children=[
+                                        html.Label("Graticule",
+                                                   style=LABEL_STYLE),
+                                        dcc.RadioItems(
+                                            id="fuc-graticule",
+                                            options=[
+                                                {"label": " Off",
+                                                 "value": "off"},
+                                                {"label": " On",
+                                                 "value": "on"},
+                                            ],
+                                            value="off",
+                                            inline=True,
+                                            style=RADIO_STYLE,
+                                            labelStyle=
+                                                RADIO_LABEL_STYLE,
+                                        ),
+                                    ]),
+                                    html.Div(children=[
+                                        html.Label("Map projection",
+                                                   style=LABEL_STYLE),
+                                        dcc.Dropdown(
+                                            id="fuc-projection",
+                                            options=[
+                                                {"label": "Equirectangular",
+                                                 "value":
+                                                    "equirectangular"},
+                                                {"label": "Natural earth",
+                                                 "value":
+                                                    "natural earth"},
+                                                {"label": "Robinson",
+                                                 "value": "robinson"},
+                                                {"label": "Mollweide",
+                                                 "value": "mollweide"},
+                                                {"label": "Mercator",
+                                                 "value": "mercator"},
+                                                {"label": "Miller",
+                                                 "value": "miller"},
+                                                {"label": "Kavrayskiy VII",
+                                                 "value": "kavrayskiy7"},
+                                                {"label": "Orthographic",
+                                                 "value": "orthographic"},
+                                            ],
+                                            value="equirectangular",
+                                            clearable=False,
+                                            style={"width": "180px"},
+                                        ),
+                                    ]),
+                                    html.Div(children=[
+                                        html.Label("Sites shown",
+                                                   style=LABEL_STYLE),
+                                        dcc.RadioItems(
+                                            id="fuc-sites-filter",
+                                            options=[
+                                                {"label":
+                                                    " NEO-active only",
+                                                 "value": "neo_active"},
+                                                {"label":
+                                                    " All MPC sites",
+                                                 "value": "all"},
+                                            ],
+                                            value="neo_active",
+                                            inline=True,
+                                            style=RADIO_STYLE,
+                                            labelStyle=
+                                                RADIO_LABEL_STYLE,
+                                        ),
+                                    ]),
+                                    html.Div(children=[
+                                        html.Label("Color scale",
+                                                   style=LABEL_STYLE),
+                                        dcc.RadioItems(
+                                            id="fuc-cscale",
+                                            options=[
+                                                {"label": " Log",
+                                                 "value": "log"},
+                                                {"label": " Linear",
+                                                 "value": "linear"},
+                                            ],
+                                            value="log",
+                                            inline=True,
+                                            style=RADIO_STYLE,
+                                            labelStyle=
+                                                RADIO_LABEL_STYLE,
+                                        ),
+                                    ]),
+                                    html.Div(children=[
+                                        html.Label("Colormap",
+                                                   style=LABEL_STYLE),
+                                        dcc.Dropdown(
+                                            id="fuc-colormap",
+                                            options=[
+                                                {"label": "Viridis",
+                                                 "value": "Viridis"},
+                                                {"label": "Plasma",
+                                                 "value": "Plasma"},
+                                                {"label": "Cividis",
+                                                 "value": "Cividis"},
+                                                {"label": "Turbo",
+                                                 "value": "Turbo"},
+                                                {"label": "Magma",
+                                                 "value": "Magma"},
+                                                {"label": "Inferno",
+                                                 "value": "Inferno"},
+                                                {"label": "RdYlBu (rev.)",
+                                                 "value": "RdYlBu_r"},
+                                                {"label": "Spectral (rev.)",
+                                                 "value": "Spectral_r"},
+                                            ],
+                                            value="Viridis",
+                                            clearable=False,
+                                            style={"width": "150px"},
+                                        ),
+                                    ]),
+                                    html.Div(
+                                        style={"alignSelf": "flex-end"},
+                                        children=[
+                                            html.Button(
+                                                "Download CSV",
+                                                id="btn-download-fuc",
+                                                n_clicks=0,
+                                                style=DOWNLOAD_BTN_STYLE,
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            html.P(
+                                "Phase 1: “follow-up” = distinct NEOs "
+                                "observed at a site other than the "
+                                "discovery site, within the chosen "
+                                "follow-up window (capped by the "
+                                "±200-day apparition cache). "
+                                "Tracklet/observation counts and "
+                                "multi-apparition recovery are Phase 2.",
+                                className="subtext",
+                                style={"fontFamily": "sans-serif",
+                                       "marginBottom": "10px",
+                                       "fontSize": "12px"},
+                            ),
+                            # Stats card
+                            html.Div(
+                                id="fuc-stats",
+                                style={
+                                    "border":
+                                        "1px solid var(--hr-color, #ccc)",
+                                    "borderRadius": "8px",
+                                    "padding": "10px 14px",
+                                    "marginBottom": "12px",
+                                    "fontFamily": "sans-serif",
+                                    "fontSize": "13px",
+                                },
+                            ),
+                            # Persistent viewport bbox. Plotly fires
+                            # a relayoutData event for every pan,
+                            # zoom, AND map click — but click events
+                            # carry no axis info, which would clear
+                            # the bbox and snap the bar/stats back to
+                            # 'global' even though the map is still
+                            # zoomed. We funnel relayoutData through
+                            # a Store that only updates when a real
+                            # viewport change came in.
+                            dcc.Store(id="fuc-viewport", data=None),
+                            # Map + bar each in their own Loading
+                            # wrapper with delay_show so fast updates
+                            # (radio toggles, dropdowns) don't blink
+                            # the contents. Spinner only appears if
+                            # the callback actually takes >600 ms.
+                            dcc.Loading(
+                                type="circle",
+                                delay_show=600,
+                                children=dcc.Graph(
+                                    id="fuc-world-map",
+                                    config=GRAPH_CONFIG),
+                            ),
+                            html.Div(
+                                style={"marginTop": "12px",
+                                       "marginBottom": "8px",
+                                       "display": "flex",
+                                       "gap": "16px",
+                                       "flexWrap": "wrap",
+                                       "alignItems": "flex-end"},
+                                children=[
+                                    html.Div(children=[
+                                        html.Label("Bars to show",
+                                                   style=LABEL_STYLE),
+                                        dcc.Dropdown(
+                                            id="fuc-max-bars",
+                                            options=[
+                                                {"label": "5",
+                                                 "value": 5},
+                                                {"label": "10",
+                                                 "value": 10},
+                                                {"label": "20",
+                                                 "value": 20},
+                                                {"label": "50",
+                                                 "value": 50},
+                                                {"label": "100",
+                                                 "value": 100},
+                                            ],
+                                            value=10,
+                                            clearable=False,
+                                            style={"width": "100px"},
+                                        ),
+                                    ]),
+                                    html.Div(
+                                        style={"flex": "1 1 360px",
+                                               "minWidth": "260px"},
+                                        children=[
+                                            html.Label(
+                                                "Sites for bar chart "
+                                                "(blank = top N)",
+                                                style=LABEL_STYLE),
+                                            dcc.Dropdown(
+                                                id="fuc-site-select",
+                                                options=[],
+                                                value=[],
+                                                multi=True,
+                                                placeholder=(
+                                                    "Click to pick "
+                                                    "(or paste a list "
+                                                    "→)"),
+                                            ),
+                                        ],
+                                    ),
+                                    html.Div(
+                                        style={"flex": "0 1 240px",
+                                               "minWidth": "200px"},
+                                        children=[
+                                            html.Label(
+                                                "Paste codes ↵",
+                                                style=LABEL_STYLE),
+                                            dcc.Input(
+                                                id="fuc-paste-codes",
+                                                type="text",
+                                                value="",
+                                                placeholder=(
+                                                    "I52 V06 J95 …"),
+                                                debounce=True,
+                                                style={"width": "100%",
+                                                       "padding": "6px",
+                                                       "fontFamily":
+                                                           "monospace"},
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            dcc.Loading(
+                                type="circle",
+                                delay_show=600,
+                                children=dcc.Graph(
+                                    id="fuc-bar",
+                                    config=GRAPH_CONFIG),
+                            ),
+                            dcc.Download(id="dl-fuc"),
                         ]),
                     ],
                 ),
@@ -5179,6 +5859,154 @@ app.layout = html.Div(
                         ]),
                     ],
                 ),
+                # ━━━ Tab: Station Report (dev-only, --dev-tabs) ━━━━━━
+                # Phase-1 placeholder. Lives on dev under
+                # --dev-tabs while Phase-2 (ADS-backed MPEC literature
+                # search + Q7 forensic stats) is in flight. Promote
+                # by removing the gate.
+                *([dcc.Tab(
+                    label="Station Report",
+                    value="tab-station",
+                    className="nav-tab",
+                    selected_className="nav-tab--selected",
+                    children=[
+                        html.Div(style={"paddingTop": "15px",
+                                        "fontFamily": "sans-serif"},
+                                 children=[
+                            html.H2("Station Report",
+                                    style={"fontSize": "20px",
+                                           "fontWeight": "600",
+                                           "marginBottom": "4px"}),
+                            html.Div(
+                                "Per-site rollup of observations, "
+                                "tracklets, and discoveries from "
+                                "obs_sbn. NEO vs. non-NEO is computed "
+                                "from current orbital elements via "
+                                "css_utilities.classify_orbit_label, "
+                                "not from the (often-NULL) "
+                                "orbit_type_int column. First query "
+                                "for an active site can take 2-3 "
+                                "minutes; subsequent queries are "
+                                "cached for 24 h.",
+                                className="subtext",
+                                style={"fontSize": "13px",
+                                       "marginBottom": "16px",
+                                       "maxWidth": "780px"}),
+                            # Controls row
+                            html.Div(
+                                style={"display": "flex",
+                                       "gap": "16px",
+                                       "alignItems": "flex-end",
+                                       "marginBottom": "16px",
+                                       "flexWrap": "wrap"},
+                                children=[
+                                    html.Div(children=[
+                                        html.Label("Site code",
+                                                   style=LABEL_STYLE),
+                                        dcc.Input(
+                                            id="station-site",
+                                            type="text",
+                                            value="V00",
+                                            debounce=True,
+                                            style={"width": "100px",
+                                                   "padding": "4px 8px",
+                                                   "fontSize": "13px"},
+                                        ),
+                                    ]),
+                                    html.Div(children=[
+                                        html.Label("From (optional)",
+                                                   style=LABEL_STYLE),
+                                        dcc.Input(
+                                            id="station-date-start",
+                                            type="date",
+                                            value="",
+                                            style={"width": "150px",
+                                                   "padding": "4px 8px",
+                                                   "fontSize": "13px"},
+                                        ),
+                                    ]),
+                                    html.Div(children=[
+                                        html.Label("To (optional)",
+                                                   style=LABEL_STYLE),
+                                        dcc.Input(
+                                            id="station-date-end",
+                                            type="date",
+                                            value="",
+                                            style={"width": "150px",
+                                                   "padding": "4px 8px",
+                                                   "fontSize": "13px"},
+                                        ),
+                                    ]),
+                                    html.Button(
+                                        "Run report",
+                                        id="station-run-btn",
+                                        n_clicks=0,
+                                        style={
+                                            "padding": "6px 16px",
+                                            "fontSize": "13px",
+                                            "fontFamily": "sans-serif",
+                                            "cursor": "pointer",
+                                        },
+                                    ),
+                                ],
+                            ),
+                            # Summary line
+                            html.Div(
+                                "Click 'Run report' to query.",
+                                id="station-summary",
+                                className="subtext",
+                                style={"fontSize": "13px",
+                                       "marginBottom": "16px"}),
+                            # NEO breakdown
+                            html.H3("NEOs",
+                                    style={"fontSize": "16px",
+                                           "fontWeight": "600",
+                                           "marginTop": "20px",
+                                           "marginBottom": "8px"}),
+                            html.Div(id="station-neo-table",
+                                     style={"marginBottom": "8px"}),
+                            html.Button(
+                                "Download NEO CSV",
+                                id="station-neo-dl-btn",
+                                n_clicks=0,
+                                style={"padding": "4px 12px",
+                                       "fontSize": "12px",
+                                       "cursor": "pointer"},
+                            ),
+                            dcc.Download(id="station-neo-dl"),
+                            # Non-NEO breakdown
+                            html.H3("Non-NEOs (incl. Unclassified)",
+                                    style={"fontSize": "16px",
+                                           "fontWeight": "600",
+                                           "marginTop": "24px",
+                                           "marginBottom": "8px"}),
+                            html.Div(id="station-non-neo-table",
+                                     style={"marginBottom": "8px"}),
+                            html.Button(
+                                "Download non-NEO CSV",
+                                id="station-non-neo-dl-btn",
+                                n_clicks=0,
+                                style={"padding": "4px 12px",
+                                       "fontSize": "12px",
+                                       "cursor": "pointer"},
+                            ),
+                            dcc.Download(id="station-non-neo-dl"),
+                            # MPEC stub for Phase 2
+                            html.H3("MPEC publications",
+                                    style={"fontSize": "16px",
+                                           "fontWeight": "600",
+                                           "marginTop": "24px",
+                                           "marginBottom": "8px"}),
+                            html.Div(
+                                "Coming in Phase 2 (ADS API "
+                                "integration). Will list MPECs that "
+                                "include observations from this "
+                                "site, with bibcode and DOI links.",
+                                className="subtext",
+                                style={"fontSize": "13px"}),
+                        ]),
+                    ],
+                )] if _DEV_TABS else []),
                 # ━━━ Tab: About ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
                 dcc.Tab(
                     label="About",
@@ -5267,6 +6095,164 @@ app.layout = html.Div(
                                                       "lineHeight": "1.6"}),
                                         ],
                                     ),
+                                    # ── Release notes ──
+                                    html.Div(
+                                        style={
+                                            "border":
+                                                "1px solid var(--hr-color, #ccc)",
+                                            "borderRadius": "8px",
+                                            "padding": "14px 16px",
+                                            "backgroundColor":
+                                                "var(--paper-bg, white)",
+                                        },
+                                        children=[
+                                            html.Div(
+                                                html.Span(
+                                                    "Release notes",
+                                                    style={
+                                                        "fontWeight": "600",
+                                                        "fontSize": "16px"}),
+                                                style={"marginBottom":
+                                                       "12px"}),
+                                            html.Ul(
+                                                style={"fontSize": "14px",
+                                                       "lineHeight": "1.55",
+                                                       "paddingLeft":
+                                                           "18px",
+                                                       "margin": "0"},
+                                                children=[
+                                                    html.Li([
+                                                        html.Strong(
+                                                            "2026-05-10 "
+                                                            "(Phase 2B) — "),
+                                                        "Follow-up "
+                                                        "Comparison adds "
+                                                        "a Time scope "
+                                                        "radio "
+                                                        "(Discovery "
+                                                        "apparition / "
+                                                        "All time / "
+                                                        "Recovery only). "
+                                                        "All-time and "
+                                                        "recovery modes "
+                                                        "are backed by "
+                                                        "a new lifetime "
+                                                        "cache covering "
+                                                        "every NEO × "
+                                                        "station ever, "
+                                                        "not just the "
+                                                        "discovery "
+                                                        "apparition. "
+                                                        "Multi-survey "
+                                                        "Comparison's "
+                                                        "Survey-reach "
+                                                        "chart also "
+                                                        "gains a Metric "
+                                                        "selector. "
+                                                        "Follow-up "
+                                                        "Comparison "
+                                                        "promoted to "
+                                                        "production.",
+                                                    ]),
+                                                    html.Li([
+                                                        html.Strong(
+                                                            "2026-05-09 "
+                                                            "(Phase 2A) — "),
+                                                        "Follow-up "
+                                                        "Comparison adds "
+                                                        "a Metric "
+                                                        "selector "
+                                                        "(NEOs / "
+                                                        "Tracklets / "
+                                                        "Observations). "
+                                                        "Tracklet and "
+                                                        "observation "
+                                                        "counts come "
+                                                        "from 28 pre-"
+                                                        "aggregated "
+                                                        "FILTER columns "
+                                                        "added to the "
+                                                        "apparition "
+                                                        "cache.",
+                                                    ]),
+                                                    html.Li([
+                                                        html.Strong(
+                                                            "2026-05-09 "
+                                                            "(Phase 1) — "),
+                                                        "Follow-up "
+                                                        "Comparison tab "
+                                                        "lands on dev: "
+                                                        "world map of "
+                                                        "MPC obscodes, "
+                                                        "selectable "
+                                                        "projection, "
+                                                        "log/linear "
+                                                        "color-by-NEO-"
+                                                        "count, "
+                                                        "follow-up "
+                                                        "window selector "
+                                                        "(1 d / 1 wk / "
+                                                        "1 lunation / "
+                                                        "100 d / 200 d), "
+                                                        "post-discovery vs "
+                                                        "include-"
+                                                        "precoveries "
+                                                        "toggle.",
+                                                    ]),
+                                                    html.Li([
+                                                        html.Strong(
+                                                            "2026-05-07 — "),
+                                                        "NEO Consensus: "
+                                                        "smarter NEOfixer "
+                                                        "rule (smart q-"
+                                                        "rule keeps long-"
+                                                        "arc divergences, "
+                                                        "drops boundary "
+                                                        "disagreements); "
+                                                        "tab gains NF q / "
+                                                        "NEO% / U columns "
+                                                        "and a 'Disc by' "
+                                                        "column from the "
+                                                        "new obs_summary "
+                                                        "matview.",
+                                                    ]),
+                                                    html.Li([
+                                                        html.Strong(
+                                                            "2026-04-28 — "),
+                                                        "NEO Consensus + "
+                                                        "banner-level "
+                                                        "source-membership "
+                                                        "filter promoted "
+                                                        "to prod; default "
+                                                        "filter is "
+                                                        "all_six.",
+                                                    ]),
+                                                    html.Li([
+                                                        html.Strong(
+                                                            "2026-04-27 — "),
+                                                        "Production "
+                                                        "hardening: dash "
+                                                        "under launchd, "
+                                                        "waitress WSGI, "
+                                                        "first pip-audit "
+                                                        "pass.",
+                                                    ]),
+                                                    html.Li([
+                                                        html.Strong(
+                                                            "2026-04-24 — "),
+                                                        "Gizmo replica "
+                                                        "(PostgreSQL 18.3 "
+                                                        "on NVMe) is now "
+                                                        "the dev "
+                                                        "platform. "
+                                                        "obs_sbn_neo "
+                                                        "matview drives "
+                                                        "LOAD_SQL / "
+                                                        "APPARITION_SQL.",
+                                                    ]),
+                                                ]),
+                                        ],
+                                    ),
                                 ],
                             ),
                             # ── FAQ card (below the grid) ───────────────
@@ -5340,6 +6326,67 @@ app.layout = html.Div(
                                         "raw orbit_type_int column is "
                                         "missing for ~35% of objects, "
                                         "so we don't rely on it."
+                                    ], style={"fontSize": "15px",
+                                              "lineHeight": "1.6",
+                                              "marginBottom": "10px"}),
+                                    # Q: map projections
+                                    html.Div([
+                                        html.Strong(
+                                            "Which map projection "
+                                            "should I pick? "),
+                                        html.Em("Equirectangular"),
+                                        " is the simplest "
+                                        "(lat/lon = x/y) and good for "
+                                        "side-by-side numerical "
+                                        "comparison. ",
+                                        html.Em("Natural earth"),
+                                        " (default) and ",
+                                        html.Em("Robinson"),
+                                        " are general-purpose "
+                                        "compromises that minimize "
+                                        "shape and area distortion "
+                                        "globally. ",
+                                        html.Em("Mollweide"),
+                                        " is equal-area — useful when "
+                                        "you care about relative "
+                                        "geographic coverage. ",
+                                        html.Em("Mercator"),
+                                        " preserves angles and is "
+                                        "familiar from web maps but "
+                                        "wildly inflates polar "
+                                        "regions. ",
+                                        html.Em("Miller"),
+                                        " is a Mercator variant that "
+                                        "tames polar inflation. ",
+                                        html.Em("Kavrayskiy VII"),
+                                        " is a pseudo-cylindrical "
+                                        "compromise favored by Soviet "
+                                        "atlases. ",
+                                        html.Em("Orthographic"),
+                                        " shows the Earth as a globe "
+                                        "from a fixed viewpoint — "
+                                        "great for visualizing one "
+                                        "hemisphere at a time, "
+                                        "useless for the other. ",
+                                        html.Em("Note: "),
+                                        "the Follow-up Comparison "
+                                        "tab's viewport-aware "
+                                        "filtering (stats card and "
+                                        "bar chart restricting to "
+                                        "the visible map area) is "
+                                        "exact for ",
+                                        html.Em("equirectangular"),
+                                        ", ",
+                                        html.Em("Mercator"),
+                                        ", and ",
+                                        html.Em("Miller"),
+                                        " — those projections expose "
+                                        "their viewport rectangle "
+                                        "directly. Other projections "
+                                        "use an approximate bbox "
+                                        "derived from center + zoom, "
+                                        "so the filter is "
+                                        "best-effort.",
                                     ], style={"fontSize": "15px",
                                               "lineHeight": "1.6",
                                               "marginBottom": "10px"}),
@@ -5622,6 +6669,10 @@ def _get_defaults():
         "tool-cln-date": "",
         "tool-cln-offset": None,
         "tool-cln-tz": 7,
+        # Tab 10 — Station Report
+        "station-site": "V00",
+        "station-date-start": "",
+        "station-date-end": "",
         # Shared
         "group-by": "combined",
         "plot-height": "700",
@@ -5632,6 +6683,8 @@ _TAB_KEYS = {
     "tab-mpec": set(),       # no resettable controls
     "tab-consensus": set(),  # has its own consensus-reset button
     "tab-about": set(),      # static content
+    "tab-station": {"station-site", "station-date-start",
+                    "station-date-end"},
     "tab-discovery": {"year-range", "size-filter", "cumulative-toggle"},
     "tab-neomod": {"h-year-range", "h-range", "h-yscale", "h-mode",
                     "size-mapping", "comp-labels-toggle"},
@@ -5673,6 +6726,7 @@ _RESET_ORDER = [
     "tool-obs80-input", "tool-date-input",
     "tool-airmass-x", "tool-airmass-alt",
     "tool-cln-date", "tool-cln-offset", "tool-cln-tz",
+    "station-site", "station-date-start", "station-date-end",
     "group-by", "plot-height", "neo-source-filter",
 ]
 
@@ -6411,6 +7465,7 @@ def update_neomod3_table(h_year_range, theme_name, _tab, neo_source):
     Input("comp-survey-select", "value"),
     Input("comp-precovery", "value"),
     Input("comp-window", "value"),
+    Input("comp-metric", "value"),
     Input("comp-group-mode", "value"),
     Input("comp-venn-labels", "value"),
     Input("theme-toggle", "value"),
@@ -6419,8 +7474,9 @@ def update_neomod3_table(h_year_range, theme_name, _tab, neo_source):
     Input("neo-source-filter", "value"),
 )
 def update_comparison(year_range, size_filter, survey_select,
-                      precovery, window_days, group_mode, venn_labels,
-                      theme_name, plot_height, active_tab, neo_source):
+                      precovery, window_days, metric, group_mode,
+                      venn_labels, theme_name, plot_height, active_tab,
+                      neo_source):
     if active_tab != "tab-comparison" or df is None or df_apparition is None:
         raise PreventUpdate
 
@@ -6428,6 +7484,7 @@ def update_comparison(year_range, size_filter, survey_select,
     height = int(plot_height)
     exclude_precovery = precovery == "post_only"
     window_days = int(window_days or 200)
+    metric = metric or "neos"
     group_col = ("station_code" if group_mode == "station"
                  else "project")
     color_map = (STATION_COLORS if group_mode == "station"
@@ -6438,6 +7495,16 @@ def update_comparison(year_range, size_filter, survey_select,
     survey_sets, eligible = build_survey_sets(
         df_view, df_app_view, year_range, size_filter, exclude_precovery,
         window_days, group_col)
+    if metric == "neos":
+        reach_totals = None
+    else:
+        reach_totals = build_survey_metric_totals(
+            df_view, df_app_view, year_range, size_filter,
+            exclude_precovery, window_days, group_col, metric)
+        if not reach_totals:
+            # Fallback: pre-agg cols missing (cache pre-Phase-2A) →
+            # render the chart at NEO counts and fall through.
+            metric = "neos"
 
     eligible_total = len(eligible)
     y0, y1 = year_range
@@ -6470,7 +7537,8 @@ def update_comparison(year_range, size_filter, survey_select,
             venn_labels, eligible_total, yr_tag)
 
     reach_fig = _make_survey_reach(
-        survey_sets, t, height, yr_tag, color_map)
+        survey_sets, t, height, yr_tag, color_map,
+        totals=reach_totals, metric=metric)
     heatmap_fig = _make_pairwise_heatmap(survey_sets, t, height, yr_tag)
     summary_fig = _make_comparison_summary(
         survey_sets, eligible, t, height, yr_tag)
@@ -11266,6 +12334,1096 @@ def download_consensus_nea(_n, rows):
                   f"published in NEA.txt.)\n")
         body = header + body
     return dict(content=body, filename="neo_consensus_nea_subset.txt")
+
+
+# ---------------------------------------------------------------------------
+# Station Report tab — query, render, downloads
+# ---------------------------------------------------------------------------
+# In-memory cache of the most-recently-fetched station report so the
+# download callbacks don't re-query.  The disk cache in
+# lib.station_report handles cross-session persistence; this dict
+# avoids a re-load even within the same session.
+_station_last_result = {"site": None, "df": None}
+
+
+def _build_station_table(df, table_id_suffix):
+    """Render a per-(year × class) breakdown DataFrame as a DataTable."""
+    if df is None or df.empty:
+        return html.Div("(no rows)", className="subtext",
+                        style={"fontSize": "13px",
+                               "fontStyle": "italic"})
+    columns = [
+        {"name": "Year",         "id": "obs_year"},
+        {"name": "Orbit class",  "id": "orbit_class"},
+        {"name": "Obs",          "id": "obs_count",
+         "type": "numeric",
+         "format": {"specifier": ","}},
+        {"name": "Tracklets",    "id": "tracklet_count",
+         "type": "numeric",
+         "format": {"specifier": ","}},
+        {"name": "Objects",      "id": "object_count",
+         "type": "numeric",
+         "format": {"specifier": ","}},
+        {"name": "Discovery obs", "id": "discovery_obs",
+         "type": "numeric",
+         "format": {"specifier": ","}},
+        {"name": "Discovered objects", "id": "discovery_objects",
+         "type": "numeric",
+         "format": {"specifier": ","}},
+    ]
+    return dash_table.DataTable(
+        id=f"station-table-{table_id_suffix}",
+        data=df.to_dict("records"),
+        columns=columns,
+        page_size=50,
+        sort_action="native",
+        filter_action="native",
+        style_table={"overflowX": "auto"},
+        style_cell={
+            "fontFamily": "sans-serif",
+            "fontSize": "12px",
+            "padding": "4px 8px",
+            "textAlign": "left",
+            "backgroundColor": "transparent",
+            "color": "inherit",
+            "borderColor": "var(--hr-color, #ccc)",
+        },
+        style_cell_conditional=[
+            {"if": {"column_id": c}, "textAlign": "right"}
+            for c in ["obs_count", "tracklet_count", "object_count",
+                      "discovery_obs", "discovery_objects"]
+        ],
+        style_header={
+            "fontWeight": "600",
+            "backgroundColor": "var(--paper-bg, #f5f5f5)",
+            "color": "inherit",
+            "borderBottom": "2px solid var(--hr-color, #999)",
+        },
+        style_filter={
+            "backgroundColor": "transparent",
+            "color": "inherit",
+        },
+    )
+
+
+@app.callback(
+    Output("station-summary", "children"),
+    Output("station-neo-table", "children"),
+    Output("station-non-neo-table", "children"),
+    Input("station-run-btn", "n_clicks"),
+    State("station-site", "value"),
+    State("station-date-start", "value"),
+    State("station-date-end", "value"),
+    prevent_initial_call=True,
+)
+def _run_station_report(_n_clicks, site, date_start, date_end):
+    if not site or not site.strip():
+        return ("Please enter a site code (e.g. V00).", "", "")
+    site = site.strip().upper()
+    try:
+        df = fetch_station_report(
+            site,
+            date_start or None,
+            date_end or None,
+        )
+    except Exception as exc:
+        return (f"Query failed: {exc}", "", "")
+
+    _station_last_result["site"] = site
+    _station_last_result["df"] = df
+
+    if df.empty:
+        return (f"No observations found for site {site}.", "", "")
+
+    neo_df, non_neo_df = _split_station_neo(df)
+    total = _summarize_station(df)
+    neo = _summarize_station(neo_df)
+    non_neo = _summarize_station(non_neo_df)
+
+    summary = (
+        f"Site {site} — {total['obs_count']:,} obs, "
+        f"NEO obs {neo['obs_count']:,} "
+        f"({neo['discovery_obs']:,} discovery), "
+        f"non-NEO obs {non_neo['obs_count']:,} "
+        f"({non_neo['discovery_obs']:,} discovery). "
+        f"Span {total['year_min']}–{total['year_max']}."
+    )
+    return (summary,
+            _build_station_table(neo_df, "neo"),
+            _build_station_table(non_neo_df, "non-neo"))
+
+
+@app.callback(
+    Output("station-neo-dl", "data"),
+    Input("station-neo-dl-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def _station_neo_dl(_n):
+    if _station_last_result["df"] is None:
+        raise PreventUpdate
+    neo_df, _ = _split_station_neo(_station_last_result["df"])
+    site = _station_last_result["site"]
+    return send_data_frame(
+        neo_df.to_csv, f"station_report_{site}_neo.csv", index=False)
+
+
+@app.callback(
+    Output("station-non-neo-dl", "data"),
+    Input("station-non-neo-dl-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def _station_non_neo_dl(_n):
+    if _station_last_result["df"] is None:
+        raise PreventUpdate
+    _, non_neo_df = _split_station_neo(_station_last_result["df"])
+    site = _station_last_result["site"]
+    return send_data_frame(
+        non_neo_df.to_csv,
+        f"station_report_{site}_non_neo.csv", index=False)
+
+
+# ---------------------------------------------------------------------------
+# Follow-up Comparison callbacks (Phase 1)
+# ---------------------------------------------------------------------------
+
+# Cache the per-site follow-up NEO counts keyed by (year-range, window,
+# precovery flag) so the map, bar chart, dropdown, and download don't
+# all recompute. Tiny DataFrame; not worth invalidating.
+_FUC_COUNT_CACHE = {}
+
+_FUC_TYPE_COLOR = {
+    "optical":     "#1f77b4",
+    "satellite":   "#d62728",
+    "radar":       "#9467bd",
+    "occultation": "#2ca02c",
+    "roving":      "#ff7f0e",
+}
+
+_FUC_NEO_ACTIVE_SET = None
+
+_FUC_METRIC_LABEL = {
+    "neos":         "NEOs",
+    "tracklets":    "tracklets",
+    "observations": "observations",
+}
+
+
+def _fuc_metric_column(window_days, precovery_mode, metric):
+    """Map (window, mode, metric) → APPARITION_SQL pre-aggregated
+    column name. Used for metric in (tracklets, observations);
+    NEOs is computed separately from row counts."""
+    suffix = "post" if precovery_mode == "post_only" else "any"
+    prefix = "n_trk" if metric == "tracklets" else "n_obs"
+    return f"{prefix}_{suffix}_{int(window_days)}"
+
+
+def _fuc_neo_active_codes():
+    """Set of station codes that ever submitted NEO astrometry within
+    a discovery apparition (i.e. appear in df_apparition). Cached
+    once — df_apparition is loaded once at startup and stable."""
+    global _FUC_NEO_ACTIVE_SET
+    if _FUC_NEO_ACTIVE_SET is None:
+        if df_apparition is None:
+            return set()
+        _FUC_NEO_ACTIVE_SET = set(
+            df_apparition["station_code"].dropna().unique())
+    return _FUC_NEO_ACTIVE_SET
+
+
+def _fuc_apply_sites_filter(obs_df, sites_filter):
+    """Restrict obscodes to NEO-active stations if requested."""
+    if sites_filter == "neo_active":
+        active = _fuc_neo_active_codes()
+        if active:
+            return obs_df[obs_df["obscode"].isin(active)]
+    return obs_df
+
+
+def _fuc_merge_view_state(prev, relayout):
+    """Merge new relayoutData keys into the cumulative view state.
+    Plotly fires partial updates — modebar zoom-in sends only
+    geo.projection.scale, pan sends only geo.center.{lon,lat},
+    drag-zoom sends both axis ranges. We accumulate so a partial
+    update combines with whatever was already known.
+
+    Important: when scale or center changes WITHOUT new axis
+    ranges in the same event, the cached lon/lat ranges are
+    stale (they describe the prior viewport, not the new one).
+    Invalidate them so bbox derivation falls back to center +
+    scale — approximate but at least current. Otherwise a
+    drag-zoom followed by a modebar zoom-out would keep filtering
+    against the old tight rectangle and drop sites that are now
+    well inside the visible area."""
+    state = dict(prev or {})
+    if not isinstance(relayout, dict):
+        return state
+
+    new_lon_range = relayout.get("geo.lonaxis.range")
+    new_lat_range = relayout.get("geo.lataxis.range")
+    has_new_ranges = bool(
+        new_lon_range and len(new_lon_range) == 2
+        and new_lat_range and len(new_lat_range) == 2)
+    has_scale_or_center = (
+        "geo.projection.scale" in relayout
+        or "geo.center.lon" in relayout
+        or "geo.center.lat" in relayout)
+
+    if has_scale_or_center and not has_new_ranges:
+        state.pop("lon_range", None)
+        state.pop("lat_range", None)
+
+    if new_lon_range and len(new_lon_range) == 2:
+        state["lon_range"] = [float(new_lon_range[0]),
+                              float(new_lon_range[1])]
+    if new_lat_range and len(new_lat_range) == 2:
+        state["lat_range"] = [float(new_lat_range[0]),
+                              float(new_lat_range[1])]
+    if "geo.center.lon" in relayout:
+        state["center_lon"] = float(relayout["geo.center.lon"])
+    if "geo.center.lat" in relayout:
+        state["center_lat"] = float(relayout["geo.center.lat"])
+    if "geo.projection.scale" in relayout:
+        state["scale"] = float(relayout["geo.projection.scale"])
+    return state
+
+
+def _fuc_bbox_from_state(state):
+    """Best-effort viewport bbox from cumulative view state.
+    Returns (lon_min, lon_max, lat_min, lat_max) or None.
+    Lon/lat ranges (when present from equirectangular / mercator /
+    miller) are exact; otherwise we project center + scale linearly
+    to a rectangle (approximate for non-rectangular projections)."""
+    if not state or not isinstance(state, dict):
+        return None
+    lon_range = state.get("lon_range")
+    lat_range = state.get("lat_range")
+    if lon_range and lat_range:
+        return (lon_range[0], lon_range[1],
+                lat_range[0], lat_range[1])
+    lon_c = state.get("center_lon")
+    lat_c = state.get("center_lat")
+    scale = state.get("scale")
+    if lon_c is not None and lat_c is not None and scale and scale > 0:
+        lon_w = 90.0 / scale
+        lat_w = 45.0 / scale
+        return (lon_c - lon_w, lon_c + lon_w,
+                lat_c - lat_w, lat_c + lat_w)
+    return None
+
+
+def _fuc_apply_bbox(obs_df, bbox):
+    """Filter obscodes to those whose lat/lon fall within bbox."""
+    if bbox is None:
+        return obs_df
+    lon_min, lon_max, lat_min, lat_max = bbox
+    # Longitude wraps; handle both straightforward and crossed-180
+    # cases. (Most projections give us a non-wrapping range.)
+    if lon_min <= lon_max:
+        lon_mask = obs_df["longitude_180"].between(lon_min, lon_max)
+    else:
+        lon_mask = ((obs_df["longitude_180"] >= lon_min)
+                    | (obs_df["longitude_180"] <= lon_max))
+    lat_mask = obs_df["latitude"].between(lat_min, lat_max)
+    return obs_df[lon_mask & lat_mask]
+
+
+def _fuc_followup_counts(year_range, window_days, precovery_mode,
+                         metric="neos", time_scope="apparition"):
+    """Per-site follow-up activity at the chosen metric and time scope.
+
+    time_scope:
+      "apparition" — only obs within ±200 d of discovery (uses
+        apparition_cache; obeys window_days + precovery_mode).
+      "all_time"   — all-time per-(NEO × station) totals (uses
+        lifetime_cache; window/precovery ignored).
+      "recovery"   — lifetime totals minus the apparition window;
+        only stations with last_obs > disc + 200 d qualify.
+
+    metric:
+      "neos"         → distinct NEO designations
+      "tracklets"    → sum of tracklet counts
+      "observations" → sum of obs counts
+
+    Always: site != discovery site, NEO discovered in `year_range`."""
+    metric = metric or "neos"
+    time_scope = time_scope or "apparition"
+    key = (tuple(year_range), int(window_days), str(precovery_mode),
+           str(metric), str(time_scope))
+    cached = _FUC_COUNT_CACHE.get(key)
+    if cached is not None:
+        return cached
+    if df is None:
+        return pd.DataFrame(columns=["station_code", "n_followup"])
+
+    if time_scope == "apparition":
+        result = _fuc_counts_apparition(
+            year_range, window_days, precovery_mode, metric)
+    elif time_scope == "all_time":
+        result = _fuc_counts_lifetime(year_range, metric,
+                                      recovery_only=False)
+    else:  # "recovery"
+        result = _fuc_counts_lifetime(year_range, metric,
+                                      recovery_only=True)
+    _FUC_COUNT_CACHE[key] = result
+    return result
+
+
+def _fuc_counts_apparition(year_range, window_days, precovery_mode,
+                           metric):
+    """Discovery-apparition counts from the apparition cache."""
+    if df_apparition is None:
+        return pd.DataFrame(columns=["station_code", "n_followup"])
+    y0, y1 = year_range
+    eligible = df[(df["disc_year"] >= y0) & (df["disc_year"] <= y1)]
+    disc_station = eligible.set_index("designation")["station_code"]
+    app = df_apparition[
+        df_apparition["designation"].isin(disc_station.index)].copy()
+    app["disc_station"] = app["designation"].map(disc_station)
+    fu = app[app["station_code"] != app["disc_station"]]
+
+    if metric in ("tracklets", "observations"):
+        col = _fuc_metric_column(window_days, precovery_mode, metric)
+        if col in fu.columns:
+            counts = (fu.groupby("station_code")[col].sum()
+                      .reset_index(name="n_followup"))
+            return counts[counts["n_followup"] > 0]
+
+    w = int(window_days)
+    if precovery_mode == "include":
+        fu = fu[
+            fu["days_from_disc"].between(-w, w)
+            | fu["post_disc_days"].between(0, w)
+        ]
+    else:
+        fu = fu[fu["post_disc_days"].between(0, w)]
+
+    return (fu.groupby("station_code")["designation"].nunique()
+            .reset_index(name="n_followup"))
+
+
+def _fuc_counts_lifetime(year_range, metric, recovery_only):
+    """All-time (or recovery-only) counts from the lifetime cache.
+
+    For tracklets/observations in recovery-only mode, we subtract the
+    apparition cache's n_trk_any_200 / n_obs_any_200 from the lifetime
+    totals so the result is "tracklets/obs occurring outside ±200d of
+    discovery". For NEOs, we just filter to (NEO × station) rows where
+    last_obs > disc + 200d."""
+    if df_lifetime is None:
+        return pd.DataFrame(columns=["station_code", "n_followup"])
+    y0, y1 = year_range
+    eligible = df[(df["disc_year"] >= y0) & (df["disc_year"] <= y1)]
+    disc_station = eligible.set_index("designation")["station_code"]
+    life = df_lifetime[
+        df_lifetime["designation"].isin(disc_station.index)].copy()
+    life["disc_station"] = life["designation"].map(disc_station)
+    fu = life[life["station_code"] != life["disc_station"]]
+
+    if recovery_only:
+        fu = fu[fu["days_to_last_obs"] > 200.0]
+        if fu.empty:
+            return pd.DataFrame(columns=["station_code", "n_followup"])
+        if metric in ("tracklets", "observations"):
+            # Subtract apparition contributions so we get tracklets/obs
+            # that occurred OUTSIDE the apparition window.
+            ap_col = ("n_trk_any_200" if metric == "tracklets"
+                      else "n_obs_any_200")
+            tot_col = ("n_tracklets_total" if metric == "tracklets"
+                       else "n_obs_total")
+            if (df_apparition is not None
+                    and ap_col in df_apparition.columns):
+                ap = df_apparition[["designation", "station_code",
+                                    ap_col]]
+                fu = fu.merge(ap, on=["designation", "station_code"],
+                              how="left")
+                fu[ap_col] = fu[ap_col].fillna(0)
+                fu["recovery_metric"] = fu[tot_col] - fu[ap_col]
+                fu = fu[fu["recovery_metric"] > 0]
+                counts = (fu.groupby("station_code")["recovery_metric"]
+                          .sum().reset_index(name="n_followup"))
+                return counts
+            # Fallback: use total (over-counts apparition contributions)
+            counts = (fu.groupby("station_code")[tot_col]
+                      .sum().reset_index(name="n_followup"))
+            return counts
+        # NEOs in recovery-only: distinct designations per station
+        return (fu.groupby("station_code")["designation"].nunique()
+                .reset_index(name="n_followup"))
+
+    # All time
+    if metric == "tracklets":
+        return (fu.groupby("station_code")["n_tracklets_total"]
+                .sum().reset_index(name="n_followup"))
+    if metric == "observations":
+        return (fu.groupby("station_code")["n_obs_total"]
+                .sum().reset_index(name="n_followup"))
+    return (fu.groupby("station_code")["designation"].nunique()
+            .reset_index(name="n_followup"))
+
+
+@app.callback(
+    Output("fuc-site-select", "options"),
+    Input("fuc-year-range", "value"),
+    Input("fuc-window", "value"),
+    Input("fuc-precovery", "value"),
+    Input("fuc-metric", "value"),
+    Input("fuc-time-scope", "value"),
+)
+def _fuc_site_options(year_range, window_days, precovery_mode, metric,
+                      time_scope):
+    counts = _fuc_followup_counts(
+        year_range, window_days, precovery_mode, metric, time_scope)
+    obs = load_obscodes()
+    merged = counts.merge(
+        obs[["obscode", "name"]], left_on="station_code",
+        right_on="obscode", how="left")
+    merged = merged.sort_values("n_followup", ascending=False)
+    unit = _FUC_METRIC_LABEL.get(metric or "neos", "NEOs")
+    return [
+        {"label": f"{row.station_code} — {row.name or '(unnamed)'} "
+                  f"({int(row.n_followup):,} {unit})",
+         "value": row.station_code}
+        for row in merged.itertuples()
+    ]
+
+
+def _window_label(window_days):
+    return {1: "1 d", 7: "1 wk", 29: "1 lunation",
+            100: "100 d", 200: "200 d"}.get(int(window_days),
+                                            f"{window_days} d")
+
+
+def _fuc_axis(which, show_grid, clamp, grid_color):
+    """Build a Scattergeo lataxis/lonaxis dict honoring the
+    Graticule control. `clamp` lets the existing ±65/+80 latitude
+    cap stay in place for projections that benefit from it."""
+    out = {}
+    if which == "lat" and clamp:
+        out["range"] = [-65, 80]
+    if show_grid:
+        out["showgrid"] = True
+        out["gridcolor"] = grid_color
+        out["gridwidth"] = 0.5
+        out["dtick"] = 30
+    return out
+
+
+@app.callback(
+    Output("fuc-world-map", "figure"),
+    Input("fuc-year-range", "value"),
+    Input("fuc-window", "value"),
+    Input("fuc-precovery", "value"),
+    Input("fuc-metric", "value"),
+    Input("fuc-site-type", "value"),
+    Input("fuc-sites-filter", "value"),
+    Input("fuc-projection", "value"),
+    Input("fuc-graticule", "value"),
+    Input("fuc-cscale", "value"),
+    Input("fuc-colormap", "value"),
+    Input("fuc-time-scope", "value"),
+    Input("theme-toggle", "value"),
+    Input("plot-height", "value"),
+)
+def _fuc_render_map(year_range, window_days, precovery_mode, metric,
+                    site_type, sites_filter, projection, graticule,
+                    cscale, colormap, time_scope, theme_name, ph):
+    t = theme(theme_name or "light")
+    height = max(int(ph), 400) if ph else 900
+    obs = load_obscodes()
+    if obs is None or obs.empty:
+        return _empty_figure("Obscodes not loaded", t, height)
+    if site_type and site_type != "all":
+        obs = obs[obs["observations_type"] == site_type]
+    obs = _fuc_apply_sites_filter(obs, sites_filter)
+    counts = _fuc_followup_counts(
+        year_range, window_days, precovery_mode, metric, time_scope)
+    merged = obs.merge(
+        counts, left_on="obscode", right_on="station_code", how="left")
+    merged["n_followup"] = merged["n_followup"].fillna(0).astype(int)
+    metric_label = _FUC_METRIC_LABEL.get(metric or "neos", "NEOs")
+    scope_title = {
+        "apparition": f"window {_window_label(window_days)}",
+        "all_time":   "all time",
+        "recovery":   "recovery (>200 d post-discovery)",
+    }.get(time_scope or "apparition",
+          f"window {_window_label(window_days)}")
+
+    bg = t["plot"]
+    land = "#2a2a2a" if theme_name == "dark" else "#f0f0f0"
+    coast = "#666" if theme_name == "dark" else "#999"
+
+    fig = go.Figure()
+
+    inactive = merged[merged["n_followup"] == 0]
+    if not inactive.empty:
+        fig.add_trace(go.Scattergeo(
+            lon=inactive["longitude_180"],
+            lat=inactive["latitude"],
+            text=inactive.apply(
+                lambda r: f"<b>{r['obscode']}</b> — "
+                          f"{r['name'] or '(unnamed)'}<br>"
+                          f"Type: {r['observations_type']}<br>"
+                          f"No follow-up {metric_label} in window",
+                axis=1),
+            hovertemplate="%{text}<extra></extra>",
+            mode="markers",
+            name=f"no follow-up ({len(inactive):,})",
+            marker=dict(
+                size=4,
+                color=("rgba(180,180,180,0.5)" if theme_name == "dark"
+                       else "rgba(120,120,120,0.45)"),
+                line=dict(width=0),
+            ),
+            showlegend=True,
+        ))
+
+    # Sites with ≥1 follow-up — colored by NEO count with a single
+    # colorbar. Uniform marker size so small contributors aren't
+    # buried under the giants. Both cmin and cmax track the data
+    # so the colorscale uses its full range whatever the filter is.
+    # Sort ASCENDING by n_followup so Plotly draws the most
+    # productive sites last → on top → never occluded by smaller
+    # neighbors.
+    active = merged[merged["n_followup"] > 0].sort_values("n_followup")
+    if not active.empty:
+        n = active["n_followup"].astype(float)
+        if cscale == "log":
+            vals = np.log10(n)
+            cmin = float(vals.min())
+            cmax = float(vals.max())
+            # Decade ticks within [cmin, cmax], plus the endpoints
+            # if they don't coincide with a decade.
+            lo = int(np.floor(cmin))
+            hi = int(np.ceil(cmax))
+            decades = [d for d in range(lo, hi + 1)
+                       if cmin - 1e-9 <= d <= cmax + 1e-9]
+            tickvals = decades or [cmin, cmax]
+            ticktext = [f"{10**d:,.0f}" for d in tickvals]
+            cbar_title = f"{metric_label}<br>(log)"
+        else:
+            vals = n
+            cmin = float(vals.min())
+            cmax = float(vals.max())
+            tickvals = None
+            ticktext = None
+            cbar_title = metric_label
+        marker_kwargs = dict(
+            size=8,
+            color=vals,
+            colorscale=colormap or "Viridis",
+            cmin=cmin,
+            cmax=cmax if cmax > cmin else cmin + 1,
+            opacity=0.9,
+            line=dict(width=0.4, color="#222"),
+            colorbar=dict(
+                title=cbar_title,
+                thickness=14,
+                len=0.7,
+                yanchor="middle", y=0.5,
+            ),
+        )
+        if tickvals is not None:
+            marker_kwargs["colorbar"]["tickvals"] = tickvals
+            marker_kwargs["colorbar"]["ticktext"] = ticktext
+        fig.add_trace(go.Scattergeo(
+            lon=active["longitude_180"],
+            lat=active["latitude"],
+            text=active.apply(
+                lambda r: f"<b>{r['obscode']}</b> — "
+                          f"{r['name'] or '(unnamed)'}<br>"
+                          f"Type: {r['observations_type']}<br>"
+                          f"Follow-up {metric_label}: "
+                          f"{int(r['n_followup']):,}",
+                axis=1),
+            hovertemplate="%{text}<extra></extra>",
+            mode="markers",
+            name=f"with follow-up ({len(active):,})",
+            marker=marker_kwargs,
+            showlegend=True,
+        ))
+
+    pmode_label = ("post-discovery" if precovery_mode == "post_only"
+                   else "post + precoveries")
+    fig.update_layout(
+        template=t["template"],
+        paper_bgcolor=t["paper"], plot_bgcolor=bg,
+        height=height,
+        # uirevision tied to projection only — changing year/window/
+        # precovery/type/scale preserves zoom & pan; changing
+        # projection swaps geometry, so reset is appropriate.
+        uirevision=f"fuc-map-{projection or 'default'}",
+        transition=dict(duration=350, easing="cubic-in-out"),
+        title=(f"MPC observatory sites — follow-up {metric_label} "
+               f"{year_range[0]}–{year_range[1]}, "
+               + (f"{scope_title} ({pmode_label})"
+                  if (time_scope or "apparition") == "apparition"
+                  else scope_title)),
+        # Right margin reserved for the colorbar + its widest plausible
+        # tick label so the plot area doesn't shift when log↔linear
+        # toggling changes label width.
+        margin=dict(l=10, r=90, t=50, b=10),
+        legend=dict(yanchor="bottom", y=0.02, xanchor="left", x=0.02,
+                    bgcolor="rgba(0,0,0,0)"),
+        geo=dict(
+            projection_type=projection or "natural earth",
+            showland=True, landcolor=land,
+            showocean=True, oceancolor=bg,
+            showcountries=True, countrycolor=coast,
+            coastlinecolor=coast,
+            lataxis=_fuc_axis(
+                "lat",
+                graticule == "on",
+                clamp=(projection or "") in
+                    ("equirectangular", "mercator", "miller"),
+                grid_color=coast),
+            lonaxis=_fuc_axis(
+                "lon",
+                graticule == "on",
+                clamp=False,
+                grid_color=coast),
+            bgcolor=bg,
+        ),
+    )
+    return fig
+
+
+# Persist viewport bbox across relayoutData events that don't carry
+# viewport info (clicks, autosize, …). The Store carries [lon_min,
+# lon_max, lat_min, lat_max] or None.
+@app.callback(
+    Output("fuc-viewport", "data"),
+    Input("fuc-world-map", "relayoutData"),
+    Input("fuc-projection", "value"),
+    State("fuc-viewport", "data"),
+)
+def _fuc_track_viewport(relayout, _projection, prev_state):
+    # On projection change, Plotly resets the view; clear state.
+    if ctx.triggered_id == "fuc-projection":
+        return None
+    if not relayout or not isinstance(relayout, dict):
+        raise PreventUpdate
+
+    # Reset detection — clear state so bars and stats go global.
+    # Modebar reset / double-click reset usually fires autorange
+    # flags rather than concrete axis ranges.
+    if (relayout.get("geo.lonaxis.autorange") is True
+            or relayout.get("geo.lataxis.autorange") is True):
+        return None
+
+    # Default-view reset: scale ≈ 1 centered on origin. Same effect
+    # as autorange — the bbox would cover the entire globe.
+    scale = relayout.get("geo.projection.scale")
+    lon_c = relayout.get("geo.center.lon")
+    lat_c = relayout.get("geo.center.lat")
+    if (scale is not None
+            and abs(float(scale) - 1.0) < 0.01
+            and lon_c is not None and abs(float(lon_c)) < 0.5
+            and lat_c is not None and abs(float(lat_c)) < 0.5):
+        return None
+
+    # Otherwise: merge new keys into the previous state. A modebar
+    # zoom-in fires only scale, pan fires only center, drag-zoom
+    # fires both axis ranges — accumulating means each event
+    # refines the bbox rather than replacing it wholesale (which
+    # is what made scale-only events fall to PreventUpdate).
+    new_state = _fuc_merge_view_state(prev_state, relayout)
+    if not new_state or new_state == (prev_state or {}):
+        raise PreventUpdate
+    return new_state
+
+
+# Stats card — responsive to year/window/type/sites-filter AND the
+# persisted viewport bbox.
+@app.callback(
+    Output("fuc-stats", "children"),
+    Input("fuc-year-range", "value"),
+    Input("fuc-window", "value"),
+    Input("fuc-precovery", "value"),
+    Input("fuc-metric", "value"),
+    Input("fuc-site-type", "value"),
+    Input("fuc-sites-filter", "value"),
+    Input("fuc-viewport", "data"),
+    Input("fuc-time-scope", "value"),
+    Input("theme-toggle", "value"),
+)
+def _fuc_render_stats(year_range, window_days, precovery_mode, metric,
+                      site_type, sites_filter, viewport, time_scope,
+                      theme_name):
+    obs = load_obscodes()
+    if obs is None or obs.empty or df is None or df_apparition is None:
+        return html.Span("Loading…",
+                         style={"color":
+                                "var(--subtext-color, #888)"})
+    type_obs = (obs if site_type == "all"
+                else obs[obs["observations_type"] == site_type])
+    type_obs = _fuc_apply_sites_filter(type_obs, sites_filter)
+    bbox = _fuc_bbox_from_state(viewport)
+    viewport_obs = _fuc_apply_bbox(type_obs, bbox)
+    bbox_active = bbox is not None and len(viewport_obs) < len(type_obs)
+
+    counts = _fuc_followup_counts(
+        year_range, window_days, precovery_mode, metric, time_scope)
+    counts_typed = counts.merge(
+        viewport_obs[["obscode"]], left_on="station_code",
+        right_on="obscode", how="inner")
+    y0, y1 = year_range
+    eligible = df[(df["disc_year"] >= y0) & (df["disc_year"] <= y1)]
+    n_neos = int(len(eligible))
+
+    if not counts_typed.empty:
+        disc_station = eligible.set_index("designation")["station_code"]
+        active_stations = set(counts_typed["station_code"])
+        if time_scope in ("all_time", "recovery"):
+            src = (df_lifetime
+                   if df_lifetime is not None
+                   else df_apparition)
+        else:
+            src = df_apparition
+        app = src[
+            src["designation"].isin(disc_station.index)
+            & src["station_code"].isin(active_stations)
+        ].copy()
+        app["disc_station"] = app["designation"].map(disc_station)
+        app = app[app["station_code"] != app["disc_station"]]
+        if time_scope == "apparition":
+            w = int(window_days)
+            if precovery_mode == "include":
+                app = app[
+                    app["days_from_disc"].between(-w, w)
+                    | app["post_disc_days"].between(0, w)
+                ]
+            else:
+                app = app[app["post_disc_days"].between(0, w)]
+        elif time_scope == "recovery" and "days_to_last_obs" in app.columns:
+            app = app[app["days_to_last_obs"] > 200.0]
+        followed_neos = app["designation"].nunique()
+        per_neo = (app.groupby("designation")["station_code"]
+                   .nunique())
+        med_sites = float(per_neo.median()) if len(per_neo) else 0.0
+    else:
+        followed_neos = 0
+        med_sites = 0.0
+
+    pct = (100.0 * followed_neos / n_neos) if n_neos else 0.0
+    pmode_label = ("post-discovery"
+                   if precovery_mode == "post_only"
+                   else "incl. precoveries")
+    sites_filter_label = ("NEO-active" if sites_filter == "neo_active"
+                          else "all MPC")
+    metric_label = _FUC_METRIC_LABEL.get(metric or "neos", "NEOs")
+    metric_label_cap = metric_label[:1].upper() + metric_label[1:]
+    if metric in ("tracklets", "observations"):
+        total_metric = int(counts_typed["n_followup"].sum())
+        contrib_label = f"Total {metric_label} contributed"
+        contrib_value = f"{total_metric:,}"
+    else:
+        contrib_label = "NEOs with any follow-up here"
+        contrib_value = f"{followed_neos:,} ({pct:.1f} %)"
+    if bbox_active:
+        scope_label = (
+            f"viewport: lon {bbox[0]:.0f}…{bbox[1]:.0f}, "
+            f"lat {bbox[2]:.0f}…{bbox[3]:.0f}"
+        )
+    else:
+        scope_label = "scope: global (pan/zoom the map to filter)"
+
+    def tile(label, value):
+        return html.Div(
+            style={"display": "flex", "flexDirection": "column",
+                   "minWidth": "140px"},
+            children=[
+                html.Div(value,
+                         style={"fontSize": "20px",
+                                "fontWeight": "600",
+                                "lineHeight": "1.1"}),
+                html.Div(label,
+                         className="subtext",
+                         style={"fontSize": "11px",
+                                "color":
+                                    "var(--subtext-color, #888)"}),
+            ])
+
+    badge_color = ("#1f77b4" if bbox_active
+                   else "var(--subtext-color, #888)")
+
+    return html.Div(children=[
+        html.Div(
+            style={"display": "flex", "flexWrap": "wrap",
+                   "gap": "20px 32px", "alignItems": "center"},
+            children=[
+                tile(f"{site_type} sites ({sites_filter_label})",
+                     f"{len(viewport_obs):,}"),
+                tile(f"with {metric_label} "
+                     + ({"apparition":
+                            f"in window "
+                            f"({_window_label(window_days)}, "
+                            f"{pmode_label})",
+                         "all_time": "all time",
+                         "recovery": "in recovery "
+                                     "(>200 d post-disc)"}
+                        .get(time_scope or "apparition",
+                             "in window")),
+                     f"{len(counts_typed):,}"),
+                tile(f"NEOs discovered {y0}–{y1}",
+                     f"{n_neos:,}"),
+                tile(contrib_label, contrib_value),
+                tile("Median follow-up sites per NEO",
+                     f"{med_sites:.1f}"),
+            ]),
+        html.Div(
+            scope_label,
+            style={"marginTop": "8px",
+                   "fontSize": "11px",
+                   "fontStyle": "italic",
+                   "color": badge_color}),
+    ])
+
+
+# When the user navigates to this tab, default the global Plot-height
+# control to "Tall" — the world map needs the room. They can still
+# pick Normal/Short and the map shrinks accordingly. Switching tabs
+# and back resets to Tall (acceptable per-tab default semantics).
+@app.callback(
+    Output("plot-height", "value"),
+    Input("tabs", "value"),
+    prevent_initial_call=True,
+)
+def _fuc_default_plot_height(active_tab):
+    if active_tab == "tab-followup-compare":
+        return "900"
+    raise PreventUpdate
+
+
+# Disable Window + Precovery controls when Time scope ≠ apparition —
+# those modes are derived from the lifetime cache which has no
+# per-window aggregation. Visual cue only; the scope itself drives
+# the actual data path.
+@app.callback(
+    Output("fuc-window", "disabled"),
+    Output("fuc-precovery", "options"),
+    Input("fuc-time-scope", "value"),
+)
+def _fuc_scope_gates(time_scope):
+    is_apparition = (time_scope or "apparition") == "apparition"
+    pre_opts = [
+        {"label": " Post-discovery", "value": "post_only",
+         "disabled": not is_apparition},
+        {"label": " Include precoveries", "value": "include",
+         "disabled": not is_apparition},
+    ]
+    return (not is_apparition), pre_opts
+
+
+# Paste-codes input: parse a free-form list of obscodes (comma /
+# semicolon / whitespace separated), filter to codes that exist in
+# the obscodes catalog, append to the dropdown's current value, and
+# clear the input on success. Case-insensitive — obscodes are
+# canonical mixed-case (e.g. "I52", "G96"); we normalize with the
+# catalog's canonical form rather than uppercasing.
+@app.callback(
+    Output("fuc-site-select", "value"),
+    Output("fuc-paste-codes", "value"),
+    Input("fuc-paste-codes", "value"),
+    State("fuc-site-select", "value"),
+    prevent_initial_call=True,
+)
+def _fuc_paste_codes(text, current):
+    if not text:
+        raise PreventUpdate
+    raw = [t for t in re.split(r"[\s,;]+", text.strip()) if t]
+    if not raw:
+        raise PreventUpdate
+    obs = load_obscodes()
+    if obs is None or obs.empty:
+        raise PreventUpdate
+    canonical = {c.lower(): c for c in obs["obscode"].dropna().astype(str)}
+    matched = []
+    for r in raw:
+        c = canonical.get(r.lower())
+        if c and c not in (current or []) and c not in matched:
+            matched.append(c)
+    if not matched:
+        # Nothing valid — leave the input contents alone so the user
+        # can correct typos rather than silently lose what they
+        # typed.
+        raise PreventUpdate
+    return list(current or []) + matched, ""
+
+
+@app.callback(
+    Output("fuc-bar", "figure"),
+    Input("fuc-year-range", "value"),
+    Input("fuc-window", "value"),
+    Input("fuc-precovery", "value"),
+    Input("fuc-metric", "value"),
+    Input("fuc-site-select", "value"),
+    Input("fuc-site-type", "value"),
+    Input("fuc-sites-filter", "value"),
+    Input("fuc-cscale", "value"),
+    Input("fuc-colormap", "value"),
+    Input("fuc-max-bars", "value"),
+    Input("fuc-viewport", "data"),
+    Input("fuc-time-scope", "value"),
+    Input("theme-toggle", "value"),
+    Input("plot-height", "value"),
+)
+def _fuc_render_bar(year_range, window_days, precovery_mode, metric,
+                    sites, site_type, sites_filter, cscale, colormap,
+                    max_bars, viewport, time_scope, theme_name, ph):
+    t = theme(theme_name or "light")
+    # Bar chart height scales with the bar count rather than the
+    # banner Plot-height. ~33 px per bar plus 80 px overhead for
+    # title and axis.
+    n_bars_target = int(max_bars) if max_bars else 10
+    height = max(280, n_bars_target * 33 + 80)
+    counts = _fuc_followup_counts(
+        year_range, window_days, precovery_mode, metric, time_scope)
+    if counts.empty:
+        return _empty_figure(
+            "No follow-up data in selected scope", t, height)
+    metric_label = _FUC_METRIC_LABEL.get(metric or "neos", "NEOs")
+    scope_label = {
+        "apparition": _window_label(window_days),
+        "all_time":   "all time",
+        "recovery":   "recovery",
+    }.get(time_scope or "apparition", _window_label(window_days))
+    obs = load_obscodes()
+    obs = _fuc_apply_sites_filter(obs, sites_filter)
+    merged = counts.merge(
+        obs[["obscode", "name", "observations_type",
+             "longitude_180", "latitude"]],
+        left_on="station_code", right_on="obscode", how="inner")
+    if site_type and site_type != "all":
+        merged = merged[merged["observations_type"] == site_type]
+
+    # Color domain comes from the FULL post-type+sites-filter set
+    # (pre-viewport, pre-top-N) so the same site is always the same
+    # color as on the map. Otherwise top-N restriction would clip
+    # the lower end of the scale and shift colors.
+    if not merged.empty:
+        n_full = merged["n_followup"].astype(float)
+        if cscale == "log":
+            v_full = np.log10(n_full)
+        else:
+            v_full = n_full
+        cmin = float(v_full.min())
+        cmax = float(v_full.max())
+        if cmax <= cmin:
+            cmax = cmin + 1
+    else:
+        cmin, cmax = 0.0, 1.0
+
+    bbox = _fuc_bbox_from_state(viewport)
+    merged = _fuc_apply_bbox(merged, bbox)
+    bbox_active = bbox is not None
+
+    if sites:
+        merged = merged[merged["station_code"].isin(sites)]
+        title_suffix = f" ({len(sites)} selected)"
+    else:
+        n = int(max_bars) if max_bars else 10
+        merged = merged.nlargest(n, "n_followup")
+        title_suffix = (f" (top {n} by follow-up volume"
+                        + (", viewport" if bbox_active else "")
+                        + ")")
+    merged = merged.sort_values("n_followup")
+
+    if merged.empty:
+        return _empty_figure("No sites in current viewport", t, height)
+
+    n_show = merged["n_followup"].astype(float)
+    if cscale == "log":
+        v_show = np.log10(n_show)
+    else:
+        v_show = n_show
+
+    # Truncate long observatory names so labels don't crowd the
+    # bars. Full name is preserved in the hover tooltip below.
+    def _label(code, name):
+        if not name:
+            return code
+        n = name if len(name) <= 32 else name[:31] + "…"
+        return f"{code} — {n}"
+    labels = [_label(c, n) for c, n in
+              zip(merged["station_code"], merged["name"])]
+    full_hover = [
+        f"<b>{c}</b> — {n or '(unnamed)'}<br>{int(v):,} {metric_label}"
+        for c, n, v in
+        zip(merged["station_code"], merged["name"],
+            merged["n_followup"])
+    ]
+    pmode_label = ("post-disc" if precovery_mode == "post_only"
+                   else "post+pre")
+    fig = go.Figure(go.Bar(
+        x=merged["n_followup"], y=labels, orientation="h",
+        marker=dict(
+            color=v_show,
+            colorscale=colormap or "Viridis",
+            cmin=cmin,
+            cmax=cmax,
+            showscale=False,
+        ),
+        text=full_hover,
+        hovertemplate="%{text}<extra></extra>",
+    ))
+    fig.update_layout(
+        template=t["template"],
+        paper_bgcolor=t["paper"], plot_bgcolor=t["plot"],
+        height=height,
+        # Generous left margin minimum for ~32-char labels; right
+        # margin matches the map's so the two charts visually align
+        # even though only the map carries the colorbar.
+        margin=dict(l=280, r=90, t=60, b=60),
+        title=(f"Follow-up {metric_label} per site, "
+               f"{year_range[0]}–{year_range[1]}, "
+               f"{scope_label}"
+               + (f" {pmode_label}"
+                  if (time_scope or "apparition") == "apparition"
+                  else "")
+               + f"{title_suffix}"),
+        xaxis=dict(title=("Distinct NEOs followed up"
+                          if metric in (None, "neos")
+                          else metric_label.capitalize())),
+        yaxis=dict(title="", automargin=True,
+                   tickfont=dict(size=11)),
+        transition=dict(duration=350, easing="cubic-in-out"),
+    )
+    return fig
+
+
+@app.callback(
+    Output("dl-fuc", "data"),
+    Input("btn-download-fuc", "n_clicks"),
+    State("fuc-year-range", "value"),
+    State("fuc-window", "value"),
+    State("fuc-precovery", "value"),
+    State("fuc-metric", "value"),
+    State("fuc-site-type", "value"),
+    State("fuc-sites-filter", "value"),
+    State("fuc-site-select", "value"),
+    State("fuc-time-scope", "value"),
+    prevent_initial_call=True,
+)
+def _fuc_download(_n, year_range, window_days, precovery_mode, metric,
+                  site_type, sites_filter, sites, time_scope):
+    counts = _fuc_followup_counts(
+        year_range, window_days, precovery_mode, metric, time_scope)
+    obs = load_obscodes()
+    obs = _fuc_apply_sites_filter(obs, sites_filter)
+    merged = counts.merge(
+        obs[["obscode", "name", "observations_type",
+             "latitude", "longitude_180"]],
+        left_on="station_code", right_on="obscode", how="inner")
+    if site_type and site_type != "all":
+        merged = merged[merged["observations_type"] == site_type]
+    if sites:
+        merged = merged[merged["station_code"].isin(sites)]
+    merged = merged.sort_values("n_followup", ascending=False)
+    scope_tag = (time_scope or "apparition").replace("_", "")
+    fname = (f"followup_comparison_{year_range[0]}_{year_range[1]}_"
+             f"{scope_tag}_{int(window_days)}d_{precovery_mode}_"
+             f"{sites_filter}_{metric or 'neos'}.csv")
+    return send_data_frame(merged.to_csv, fname, index=False)
 
 
 # ---------------------------------------------------------------------------

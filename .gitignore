@@ -40,6 +40,7 @@ app/.sbdb_*
 app/.apparition_cache*
 app/.boxscore_cache*
 app/.mpec_cache/
+app/.station_cache/
 
 # Downloaded / generated data files
 downloads/
