@@ -1393,6 +1393,52 @@ def build_survey_sets(df_main, df_app, year_range, size_filter,
     return survey_sets, desig_set
 
 
+def build_survey_metric_totals(df_main, df_app, year_range, size_filter,
+                               exclude_precovery, window_days=200,
+                               group_col="project", metric="tracklets"):
+    """Per-survey totals from the APPARITION_SQL pre-aggregated columns
+    (n_trk_post_W, n_trk_any_W, n_obs_post_W, n_obs_any_W).
+
+    Mirrors build_survey_sets's filtering — same year range, size
+    class, group_col semantics, "Other Follow-up" bucket — but
+    returns dict[group → int total] rather than designation sets.
+    Use this for the survey-reach bar chart when the user picks
+    Tracklets or Observations as the metric.
+
+    Returns {} if the requested column isn't in df_app (cache
+    pre-Phase-2A); callers should treat that as "fall back to NEO
+    counts derived from build_survey_sets"."""
+    y0, y1 = year_range
+    eligible = df_main[
+        (df_main["disc_year"] >= y0) & (df_main["disc_year"] <= y1)]
+    if size_filter != "all":
+        eligible = eligible[eligible["size_class"] == size_filter]
+    desig_set = set(eligible["designation"])
+
+    tkl = df_app[df_app["designation"].isin(desig_set)]
+
+    mode = "post" if exclude_precovery else "any"
+    prefix = "n_trk" if metric == "tracklets" else "n_obs"
+    col = f"{prefix}_{mode}_{int(window_days)}"
+    if col not in tkl.columns:
+        return {}
+
+    if group_col == "station_code":
+        totals = {}
+        for stn, grp in tkl.groupby("station_code"):
+            proj = STATION_TO_PROJECT.get(stn)
+            if proj is None:
+                totals["Other Follow-up"] = (
+                    totals.get("Other Follow-up", 0)
+                    + int(grp[col].sum()))
+            else:
+                totals[stn] = int(grp[col].sum())
+        return totals
+
+    return {proj: int(grp[col].sum())
+            for proj, grp in tkl.groupby("project")}
+
+
 # ---------------------------------------------------------------------------
 # Follow-up timing helpers
 # ---------------------------------------------------------------------------
@@ -1883,10 +1929,24 @@ _BOTTOM_ORDER = ["Other Follow-up", "Other Surveys", "Historical",
 
 
 def _make_survey_reach(survey_sets, t, height, yr_tag="",
-                       color_map=None):
-    """Horizontal bar chart of unique NEOs detected per survey."""
+                       color_map=None, totals=None, metric="neos"):
+    """Horizontal bar chart of per-survey reach.
+    metric="neos"         → bar = |survey_sets[name]|
+    metric="tracklets"    → bar = totals[name] (sum of pre-agg col)
+    metric="observations" → bar = totals[name]"""
     if color_map is None:
         color_map = PROJECT_COLORS
+
+    def _value(name, desigs):
+        if metric == "neos" or totals is None:
+            return len(desigs)
+        return int(totals.get(name, 0))
+
+    metric_label = {"neos": "NEOs", "tracklets": "tracklets",
+                    "observations": "observations"}.get(metric, "NEOs")
+    metric_label_cap = (metric_label[:1].upper()
+                        + metric_label[1:])
+
     # Pin follow-up/other to bottom (works in both project & station mode)
     _bottom_keys = _BOTTOM_SURVEYS | {
         stn for stn, proj in STATION_TO_PROJECT.items()
@@ -1897,34 +1957,35 @@ def _make_survey_reach(survey_sets, t, height, yr_tag="",
     bottom.sort(key=lambda x: _bo.get(x[0], 999))
     rest = [(k, v) for k, v in survey_sets.items()
             if k not in _bottom_keys]
-    rest.sort(key=lambda x: len(x[1]))
+    rest.sort(key=lambda x: _value(x[0], x[1]))
     items = bottom + rest
     names = [k for k, v in items]
-    counts = [len(v) for k, v in items]
+    counts = [_value(k, v) for k, v in items]
     bar_colors = [color_map.get(n, "#a9a9a9") for n in names]
 
     # Build station list for hover tooltip
     hover_texts = []
     for name, desigs in items:
+        v = _value(name, desigs)
         stns = sorted(PROJECT_STATIONS.get(name, []))
         if stns and len(stns) > 15:
             hover_texts.append(
-                f"{name}: {len(desigs):,} NEOs"
+                f"{name}: {v:,} {metric_label}"
                 f" ({len(stns)} stations)")
         elif stns:
             stn_str = ", ".join(stns)
             hover_texts.append(
-                f"{name}: {len(desigs):,} NEOs"
+                f"{name}: {v:,} {metric_label}"
                 f"<br>Stations: {stn_str}")
         elif name in STATION_TO_PROJECT:
             # Individual station mode
             stn_name = STATION_NAMES.get(name, name)
             proj = STATION_TO_PROJECT[name]
             hover_texts.append(
-                f"{name} ({stn_name}): {len(desigs):,} NEOs"
+                f"{name} ({stn_name}): {v:,} {metric_label}"
                 f"<br>Project: {proj}")
         else:
-            hover_texts.append(f"{name}: {len(desigs):,} NEOs")
+            hover_texts.append(f"{name}: {v:,} {metric_label}")
 
     fig = go.Figure(go.Bar(
         y=names, x=counts, orientation="h",
@@ -1939,8 +2000,10 @@ def _make_survey_reach(survey_sets, t, height, yr_tag="",
     fig.update_layout(
         template=t["template"],
         paper_bgcolor=t["paper"], plot_bgcolor=t["plot"],
-        title=f"Discovery apparition: NEOs detected per survey {yr_tag}",
-        xaxis_title="Unique NEOs",
+        title=(f"Discovery apparition: {metric_label_cap} "
+               f"per survey {yr_tag}"),
+        xaxis_title=("Unique NEOs" if metric == "neos"
+                     else metric_label_cap),
         xaxis_range=[0, max_count * 1.15],
         height=height,
         margin=dict(l=120, r=60),
@@ -4312,6 +4375,28 @@ app.layout = html.Div(
                                             value=200,
                                             clearable=False,
                                             style={"width": "130px"},
+                                        ),
+                                    ]),
+                                    html.Div(children=[
+                                        html.Label(
+                                            "Metric (reach chart)",
+                                            style=LABEL_STYLE),
+                                        dcc.RadioItems(
+                                            id="comp-metric",
+                                            options=[
+                                                {"label": " NEOs",
+                                                 "value": "neos"},
+                                                {"label": " Tracklets",
+                                                 "value": "tracklets"},
+                                                {"label": " Obs",
+                                                 "value":
+                                                    "observations"},
+                                            ],
+                                            value="neos",
+                                            inline=True,
+                                            style=RADIO_STYLE,
+                                            labelStyle=
+                                                RADIO_LABEL_STYLE,
                                         ),
                                     ]),
                                     html.Div(children=[
@@ -7190,6 +7275,7 @@ def update_neomod3_table(h_year_range, theme_name, _tab, neo_source):
     Input("comp-survey-select", "value"),
     Input("comp-precovery", "value"),
     Input("comp-window", "value"),
+    Input("comp-metric", "value"),
     Input("comp-group-mode", "value"),
     Input("comp-venn-labels", "value"),
     Input("theme-toggle", "value"),
@@ -7198,8 +7284,9 @@ def update_neomod3_table(h_year_range, theme_name, _tab, neo_source):
     Input("neo-source-filter", "value"),
 )
 def update_comparison(year_range, size_filter, survey_select,
-                      precovery, window_days, group_mode, venn_labels,
-                      theme_name, plot_height, active_tab, neo_source):
+                      precovery, window_days, metric, group_mode,
+                      venn_labels, theme_name, plot_height, active_tab,
+                      neo_source):
     if active_tab != "tab-comparison" or df is None or df_apparition is None:
         raise PreventUpdate
 
@@ -7207,6 +7294,7 @@ def update_comparison(year_range, size_filter, survey_select,
     height = int(plot_height)
     exclude_precovery = precovery == "post_only"
     window_days = int(window_days or 200)
+    metric = metric or "neos"
     group_col = ("station_code" if group_mode == "station"
                  else "project")
     color_map = (STATION_COLORS if group_mode == "station"
@@ -7217,6 +7305,16 @@ def update_comparison(year_range, size_filter, survey_select,
     survey_sets, eligible = build_survey_sets(
         df_view, df_app_view, year_range, size_filter, exclude_precovery,
         window_days, group_col)
+    if metric == "neos":
+        reach_totals = None
+    else:
+        reach_totals = build_survey_metric_totals(
+            df_view, df_app_view, year_range, size_filter,
+            exclude_precovery, window_days, group_col, metric)
+        if not reach_totals:
+            # Fallback: pre-agg cols missing (cache pre-Phase-2A) →
+            # render the chart at NEO counts and fall through.
+            metric = "neos"
 
     eligible_total = len(eligible)
     y0, y1 = year_range
@@ -7249,7 +7347,8 @@ def update_comparison(year_range, size_filter, survey_select,
             venn_labels, eligible_total, yr_tag)
 
     reach_fig = _make_survey_reach(
-        survey_sets, t, height, yr_tag, color_map)
+        survey_sets, t, height, yr_tag, color_map,
+        totals=reach_totals, metric=metric)
     heatmap_fig = _make_pairwise_heatmap(survey_sets, t, height, yr_tag)
     summary_fig = _make_comparison_summary(
         survey_sets, eligible, t, height, yr_tag)
