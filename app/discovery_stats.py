@@ -748,6 +748,103 @@ CROSS JOIN LATERAL (
 """
 
 # ---------------------------------------------------------------------------
+# Lifetime follow-up cache (Phase 2B). Same shape as APPARITION_SQL but
+# without the ±200 d cap, so it captures multi-apparition recovery work
+# in addition to discovery-apparition observations. One row per
+# (NEO × station × all-time) with first/last obstime + tracklet/obs
+# totals. Joined against apparition_cache at consumer time to derive
+# "recovery only" = total − within-apparition.
+# ---------------------------------------------------------------------------
+
+LIFETIME_FOLLOWUP_SQL = """
+WITH neo_list AS MATERIALIZED (
+    SELECT
+        mo.unpacked_primary_provisional_designation AS unpacked_desig,
+        ni.permid IS NOT NULL AS is_numbered,
+        ni.permid AS asteroid_number,
+        CASE WHEN ni.permid IS NULL
+             THEN mo.unpacked_primary_provisional_designation
+        END AS provisional_desig,
+        ni.unpacked_primary_provisional_designation AS num_provid
+    FROM mpc_orbits mo
+    LEFT JOIN numbered_identifications ni
+        ON ni.packed_primary_provisional_designation
+         = mo.packed_primary_provisional_designation
+    WHERE mo.q <= 1.30
+),
+discovery_obs_all AS (
+    SELECT neo.unpacked_desig, obs.stn, obs.obstime
+    FROM neo_list neo
+    INNER JOIN obs_sbn_neo obs ON obs.permid = neo.asteroid_number
+    WHERE neo.is_numbered AND obs.disc = '*'
+    UNION ALL
+    SELECT neo.unpacked_desig, obs.stn, obs.obstime
+    FROM neo_list neo
+    INNER JOIN obs_sbn_neo obs ON obs.provid = neo.provisional_desig
+    WHERE NOT neo.is_numbered AND obs.disc = '*'
+    UNION ALL
+    SELECT neo.unpacked_desig, obs.stn, obs.obstime
+    FROM neo_list neo
+    INNER JOIN obs_sbn_neo obs ON obs.provid = neo.num_provid
+    WHERE neo.num_provid IS NOT NULL AND obs.disc = '*'
+),
+discovery_info AS (
+    SELECT DISTINCT ON (unpacked_desig)
+        unpacked_desig, stn, obstime
+    FROM discovery_obs_all
+    ORDER BY unpacked_desig, obstime
+),
+neo_discovery AS MATERIALIZED (
+    SELECT
+        di.unpacked_desig AS designation,
+        di.obstime AS disc_obstime,
+        neo.asteroid_number,
+        COALESCE(neo.provisional_desig, neo.num_provid) AS provid_key
+    FROM discovery_info di
+    JOIN neo_list neo ON neo.unpacked_desig = di.unpacked_desig
+)
+SELECT nd.designation, nd.disc_obstime, o.*
+FROM neo_discovery nd
+CROSS JOIN LATERAL (
+    SELECT stn AS station_code,
+           MIN(obstime) AS first_obs,
+           MAX(obstime) AS last_obs,
+           COUNT(*) AS n_obs_total,
+           COUNT(DISTINCT trkid) AS n_tracklets_total
+    FROM obs_sbn_neo
+    WHERE permid = nd.asteroid_number OR provid = nd.provid_key
+    GROUP BY stn
+) o
+"""
+
+_df_lifetime = None
+
+
+def _postprocess_lifetime(df_raw):
+    df_raw = df_raw.copy()
+    df_raw["disc_obstime"] = pd.to_datetime(df_raw["disc_obstime"])
+    df_raw["first_obs"] = pd.to_datetime(df_raw["first_obs"])
+    df_raw["last_obs"] = pd.to_datetime(df_raw["last_obs"])
+    df_raw["days_to_last_obs"] = (
+        (df_raw["last_obs"] - df_raw["disc_obstime"])
+        .dt.total_seconds() / 86400)
+    return df_raw
+
+
+def load_lifetime_followup():
+    """Load the all-time per-(NEO × station) cache. ~10 min on first
+    run; subsequent loads ~few s from parquet."""
+    global _df_lifetime
+    if _df_lifetime is not None:
+        return _df_lifetime
+    raw, _ = _load_cached_query(
+        LIFETIME_FOLLOWUP_SQL, "lifetime_cache", "lifetime follow-up")
+    _df_lifetime = _postprocess_lifetime(raw)
+    print(f"Loaded {len(_df_lifetime):,} lifetime (NEO × station) rows")
+    return _df_lifetime
+
+
+# ---------------------------------------------------------------------------
 # Boxscore: object catalog from mpc_orbits (all objects, ~1.5M rows)
 # ---------------------------------------------------------------------------
 BOXSCORE_SQL = """
@@ -801,6 +898,13 @@ if "--port" in sys.argv:
 _RND = "--rnd" in sys.argv
 if _RND:
     sys.argv.remove("--rnd")
+# --dev-tabs gates in-flight tabs that aren't ready for prod (Station
+# Report Phase-1 stub, etc.). Distinct from --rnd because prod now
+# runs with --rnd to expose NEO Consensus; we need a separate switch
+# for tabs that should still be hidden in prod.
+_DEV_TABS = "--dev-tabs" in sys.argv
+if _DEV_TABS:
+    sys.argv.remove("--dev-tabs")
 # --waitress runs the WSGI app under waitress instead of Flask's
 # built-in development server. Used for production deployment under
 # launchd; dev runs without the flag.
@@ -2741,12 +2845,14 @@ if _REFRESH_ONLY:
     load_boxscore_data()
     load_consensus_membership()
     load_obscodes()
+    load_lifetime_followup()
     print("Cache refresh complete.")
     sys.exit(0)
 
 # For normal operation, load in background thread
 df = None
 df_apparition = None
+df_lifetime = None
 query_timestamp = "loading..."
 year_min, year_max = 1898, 2026
 _data_ready = threading.Event()
@@ -2757,7 +2863,8 @@ def _load_all_data():
     """Load both datasets in a background thread, then attach per-NEO
     source-membership booleans so the banner-level source filter has
     something to slice on."""
-    global df, df_apparition, query_timestamp, year_min, year_max, _data_error
+    global df, df_apparition, df_lifetime, query_timestamp
+    global year_min, year_max, _data_error
     try:
         df, query_timestamp = load_data()
         df_apparition = load_apparition_data()
@@ -2775,6 +2882,7 @@ def _load_all_data():
                   f"v_membership_wide rows; df all-six count = "
                   f"{int(df['all_six_agree'].sum()):,}")
         load_obscodes()
+        df_lifetime = load_lifetime_followup()
     except Exception as e:
         _data_error = str(e)
         print(f"ERROR loading data: {e}")
@@ -4586,6 +4694,29 @@ app.layout = html.Div(
                                        "marginBottom": "15px"},
                                 children=[
                                     html.Div(children=[
+                                        html.Label("Time scope",
+                                                   style=LABEL_STYLE),
+                                        dcc.RadioItems(
+                                            id="fuc-time-scope",
+                                            options=[
+                                                {"label":
+                                                    " Discovery apparition",
+                                                 "value":
+                                                    "apparition"},
+                                                {"label": " All time",
+                                                 "value": "all_time"},
+                                                {"label":
+                                                    " Recovery only",
+                                                 "value": "recovery"},
+                                            ],
+                                            value="apparition",
+                                            inline=True,
+                                            style=RADIO_STYLE,
+                                            labelStyle=
+                                                RADIO_LABEL_STYLE,
+                                        ),
+                                    ]),
+                                    html.Div(children=[
                                         html.Label("Follow-up window",
                                                    style=LABEL_STYLE),
                                         dcc.Dropdown(
@@ -5724,8 +5855,12 @@ app.layout = html.Div(
                         ]),
                     ],
                 ),
-                # ━━━ Tab: Station Report ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-                dcc.Tab(
+                # ━━━ Tab: Station Report (dev-only, --dev-tabs) ━━━━━━
+                # Phase-1 placeholder. Lives on dev under
+                # --dev-tabs while Phase-2 (ADS-backed MPEC literature
+                # search + Q7 forensic stats) is in flight. Promote
+                # by removing the gate.
+                *([dcc.Tab(
                     label="Station Report",
                     value="tab-station",
                     className="nav-tab",
@@ -5867,7 +6002,7 @@ app.layout = html.Div(
                                 style={"fontSize": "13px"}),
                         ]),
                     ],
-                ),
+                )] if _DEV_TABS else []),
                 # ━━━ Tab: About ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
                 dcc.Tab(
                     label="About",
@@ -12429,29 +12564,50 @@ def _fuc_apply_bbox(obs_df, bbox):
 
 
 def _fuc_followup_counts(year_range, window_days, precovery_mode,
-                         metric="neos"):
-    """Per-site follow-up activity at the chosen metric.
-       metric="neos"         → distinct NEO designations
-       metric="tracklets"    → SUM of pre-aggregated tracklet counts
-       metric="observations" → SUM of pre-aggregated obs counts
+                         metric="neos", time_scope="apparition"):
+    """Per-site follow-up activity at the chosen metric and time scope.
 
-    Always: site != discovery site, within `window_days` of
-    discovery, post-discovery only or including precoveries per
-    `precovery_mode`. Discovery-apparition only (the underlying
-    apparition cache is hard-capped at ±200 d).
+    time_scope:
+      "apparition" — only obs within ±200 d of discovery (uses
+        apparition_cache; obeys window_days + precovery_mode).
+      "all_time"   — all-time per-(NEO × station) totals (uses
+        lifetime_cache; window/precovery ignored).
+      "recovery"   — lifetime totals minus the apparition window;
+        only stations with last_obs > disc + 200 d qualify.
 
-    Tracklets/observations rely on the FILTER aggregation columns
-    that APPARITION_SQL pre-computes at each window in
-    _FUC_WINDOWS. If those columns are missing (e.g. cache built
-    against an older SQL hash that hasn't refreshed yet), we fall
-    back to NEO counts so the UI still renders sensibly."""
+    metric:
+      "neos"         → distinct NEO designations
+      "tracklets"    → sum of tracklet counts
+      "observations" → sum of obs counts
+
+    Always: site != discovery site, NEO discovered in `year_range`."""
     metric = metric or "neos"
-    key = (tuple(year_range), int(window_days),
-           str(precovery_mode), str(metric))
+    time_scope = time_scope or "apparition"
+    key = (tuple(year_range), int(window_days), str(precovery_mode),
+           str(metric), str(time_scope))
     cached = _FUC_COUNT_CACHE.get(key)
     if cached is not None:
         return cached
-    if df is None or df_apparition is None:
+    if df is None:
+        return pd.DataFrame(columns=["station_code", "n_followup"])
+
+    if time_scope == "apparition":
+        result = _fuc_counts_apparition(
+            year_range, window_days, precovery_mode, metric)
+    elif time_scope == "all_time":
+        result = _fuc_counts_lifetime(year_range, metric,
+                                      recovery_only=False)
+    else:  # "recovery"
+        result = _fuc_counts_lifetime(year_range, metric,
+                                      recovery_only=True)
+    _FUC_COUNT_CACHE[key] = result
+    return result
+
+
+def _fuc_counts_apparition(year_range, window_days, precovery_mode,
+                           metric):
+    """Discovery-apparition counts from the apparition cache."""
+    if df_apparition is None:
         return pd.DataFrame(columns=["station_code", "n_followup"])
     y0, y1 = year_range
     eligible = df[(df["disc_year"] >= y0) & (df["disc_year"] <= y1)]
@@ -12466,15 +12622,8 @@ def _fuc_followup_counts(year_range, window_days, precovery_mode,
         if col in fu.columns:
             counts = (fu.groupby("station_code")[col].sum()
                       .reset_index(name="n_followup"))
-            counts = counts[counts["n_followup"] > 0]
-            _FUC_COUNT_CACHE[key] = counts
-            return counts
-        # Fall through to NEO counts if the cache pre-dates the SQL
-        # extension. Logged once at startup is sufficient — happens
-        # only on the first request after a code change, before the
-        # nightly refresh repopulates apparition_cache.
+            return counts[counts["n_followup"] > 0]
 
-    # NEO count (default + fallback)
     w = int(window_days)
     if precovery_mode == "include":
         fu = fu[
@@ -12484,10 +12633,68 @@ def _fuc_followup_counts(year_range, window_days, precovery_mode,
     else:
         fu = fu[fu["post_disc_days"].between(0, w)]
 
-    counts = (fu.groupby("station_code")["designation"].nunique()
-              .reset_index(name="n_followup"))
-    _FUC_COUNT_CACHE[key] = counts
-    return counts
+    return (fu.groupby("station_code")["designation"].nunique()
+            .reset_index(name="n_followup"))
+
+
+def _fuc_counts_lifetime(year_range, metric, recovery_only):
+    """All-time (or recovery-only) counts from the lifetime cache.
+
+    For tracklets/observations in recovery-only mode, we subtract the
+    apparition cache's n_trk_any_200 / n_obs_any_200 from the lifetime
+    totals so the result is "tracklets/obs occurring outside ±200d of
+    discovery". For NEOs, we just filter to (NEO × station) rows where
+    last_obs > disc + 200d."""
+    if df_lifetime is None:
+        return pd.DataFrame(columns=["station_code", "n_followup"])
+    y0, y1 = year_range
+    eligible = df[(df["disc_year"] >= y0) & (df["disc_year"] <= y1)]
+    disc_station = eligible.set_index("designation")["station_code"]
+    life = df_lifetime[
+        df_lifetime["designation"].isin(disc_station.index)].copy()
+    life["disc_station"] = life["designation"].map(disc_station)
+    fu = life[life["station_code"] != life["disc_station"]]
+
+    if recovery_only:
+        fu = fu[fu["days_to_last_obs"] > 200.0]
+        if fu.empty:
+            return pd.DataFrame(columns=["station_code", "n_followup"])
+        if metric in ("tracklets", "observations"):
+            # Subtract apparition contributions so we get tracklets/obs
+            # that occurred OUTSIDE the apparition window.
+            ap_col = ("n_trk_any_200" if metric == "tracklets"
+                      else "n_obs_any_200")
+            tot_col = ("n_tracklets_total" if metric == "tracklets"
+                       else "n_obs_total")
+            if (df_apparition is not None
+                    and ap_col in df_apparition.columns):
+                ap = df_apparition[["designation", "station_code",
+                                    ap_col]]
+                fu = fu.merge(ap, on=["designation", "station_code"],
+                              how="left")
+                fu[ap_col] = fu[ap_col].fillna(0)
+                fu["recovery_metric"] = fu[tot_col] - fu[ap_col]
+                fu = fu[fu["recovery_metric"] > 0]
+                counts = (fu.groupby("station_code")["recovery_metric"]
+                          .sum().reset_index(name="n_followup"))
+                return counts
+            # Fallback: use total (over-counts apparition contributions)
+            counts = (fu.groupby("station_code")[tot_col]
+                      .sum().reset_index(name="n_followup"))
+            return counts
+        # NEOs in recovery-only: distinct designations per station
+        return (fu.groupby("station_code")["designation"].nunique()
+                .reset_index(name="n_followup"))
+
+    # All time
+    if metric == "tracklets":
+        return (fu.groupby("station_code")["n_tracklets_total"]
+                .sum().reset_index(name="n_followup"))
+    if metric == "observations":
+        return (fu.groupby("station_code")["n_obs_total"]
+                .sum().reset_index(name="n_followup"))
+    return (fu.groupby("station_code")["designation"].nunique()
+            .reset_index(name="n_followup"))
 
 
 @app.callback(
@@ -12496,10 +12703,12 @@ def _fuc_followup_counts(year_range, window_days, precovery_mode,
     Input("fuc-window", "value"),
     Input("fuc-precovery", "value"),
     Input("fuc-metric", "value"),
+    Input("fuc-time-scope", "value"),
 )
-def _fuc_site_options(year_range, window_days, precovery_mode, metric):
+def _fuc_site_options(year_range, window_days, precovery_mode, metric,
+                      time_scope):
     counts = _fuc_followup_counts(
-        year_range, window_days, precovery_mode, metric)
+        year_range, window_days, precovery_mode, metric, time_scope)
     obs = load_obscodes()
     merged = counts.merge(
         obs[["obscode", "name"]], left_on="station_code",
@@ -12547,12 +12756,13 @@ def _fuc_axis(which, show_grid, clamp, grid_color):
     Input("fuc-graticule", "value"),
     Input("fuc-cscale", "value"),
     Input("fuc-colormap", "value"),
+    Input("fuc-time-scope", "value"),
     Input("theme-toggle", "value"),
     Input("plot-height", "value"),
 )
 def _fuc_render_map(year_range, window_days, precovery_mode, metric,
                     site_type, sites_filter, projection, graticule,
-                    cscale, colormap, theme_name, ph):
+                    cscale, colormap, time_scope, theme_name, ph):
     t = theme(theme_name or "light")
     height = max(int(ph), 400) if ph else 900
     obs = load_obscodes()
@@ -12562,11 +12772,17 @@ def _fuc_render_map(year_range, window_days, precovery_mode, metric,
         obs = obs[obs["observations_type"] == site_type]
     obs = _fuc_apply_sites_filter(obs, sites_filter)
     counts = _fuc_followup_counts(
-        year_range, window_days, precovery_mode, metric)
+        year_range, window_days, precovery_mode, metric, time_scope)
     merged = obs.merge(
         counts, left_on="obscode", right_on="station_code", how="left")
     merged["n_followup"] = merged["n_followup"].fillna(0).astype(int)
     metric_label = _FUC_METRIC_LABEL.get(metric or "neos", "NEOs")
+    scope_title = {
+        "apparition": f"window {_window_label(window_days)}",
+        "all_time":   "all time",
+        "recovery":   "recovery (>200 d post-discovery)",
+    }.get(time_scope or "apparition",
+          f"window {_window_label(window_days)}")
 
     bg = t["plot"]
     land = "#2a2a2a" if theme_name == "dark" else "#f0f0f0"
@@ -12675,8 +12891,9 @@ def _fuc_render_map(year_range, window_days, precovery_mode, metric,
         transition=dict(duration=350, easing="cubic-in-out"),
         title=(f"MPC observatory sites — follow-up {metric_label} "
                f"{year_range[0]}–{year_range[1]}, "
-               f"window {_window_label(window_days)} "
-               f"({pmode_label})"),
+               + (f"{scope_title} ({pmode_label})"
+                  if (time_scope or "apparition") == "apparition"
+                  else scope_title)),
         # Right margin reserved for the colorbar + its widest plausible
         # tick label so the plot area doesn't shift when log↔linear
         # toggling changes label width.
@@ -12762,10 +12979,12 @@ def _fuc_track_viewport(relayout, _projection, prev_state):
     Input("fuc-site-type", "value"),
     Input("fuc-sites-filter", "value"),
     Input("fuc-viewport", "data"),
+    Input("fuc-time-scope", "value"),
     Input("theme-toggle", "value"),
 )
 def _fuc_render_stats(year_range, window_days, precovery_mode, metric,
-                      site_type, sites_filter, viewport, theme_name):
+                      site_type, sites_filter, viewport, time_scope,
+                      theme_name):
     obs = load_obscodes()
     if obs is None or obs.empty or df is None or df_apparition is None:
         return html.Span("Loading…",
@@ -12779,7 +12998,7 @@ def _fuc_render_stats(year_range, window_days, precovery_mode, metric,
     bbox_active = bbox is not None and len(viewport_obs) < len(type_obs)
 
     counts = _fuc_followup_counts(
-        year_range, window_days, precovery_mode, metric)
+        year_range, window_days, precovery_mode, metric, time_scope)
     counts_typed = counts.merge(
         viewport_obs[["obscode"]], left_on="station_code",
         right_on="obscode", how="inner")
@@ -12789,21 +13008,30 @@ def _fuc_render_stats(year_range, window_days, precovery_mode, metric,
 
     if not counts_typed.empty:
         disc_station = eligible.set_index("designation")["station_code"]
-        app = df_apparition[
-            df_apparition["designation"].isin(disc_station.index)
-            & df_apparition["station_code"].isin(
-                set(counts_typed["station_code"]))
+        active_stations = set(counts_typed["station_code"])
+        if time_scope in ("all_time", "recovery"):
+            src = (df_lifetime
+                   if df_lifetime is not None
+                   else df_apparition)
+        else:
+            src = df_apparition
+        app = src[
+            src["designation"].isin(disc_station.index)
+            & src["station_code"].isin(active_stations)
         ].copy()
         app["disc_station"] = app["designation"].map(disc_station)
         app = app[app["station_code"] != app["disc_station"]]
-        w = int(window_days)
-        if precovery_mode == "include":
-            app = app[
-                app["days_from_disc"].between(-w, w)
-                | app["post_disc_days"].between(0, w)
-            ]
-        else:
-            app = app[app["post_disc_days"].between(0, w)]
+        if time_scope == "apparition":
+            w = int(window_days)
+            if precovery_mode == "include":
+                app = app[
+                    app["days_from_disc"].between(-w, w)
+                    | app["post_disc_days"].between(0, w)
+                ]
+            else:
+                app = app[app["post_disc_days"].between(0, w)]
+        elif time_scope == "recovery" and "days_to_last_obs" in app.columns:
+            app = app[app["days_to_last_obs"] > 200.0]
         followed_neos = app["designation"].nunique()
         per_neo = (app.groupby("designation")["station_code"]
                    .nunique())
@@ -12861,8 +13089,16 @@ def _fuc_render_stats(year_range, window_days, precovery_mode, metric,
             children=[
                 tile(f"{site_type} sites ({sites_filter_label})",
                      f"{len(viewport_obs):,}"),
-                tile(f"with {metric_label} in window "
-                     f"({_window_label(window_days)}, {pmode_label})",
+                tile(f"with {metric_label} "
+                     + ({"apparition":
+                            f"in window "
+                            f"({_window_label(window_days)}, "
+                            f"{pmode_label})",
+                         "all_time": "all time",
+                         "recovery": "in recovery "
+                                     "(>200 d post-disc)"}
+                        .get(time_scope or "apparition",
+                             "in window")),
                      f"{len(counts_typed):,}"),
                 tile(f"NEOs discovered {y0}–{y1}",
                      f"{n_neos:,}"),
@@ -12892,6 +13128,26 @@ def _fuc_default_plot_height(active_tab):
     if active_tab == "tab-followup-compare":
         return "900"
     raise PreventUpdate
+
+
+# Disable Window + Precovery controls when Time scope ≠ apparition —
+# those modes are derived from the lifetime cache which has no
+# per-window aggregation. Visual cue only; the scope itself drives
+# the actual data path.
+@app.callback(
+    Output("fuc-window", "disabled"),
+    Output("fuc-precovery", "options"),
+    Input("fuc-time-scope", "value"),
+)
+def _fuc_scope_gates(time_scope):
+    is_apparition = (time_scope or "apparition") == "apparition"
+    pre_opts = [
+        {"label": " Post-discovery", "value": "post_only",
+         "disabled": not is_apparition},
+        {"label": " Include precoveries", "value": "include",
+         "disabled": not is_apparition},
+    ]
+    return (not is_apparition), pre_opts
 
 
 # Paste-codes input: parse a free-form list of obscodes (comma /
@@ -12943,12 +13199,13 @@ def _fuc_paste_codes(text, current):
     Input("fuc-colormap", "value"),
     Input("fuc-max-bars", "value"),
     Input("fuc-viewport", "data"),
+    Input("fuc-time-scope", "value"),
     Input("theme-toggle", "value"),
     Input("plot-height", "value"),
 )
 def _fuc_render_bar(year_range, window_days, precovery_mode, metric,
                     sites, site_type, sites_filter, cscale, colormap,
-                    max_bars, viewport, theme_name, ph):
+                    max_bars, viewport, time_scope, theme_name, ph):
     t = theme(theme_name or "light")
     # Bar chart height scales with the bar count rather than the
     # banner Plot-height. ~33 px per bar plus 80 px overhead for
@@ -12956,10 +13213,16 @@ def _fuc_render_bar(year_range, window_days, precovery_mode, metric,
     n_bars_target = int(max_bars) if max_bars else 10
     height = max(280, n_bars_target * 33 + 80)
     counts = _fuc_followup_counts(
-        year_range, window_days, precovery_mode, metric)
+        year_range, window_days, precovery_mode, metric, time_scope)
     if counts.empty:
-        return _empty_figure("No follow-up data in window", t, height)
+        return _empty_figure(
+            "No follow-up data in selected scope", t, height)
     metric_label = _FUC_METRIC_LABEL.get(metric or "neos", "NEOs")
+    scope_label = {
+        "apparition": _window_label(window_days),
+        "all_time":   "all time",
+        "recovery":   "recovery",
+    }.get(time_scope or "apparition", _window_label(window_days))
     obs = load_obscodes()
     obs = _fuc_apply_sites_filter(obs, sites_filter)
     merged = counts.merge(
@@ -13049,8 +13312,11 @@ def _fuc_render_bar(year_range, window_days, precovery_mode, metric,
         margin=dict(l=280, r=90, t=60, b=60),
         title=(f"Follow-up {metric_label} per site, "
                f"{year_range[0]}–{year_range[1]}, "
-               f"{_window_label(window_days)} {pmode_label}"
-               f"{title_suffix}"),
+               f"{scope_label}"
+               + (f" {pmode_label}"
+                  if (time_scope or "apparition") == "apparition"
+                  else "")
+               + f"{title_suffix}"),
         xaxis=dict(title=("Distinct NEOs followed up"
                           if metric in (None, "neos")
                           else metric_label.capitalize())),
@@ -13071,12 +13337,13 @@ def _fuc_render_bar(year_range, window_days, precovery_mode, metric,
     State("fuc-site-type", "value"),
     State("fuc-sites-filter", "value"),
     State("fuc-site-select", "value"),
+    State("fuc-time-scope", "value"),
     prevent_initial_call=True,
 )
 def _fuc_download(_n, year_range, window_days, precovery_mode, metric,
-                  site_type, sites_filter, sites):
+                  site_type, sites_filter, sites, time_scope):
     counts = _fuc_followup_counts(
-        year_range, window_days, precovery_mode, metric)
+        year_range, window_days, precovery_mode, metric, time_scope)
     obs = load_obscodes()
     obs = _fuc_apply_sites_filter(obs, sites_filter)
     merged = counts.merge(
@@ -13088,9 +13355,10 @@ def _fuc_download(_n, year_range, window_days, precovery_mode, metric,
     if sites:
         merged = merged[merged["station_code"].isin(sites)]
     merged = merged.sort_values("n_followup", ascending=False)
+    scope_tag = (time_scope or "apparition").replace("_", "")
     fname = (f"followup_comparison_{year_range[0]}_{year_range[1]}_"
-             f"{int(window_days)}d_{precovery_mode}_{sites_filter}_"
-             f"{metric or 'neos'}.csv")
+             f"{scope_tag}_{int(window_days)}d_{precovery_mode}_"
+             f"{sites_filter}_{metric or 'neos'}.csv")
     return send_data_frame(merged.to_csv, fname, index=False)
 
 
