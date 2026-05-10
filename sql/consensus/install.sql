@@ -51,8 +51,31 @@ CREATE TABLE IF NOT EXISTS css_neo_consensus.source_membership (
         -- updated on every refresh that re-finds this row.
     last_refreshed    TIMESTAMPTZ NOT NULL,
         -- timestamp of the run that last touched this row.
+    nf_q              REAL,
+        -- NEOfixer's Find_Orb perihelion distance (AU). Populated only
+        -- for source='neofixer'. NULL for other sources. Lets the
+        -- consensus tab show "NEOfixer says q=1.31" alongside the
+        -- boolean.
+    nf_neo_prob       REAL,
+        -- NEOfixer's Find_Orb p_NEO field (0..100). NEOfixer can have
+        -- a row in /targets/?site=500 with `neo`=0 (Find_Orb classifies
+        -- it as non-NEO with q just over 1.3) — this lets the dashboard
+        -- distinguish "NEOfixer disagrees" from "NEOfixer is missing
+        -- this object".
+    nf_u              REAL,
+        -- NEOfixer's Find_Orb orbit-uncertainty parameter U (0..9 with
+        -- negatives possible for very tight fits). Diagnostic for
+        -- inspecting whether a q-disagreement reflects a poor Find_Orb
+        -- fit.
     PRIMARY KEY (source, primary_desig)
 );
+
+-- In-place upgrade for installations that predate the NEOfixer detail
+-- columns. ADD COLUMN IF NOT EXISTS makes this safe to re-run.
+ALTER TABLE css_neo_consensus.source_membership
+    ADD COLUMN IF NOT EXISTS nf_q        REAL,
+    ADD COLUMN IF NOT EXISTS nf_neo_prob REAL,
+    ADD COLUMN IF NOT EXISTS nf_u        REAL;
 
 CREATE INDEX IF NOT EXISTS source_membership_primary_desig_idx
     ON css_neo_consensus.source_membership (primary_desig);
@@ -110,7 +133,12 @@ SELECT primary_desig,
        MAX(last_refreshed) FILTER (WHERE source='neocc')      AS neocc_refreshed_at,
        MAX(last_refreshed) FILTER (WHERE source='neofixer')   AS neofixer_refreshed_at,
        MAX(last_refreshed) FILTER (WHERE source='mpc_orbits') AS mpc_orbits_refreshed_at,
-       MAX(last_refreshed) FILTER (WHERE source='lowell')     AS lowell_refreshed_at
+       MAX(last_refreshed) FILTER (WHERE source='lowell')     AS lowell_refreshed_at,
+       -- NEOfixer detail fields (only populated for source='neofixer';
+       -- MAX picks up the single non-NULL value across the per-source rows).
+       MAX(nf_q)        AS nf_q,
+       MAX(nf_neo_prob) AS nf_neo_prob,
+       MAX(nf_u)        AS nf_u
   FROM css_neo_consensus.source_membership
  WHERE NOT is_comet
  GROUP BY primary_desig;
