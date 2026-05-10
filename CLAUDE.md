@@ -170,8 +170,18 @@ and Station Report) aren't yet present and the indices shift.
   tracklets/obs it subtracts the apparition's `n_trk_any_200` /
   `n_obs_any_200` so the result is strictly recovery activity.
   Window + Precovery controls disable when scope ≠ apparition.
+- **Depth filter** (Phase 3A, 2026-05-10): per-station V-corrected
+  mag distribution from obs_sbn_neo (most recent 5 years if site
+  has ≥ 1000 NEO obs in that window, else all-time fallback;
+  stations with < 50 valid obs excluded). Three statistics
+  exposed via dropdown: Median + 1.4826·MAD (default, robust),
+  Mean + 1σ, 95th percentile. Double-ended range slider on V
+  (14.0–24.0) filters sites whose chosen statistic falls inside.
+  Sites without published depth data are kept by default
+  ("unknown" ≠ "shallow"). Cache: `site_mag_stats` parquet,
+  ~2 K rows, sub-MB.
 - Data: live obscodes table + `apparition_cache`. New 1-day
-  parquet cache `obscodes_cache`.
+  parquet caches `obscodes_cache`, `site_mag_stats`.
 - See `docs/2026-05-09_followup_comparison_scoping.md`.
 
 ### Tab 6: Follow-up Timing
@@ -289,6 +299,10 @@ Stations are mapped to project groups via `STATION_TO_PROJECT`:
     Time scope radio. Same CTE chain as APPARITION_SQL but the
     LATERAL has no ±200 d bound. Gizmo first run ~10 min;
     subsequent loads ~few s from parquet.
+  - `SITE_MAG_STATS_SQL` — per-station V-mag depth distribution
+    (mean+σ, median+1.4826·MAD, 95th pct) from obs_sbn_neo,
+    5-year window with all-time fallback. Phase 3A
+    (2026-05-10). ~2 K rows, sub-MB parquet, query <1 min.
   - `BOXSCORE_SQL` — full mpc_orbits + numbered_identifications JOIN
     (~1.5M rows, all object classes). Doesn't touch obs_sbn. Gizmo
     NVMe: **~0.7 s**. Sibyl: **~3 s**. (CLAUDE.md prior to 2026-04-24

@@ -845,6 +845,134 @@ def load_lifetime_followup():
 
 
 # ---------------------------------------------------------------------------
+# Per-station mag stats (Phase 3A). V-corrected magnitude distribution
+# per station from obs_sbn_neo. Uses the most recent 5 years of data
+# if the station has ≥ 1000 NEO obs in that window; otherwise falls
+# back to all-time. Three depth statistics:
+#   limit_mean_plus_sigma  = mean + 1σ          (Gaussian-like)
+#   limit_median_plus_mad  = median + 1.4826·MAD (robust)
+#   pct95_v_mag            = 95th percentile     (raw)
+# Spurious mag values clipped to [5, 30]; unknown bands dropped (the
+# CASE returns NULL, then WHERE v_mag IS NOT NULL filters them out).
+# Stations with < 50 valid obs are excluded — too noisy to publish.
+# ---------------------------------------------------------------------------
+
+SITE_MAG_STATS_SQL = """
+WITH cleaned AS (
+    SELECT stn, obstime,
+           mag + CASE band
+               WHEN 'V' THEN 0.0
+               WHEN 'v' THEN 0.0
+               WHEN 'B' THEN -0.8
+               WHEN 'U' THEN -1.3
+               WHEN 'R' THEN 0.4
+               WHEN 'I' THEN 0.8
+               WHEN 'g' THEN -0.35
+               WHEN 'r' THEN 0.14
+               WHEN 'i' THEN 0.32
+               WHEN 'z' THEN 0.26
+               WHEN 'y' THEN 0.32
+               WHEN 'u' THEN 2.5
+               WHEN 'w' THEN -0.13
+               WHEN 'c' THEN -0.05
+               WHEN 'o' THEN 0.33
+               WHEN 'G' THEN 0.28
+               WHEN 'J' THEN 1.2
+               WHEN 'H' THEN 1.4
+               WHEN 'K' THEN 1.7
+               WHEN 'C' THEN 0.4
+               WHEN 'W' THEN 0.4
+               WHEN 'L' THEN 0.2
+               WHEN 'Y' THEN 0.7
+               WHEN '' THEN -0.8
+               ELSE NULL
+           END AS v_mag
+    FROM obs_sbn_neo
+    WHERE mag IS NOT NULL
+      AND mag BETWEEN 5 AND 30
+),
+station_counts AS (
+    SELECT stn,
+           COUNT(*) FILTER (
+               WHERE obstime >= NOW() - INTERVAL '5 years'
+           ) AS n_5y,
+           COUNT(*) AS n_all
+    FROM cleaned
+    WHERE v_mag IS NOT NULL
+    GROUP BY stn
+),
+windowed AS (
+    SELECT c.stn, c.v_mag, c.obstime,
+           CASE WHEN sc.n_5y >= 1000 THEN '5y' ELSE 'all'
+           END AS data_window,
+           CASE WHEN sc.n_5y >= 1000 THEN sc.n_5y ELSE sc.n_all
+           END AS n_used
+    FROM cleaned c
+    JOIN station_counts sc ON sc.stn = c.stn
+    WHERE c.v_mag IS NOT NULL
+      AND ((sc.n_5y >= 1000
+            AND c.obstime >= NOW() - INTERVAL '5 years')
+           OR sc.n_5y < 1000)
+),
+medians AS (
+    SELECT stn,
+           MAX(data_window) AS data_window,
+           MAX(n_used) AS n_obs_used,
+           MAX(obstime) AS last_obs_used,
+           AVG(v_mag)::double precision AS mean_v_mag,
+           STDDEV(v_mag)::double precision AS std_v_mag,
+           PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY v_mag)
+               ::double precision AS median_v_mag,
+           PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY v_mag)
+               ::double precision AS pct95_v_mag
+    FROM windowed
+    GROUP BY stn
+    HAVING COUNT(*) >= 50
+),
+mad_compute AS (
+    SELECT w.stn,
+           PERCENTILE_CONT(0.5) WITHIN GROUP
+               (ORDER BY ABS(w.v_mag - m.median_v_mag))
+               ::double precision AS mad_v_mag
+    FROM windowed w
+    JOIN medians m ON m.stn = w.stn
+    GROUP BY w.stn
+)
+SELECT m.stn AS station_code,
+       m.data_window,
+       m.n_obs_used,
+       m.last_obs_used,
+       m.mean_v_mag,
+       m.std_v_mag,
+       (m.mean_v_mag + m.std_v_mag)::double precision
+           AS limit_mean_plus_sigma,
+       m.median_v_mag,
+       md.mad_v_mag,
+       (m.median_v_mag + 1.4826 * md.mad_v_mag)::double precision
+           AS limit_median_plus_mad,
+       m.pct95_v_mag
+FROM medians m
+JOIN mad_compute md ON md.stn = m.stn
+"""
+
+_df_site_mag_stats = None
+
+
+def load_site_mag_stats():
+    """Load per-station V-mag depth stats. Small (~2K rows) — kept
+    in memory for fast filter evaluation in the FUC callbacks."""
+    global _df_site_mag_stats
+    if _df_site_mag_stats is not None:
+        return _df_site_mag_stats
+    df_local, _ = _load_cached_query(
+        SITE_MAG_STATS_SQL, "site_mag_stats", "site mag stats")
+    df_local["last_obs_used"] = pd.to_datetime(df_local["last_obs_used"])
+    _df_site_mag_stats = df_local
+    print(f"Loaded {len(df_local):,} site mag-stat rows")
+    return _df_site_mag_stats
+
+
+# ---------------------------------------------------------------------------
 # Boxscore: object catalog from mpc_orbits (all objects, ~1.5M rows)
 # ---------------------------------------------------------------------------
 BOXSCORE_SQL = """
@@ -2846,6 +2974,7 @@ if _REFRESH_ONLY:
     load_consensus_membership()
     load_obscodes()
     load_lifetime_followup()
+    load_site_mag_stats()
     print("Cache refresh complete.")
     sys.exit(0)
 
@@ -2853,6 +2982,7 @@ if _REFRESH_ONLY:
 df = None
 df_apparition = None
 df_lifetime = None
+df_site_mag_stats = None
 query_timestamp = "loading..."
 year_min, year_max = 1898, 2026
 _data_ready = threading.Event()
@@ -2863,7 +2993,8 @@ def _load_all_data():
     """Load both datasets in a background thread, then attach per-NEO
     source-membership booleans so the banner-level source filter has
     something to slice on."""
-    global df, df_apparition, df_lifetime, query_timestamp
+    global df, df_apparition, df_lifetime, df_site_mag_stats
+    global query_timestamp
     global year_min, year_max, _data_error
     try:
         df, query_timestamp = load_data()
@@ -2883,6 +3014,7 @@ def _load_all_data():
                   f"{int(df['all_six_agree'].sum()):,}")
         load_obscodes()
         df_lifetime = load_lifetime_followup()
+        df_site_mag_stats = load_site_mag_stats()
     except Exception as e:
         _data_error = str(e)
         print(f"ERROR loading data: {e}")
@@ -4877,6 +5009,53 @@ app.layout = html.Div(
                                         ),
                                     ]),
                                     html.Div(children=[
+                                        html.Label(
+                                            "Depth statistic",
+                                            style=LABEL_STYLE),
+                                        dcc.Dropdown(
+                                            id="fuc-depth-stat",
+                                            options=[
+                                                {"label":
+                                                    "Median + 1.4826·MAD",
+                                                 "value": "median_mad"},
+                                                {"label": "Mean + 1σ",
+                                                 "value": "mean_sigma"},
+                                                {"label":
+                                                    "95th percentile",
+                                                 "value": "pct95"},
+                                            ],
+                                            value="median_mad",
+                                            clearable=False,
+                                            style={"width": "200px"},
+                                        ),
+                                    ]),
+                                    html.Div(
+                                        style={"width": "260px"},
+                                        children=[
+                                            html.Label(
+                                                "V-mag depth range",
+                                                style=LABEL_STYLE),
+                                            dcc.RangeSlider(
+                                                id="fuc-depth-range",
+                                                min=14.0, max=24.0,
+                                                step=0.5,
+                                                value=[14.0, 24.0],
+                                                marks={
+                                                    14: "14",
+                                                    17: "17",
+                                                    20: "20",
+                                                    23: "23",
+                                                },
+                                                tooltip={
+                                                    "placement":
+                                                        "bottom",
+                                                    "always_visible":
+                                                        False},
+                                                allowCross=False,
+                                            ),
+                                        ],
+                                    ),
+                                    html.Div(children=[
                                         html.Label("Color scale",
                                                    style=LABEL_STYLE),
                                         dcc.RadioItems(
@@ -6121,6 +6300,36 @@ app.layout = html.Div(
                                                            "18px",
                                                        "margin": "0"},
                                                 children=[
+                                                    html.Li([
+                                                        html.Strong(
+                                                            "2026-05-10 "
+                                                            "(Phase 3A) — "),
+                                                        "Follow-up "
+                                                        "Comparison "
+                                                        "adds a V-mag "
+                                                        "depth filter "
+                                                        "with a "
+                                                        "double-ended "
+                                                        "range slider "
+                                                        "and a choice "
+                                                        "of three "
+                                                        "depth "
+                                                        "statistics "
+                                                        "(Median + "
+                                                        "1.4826·MAD, "
+                                                        "Mean + 1σ, "
+                                                        "95th "
+                                                        "percentile). "
+                                                        "Per-station "
+                                                        "V-corrected "
+                                                        "mag "
+                                                        "distributions "
+                                                        "are derived "
+                                                        "from the most "
+                                                        "recent 5 "
+                                                        "years of NEO "
+                                                        "observations.",
+                                                    ]),
                                                     html.Li([
                                                         html.Strong(
                                                             "2026-05-10 "
@@ -12539,6 +12748,34 @@ def _fuc_apply_sites_filter(obs_df, sites_filter):
     return obs_df
 
 
+_FUC_DEPTH_COL = {
+    "mean_sigma":  "limit_mean_plus_sigma",
+    "median_mad":  "limit_median_plus_mad",
+    "pct95":       "pct95_v_mag",
+}
+
+
+def _fuc_apply_depth_filter(obs_df, depth_stat, depth_range):
+    """Restrict obscodes to those whose depth statistic falls inside
+    the slider range. Sites without published mag stats (insufficient
+    obs, all bands unknown, etc.) are kept by default — "unknown"
+    isn't the same as "shallow"."""
+    if not depth_range or depth_stat not in _FUC_DEPTH_COL:
+        return obs_df
+    lo, hi = float(depth_range[0]), float(depth_range[1])
+    # If the slider is at the full extent, no filtering is needed.
+    if lo <= 14.001 and hi >= 23.999:
+        return obs_df
+    if df_site_mag_stats is None or df_site_mag_stats.empty:
+        return obs_df
+    col = _FUC_DEPTH_COL[depth_stat]
+    stats = df_site_mag_stats[["station_code", col]].dropna()
+    keep_codes = set(stats[stats[col].between(lo, hi)]["station_code"])
+    no_data_codes = (set(obs_df["obscode"])
+                     - set(df_site_mag_stats["station_code"]))
+    return obs_df[obs_df["obscode"].isin(keep_codes | no_data_codes)]
+
+
 def _fuc_merge_view_state(prev, relayout):
     """Merge new relayoutData keys into the cumulative view state.
     Plotly fires partial updates — modebar zoom-in sends only
@@ -12768,15 +13005,18 @@ def _fuc_counts_lifetime(year_range, metric, recovery_only):
     Input("fuc-precovery", "value"),
     Input("fuc-metric", "value"),
     Input("fuc-time-scope", "value"),
+    Input("fuc-depth-stat", "value"),
+    Input("fuc-depth-range", "value"),
 )
 def _fuc_site_options(year_range, window_days, precovery_mode, metric,
-                      time_scope):
+                      time_scope, depth_stat, depth_range):
     counts = _fuc_followup_counts(
         year_range, window_days, precovery_mode, metric, time_scope)
     obs = load_obscodes()
+    obs = _fuc_apply_depth_filter(obs, depth_stat, depth_range)
     merged = counts.merge(
         obs[["obscode", "name"]], left_on="station_code",
-        right_on="obscode", how="left")
+        right_on="obscode", how="inner")
     merged = merged.sort_values("n_followup", ascending=False)
     unit = _FUC_METRIC_LABEL.get(metric or "neos", "NEOs")
     return [
@@ -12821,12 +13061,15 @@ def _fuc_axis(which, show_grid, clamp, grid_color):
     Input("fuc-cscale", "value"),
     Input("fuc-colormap", "value"),
     Input("fuc-time-scope", "value"),
+    Input("fuc-depth-stat", "value"),
+    Input("fuc-depth-range", "value"),
     Input("theme-toggle", "value"),
     Input("plot-height", "value"),
 )
 def _fuc_render_map(year_range, window_days, precovery_mode, metric,
                     site_type, sites_filter, projection, graticule,
-                    cscale, colormap, time_scope, theme_name, ph):
+                    cscale, colormap, time_scope,
+                    depth_stat, depth_range, theme_name, ph):
     t = theme(theme_name or "light")
     height = max(int(ph), 400) if ph else 900
     obs = load_obscodes()
@@ -12835,6 +13078,7 @@ def _fuc_render_map(year_range, window_days, precovery_mode, metric,
     if site_type and site_type != "all":
         obs = obs[obs["observations_type"] == site_type]
     obs = _fuc_apply_sites_filter(obs, sites_filter)
+    obs = _fuc_apply_depth_filter(obs, depth_stat, depth_range)
     counts = _fuc_followup_counts(
         year_range, window_days, precovery_mode, metric, time_scope)
     merged = obs.merge(
@@ -13044,11 +13288,13 @@ def _fuc_track_viewport(relayout, _projection, prev_state):
     Input("fuc-sites-filter", "value"),
     Input("fuc-viewport", "data"),
     Input("fuc-time-scope", "value"),
+    Input("fuc-depth-stat", "value"),
+    Input("fuc-depth-range", "value"),
     Input("theme-toggle", "value"),
 )
 def _fuc_render_stats(year_range, window_days, precovery_mode, metric,
                       site_type, sites_filter, viewport, time_scope,
-                      theme_name):
+                      depth_stat, depth_range, theme_name):
     obs = load_obscodes()
     if obs is None or obs.empty or df is None or df_apparition is None:
         return html.Span("Loading…",
@@ -13057,6 +13303,7 @@ def _fuc_render_stats(year_range, window_days, precovery_mode, metric,
     type_obs = (obs if site_type == "all"
                 else obs[obs["observations_type"] == site_type])
     type_obs = _fuc_apply_sites_filter(type_obs, sites_filter)
+    type_obs = _fuc_apply_depth_filter(type_obs, depth_stat, depth_range)
     bbox = _fuc_bbox_from_state(viewport)
     viewport_obs = _fuc_apply_bbox(type_obs, bbox)
     bbox_active = bbox is not None and len(viewport_obs) < len(type_obs)
@@ -13264,12 +13511,15 @@ def _fuc_paste_codes(text, current):
     Input("fuc-max-bars", "value"),
     Input("fuc-viewport", "data"),
     Input("fuc-time-scope", "value"),
+    Input("fuc-depth-stat", "value"),
+    Input("fuc-depth-range", "value"),
     Input("theme-toggle", "value"),
     Input("plot-height", "value"),
 )
 def _fuc_render_bar(year_range, window_days, precovery_mode, metric,
                     sites, site_type, sites_filter, cscale, colormap,
-                    max_bars, viewport, time_scope, theme_name, ph):
+                    max_bars, viewport, time_scope,
+                    depth_stat, depth_range, theme_name, ph):
     t = theme(theme_name or "light")
     # Bar chart height scales with the bar count rather than the
     # banner Plot-height. ~33 px per bar plus 80 px overhead for
@@ -13289,6 +13539,7 @@ def _fuc_render_bar(year_range, window_days, precovery_mode, metric,
     }.get(time_scope or "apparition", _window_label(window_days))
     obs = load_obscodes()
     obs = _fuc_apply_sites_filter(obs, sites_filter)
+    obs = _fuc_apply_depth_filter(obs, depth_stat, depth_range)
     merged = counts.merge(
         obs[["obscode", "name", "observations_type",
              "longitude_180", "latitude"]],
@@ -13402,14 +13653,18 @@ def _fuc_render_bar(year_range, window_days, precovery_mode, metric,
     State("fuc-sites-filter", "value"),
     State("fuc-site-select", "value"),
     State("fuc-time-scope", "value"),
+    State("fuc-depth-stat", "value"),
+    State("fuc-depth-range", "value"),
     prevent_initial_call=True,
 )
 def _fuc_download(_n, year_range, window_days, precovery_mode, metric,
-                  site_type, sites_filter, sites, time_scope):
+                  site_type, sites_filter, sites, time_scope,
+                  depth_stat, depth_range):
     counts = _fuc_followup_counts(
         year_range, window_days, precovery_mode, metric, time_scope)
     obs = load_obscodes()
     obs = _fuc_apply_sites_filter(obs, sites_filter)
+    obs = _fuc_apply_depth_filter(obs, depth_stat, depth_range)
     merged = counts.merge(
         obs[["obscode", "name", "observations_type",
              "latitude", "longitude_180"]],

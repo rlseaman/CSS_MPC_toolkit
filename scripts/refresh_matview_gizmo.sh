@@ -279,7 +279,7 @@ log "SUCCESS total ${TOTAL}s (stage1=${STAGE1_ELAPSED}s stage2=${STAGE2_ELAPSED}
 
 # Record cache file sizes as a sanity-check proxy.
 CACHE_SIZES=""
-for prefix in neo_cache apparition_cache boxscore_cache consensus_membership obscodes_cache lifetime_cache; do
+for prefix in neo_cache apparition_cache boxscore_cache consensus_membership obscodes_cache lifetime_cache site_mag_stats; do
     f=$(ls -1t "$APP_DIR"/.${prefix}_*.parquet 2>/dev/null | head -1)
     if [[ -n "$f" ]]; then
         sz=$(stat -f %z "$f")
