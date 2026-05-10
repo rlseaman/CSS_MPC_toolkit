@@ -4674,6 +4674,24 @@ app.layout = html.Div(
                                         ),
                                     ]),
                                     html.Div(children=[
+                                        html.Label("Graticule",
+                                                   style=LABEL_STYLE),
+                                        dcc.RadioItems(
+                                            id="fuc-graticule",
+                                            options=[
+                                                {"label": " Off",
+                                                 "value": "off"},
+                                                {"label": " On",
+                                                 "value": "on"},
+                                            ],
+                                            value="off",
+                                            inline=True,
+                                            style=RADIO_STYLE,
+                                            labelStyle=
+                                                RADIO_LABEL_STYLE,
+                                        ),
+                                    ]),
+                                    html.Div(children=[
                                         html.Label("Map projection",
                                                    style=LABEL_STYLE),
                                         dcc.Dropdown(
@@ -12502,6 +12520,21 @@ def _window_label(window_days):
                                             f"{window_days} d")
 
 
+def _fuc_axis(which, show_grid, clamp, grid_color):
+    """Build a Scattergeo lataxis/lonaxis dict honoring the
+    Graticule control. `clamp` lets the existing ±65/+80 latitude
+    cap stay in place for projections that benefit from it."""
+    out = {}
+    if which == "lat" and clamp:
+        out["range"] = [-65, 80]
+    if show_grid:
+        out["showgrid"] = True
+        out["gridcolor"] = grid_color
+        out["gridwidth"] = 0.5
+        out["dtick"] = 30
+    return out
+
+
 @app.callback(
     Output("fuc-world-map", "figure"),
     Input("fuc-year-range", "value"),
@@ -12511,14 +12544,15 @@ def _window_label(window_days):
     Input("fuc-site-type", "value"),
     Input("fuc-sites-filter", "value"),
     Input("fuc-projection", "value"),
+    Input("fuc-graticule", "value"),
     Input("fuc-cscale", "value"),
     Input("fuc-colormap", "value"),
     Input("theme-toggle", "value"),
     Input("plot-height", "value"),
 )
 def _fuc_render_map(year_range, window_days, precovery_mode, metric,
-                    site_type, sites_filter, projection, cscale,
-                    colormap, theme_name, ph):
+                    site_type, sites_filter, projection, graticule,
+                    cscale, colormap, theme_name, ph):
     t = theme(theme_name or "light")
     height = max(int(ph), 400) if ph else 900
     obs = load_obscodes()
@@ -12655,10 +12689,17 @@ def _fuc_render_map(year_range, window_days, precovery_mode, metric,
             showocean=True, oceancolor=bg,
             showcountries=True, countrycolor=coast,
             coastlinecolor=coast,
-            lataxis=dict(range=[-65, 80])
-                if (projection or "") in
-                ("equirectangular", "mercator", "miller")
-                else dict(),
+            lataxis=_fuc_axis(
+                "lat",
+                graticule == "on",
+                clamp=(projection or "") in
+                    ("equirectangular", "mercator", "miller"),
+                grid_color=coast),
+            lonaxis=_fuc_axis(
+                "lon",
+                graticule == "on",
+                clamp=False,
+                grid_color=coast),
             bgcolor=bg,
         ),
     )
