@@ -29,7 +29,7 @@ catalog. Twelve tabbed pages (the last two are dev-only on the
 | **Discoveries by Year** | Stacked bar chart by year/survey/size class with annual or cumulative views; size distribution histogram; top-15 stations table |
 | **Size Distribution vs. NEOMOD3** | Half-magnitude bin chart comparing MPC discoveries to the NEOMOD3 population model (Nesvorny et al. 2024, Icarus 411); completeness curve with 1-sigma errors; reference table |
 | **Multi-survey Comparison** | Venn diagrams (1–3 surveys) showing co-detection during discovery apparitions (±200 days); pairwise co-detection heatmap; survey reach |
-| **Follow-up Comparison** | Per-site (not per-survey) follow-up activity. World map of MPC obscodes colored by follow-up volume with selectable projection / colormap / scale / graticule; viewport-aware stats card; bar chart with multi-select and matched colors. Time scope selector (Discovery apparition / All time / Recovery only — the latter two backed by a separate lifetime cache), follow-up window (1 day / 1 week / 1 lunation / 100 days / 200 days), post-discovery vs include-precoveries radio, and Metric selector (NEOs / Tracklets / Observations). |
+| **Follow-up Comparison** | Per-site (not per-survey) follow-up activity. World map of MPC obscodes colored by follow-up volume with selectable projection / colormap / scale / graticule; viewport-aware stats card; bar chart with multi-select and matched colors. Time scope selector (Discovery apparition / All time / Recovery only — the latter two backed by a separate lifetime cache), follow-up window (1 day / 1 week / 1 lunation / 100 days / 200 days), post-discovery vs include-precoveries radio, Metric selector (NEOs / Tracklets / Observations), and V-mag depth filter (Median + 1.4826·MAD / Mean + 1σ / 95th percentile, with a double-ended range slider). |
 | **Follow-up Timing** | Response curves showing how quickly other surveys observe newly-discovered NEOs; per-survey response time distributions; follow-up network heatmap; trend by year |
 | **Discovery Circumstances** | Sky map (RA/Dec) of discovery positions with ecliptic and galactic plane overlays; apparent V magnitude histogram; rate of motion vs. H scatter; position angle rose diagram |
 | **Asteroid Classes** | Cross-tabulation of the full `mpc_orbits` catalog (~1.5M objects, all classes) by orbit type and selected attributes. Class grouping (Fine / Standard / Coarse), NEO/PHA/retrograde filters, H histogram, a–e scatter. |
@@ -40,10 +40,12 @@ catalog. Twelve tabbed pages (the last two are dev-only on the
 Each tab has a **Download CSV** button that exports the currently filtered
 data. Shared banner controls: NEO source filter (per-consensus-source
 membership), survey grouping, plot height, light/dark theme, service
-health indicators, reset buttons. Data is sourced from five caches —
+health indicators, reset buttons. Data is sourced from seven caches —
 discovery tracklets (`LOAD_SQL`), apparition observations
 (`APPARITION_SQL`), object catalog (`BOXSCORE_SQL`), NEO consensus
-membership, and MPC obscodes — all stored as Parquet with 1-day
+membership, MPC obscodes, lifetime per-(NEO × station) follow-up
+totals (`LIFETIME_FOLLOWUP_SQL`), and per-station V-mag depth stats
+(`SITE_MAG_STATS_SQL`) — all stored as Parquet with 1-day
 auto-invalidation; falls back to legacy CSV when Parquet isn't yet
 generated.
 
