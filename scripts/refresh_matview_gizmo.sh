@@ -14,6 +14,8 @@
 #                                                            obscodes_cache, and
 #                                                            lifetime_cache (the
 #                                                            Phase-2B addition))
+#   4a. Sweep orphan parquets / metas from prior SQL-hash bumps so the
+#       dashboard's "Caches refreshed …" label isn't back-dated.
 #   5. Restart Dash so it picks up the new caches
 #
 # Why this ordering: stages 2 + 3 land first so stage 4's parquet build
@@ -174,17 +176,58 @@ fi
 # Builds neo_cache, apparition_cache, boxscore_cache, AND
 # consensus_membership. Critical that this runs AFTER stages 2 + 3 so
 # the consensus_membership cache captures today's fresh source ingest.
+# A touchfile is created just before the python run so that stage 4a
+# below can identify parquets/metas not refreshed this cycle and sweep
+# them as orphans of past SQL-hash bumps.
 log "--- stage 4: python app/discovery_stats.py --refresh-only ---"
 START=$(date +%s)
+TOUCHFILE=$(mktemp -t refresh_stage4 2>/dev/null) || TOUCHFILE=""
 "$VENV_PY" app/discovery_stats.py --refresh-only
 RC=$?
 STAGE4_ELAPSED=$(( $(date +%s) - START ))
 log "stage 4: rc=$RC elapsed=${STAGE4_ELAPSED}s"
 if [[ $RC -ne 0 ]]; then
+    [[ -n "$TOUCHFILE" ]] && rm -f "$TOUCHFILE"
     TOTAL=$(( $(date +%s) - START_ALL ))
     write_status FAIL "$TOTAL" "\"stage\": \"cache_refresh\", \"last_rc\": $RC, \"stage1_s\": $STAGE1_ELAPSED, \"stage2_s\": $STAGE2_ELAPSED, \"stage3_s\": $STAGE3_ELAPSED, \"stage4_s\": $STAGE4_ELAPSED"
     log "=== gizmo refresh end — FAIL at stage 4 ==="
     exit 1
+fi
+
+# -- Stage 4a: sweep orphan parquet / .meta caches --
+# --refresh-only forces a DB re-query for every active cache, so every
+# active .parquet and .meta has an mtime newer than TOUCHFILE after
+# stage 4 returns. Anything older is from a SQL-hash bump that left
+# a stale file behind — when a SQL string changes, the new cache lands
+# under a fresh .<prefix>_<newhash>.parquet and the old one is no longer
+# read. These orphans matter because app/discovery_stats.py's
+# _cache_refresh_label() reports min(mtime) across every parquet
+# matching the prefix glob, so a single orphan back-dates the dashboard
+# "Caches refreshed …" subtext (this exact symptom led to the addition
+# of this sweep — see chat log 2026-05-11). Best-effort.
+if [[ -n "$TOUCHFILE" ]] && [[ -e "$TOUCHFILE" ]]; then
+    SWEPT_PARQUETS=0
+    SWEPT_METAS=0
+    while IFS= read -r f; do
+        [[ -z "$f" ]] && continue
+        log "  orphan parquet: $f"
+        rm -f "$f" "${f%.parquet}.meta"
+        SWEPT_PARQUETS=$((SWEPT_PARQUETS + 1))
+    done < <(find "$APP_DIR" -maxdepth 1 -type f -name '.*_*.parquet' \
+                  ! -newer "$TOUCHFILE" 2>/dev/null)
+    # Orphan .meta whose .parquet sibling was already swept on a
+    # previous run — find on its own to catch the lingering files.
+    while IFS= read -r f; do
+        [[ -z "$f" ]] && continue
+        log "  orphan meta:    $f"
+        rm -f "$f"
+        SWEPT_METAS=$((SWEPT_METAS + 1))
+    done < <(find "$APP_DIR" -maxdepth 1 -type f -name '.*_*.meta' \
+                  ! -newer "$TOUCHFILE" 2>/dev/null)
+    log "stage 4a: orphan sweep — ${SWEPT_PARQUETS} parquet(s), ${SWEPT_METAS} bare meta(s) removed"
+    rm -f "$TOUCHFILE"
+else
+    log "stage 4a: TOUCHFILE missing — skipping orphan sweep"
 fi
 
 # -- Stage 5: restart Dash so it loads the freshly-written caches --
