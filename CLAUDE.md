@@ -339,6 +339,9 @@ waitress WSGI server. A daily launchd agent
   3. `REFRESH MATERIALIZED VIEW CONCURRENTLY obs_summary`
   4. `python app/discovery_stats.py --refresh-only` to rebuild
      parquet caches against today's matview state
+  4a. Sweep orphan parquet/.meta files from prior SQL-hash bumps
+     (so `_cache_refresh_label()`'s `min(mtime)` over the cache glob
+     doesn't back-date the "Caches refreshed …" subtext).
   5. `launchctl kickstart -k` on the Dash plist so the running
      process picks up the fresh caches (~5 s of 502s while the
      port rebinds; acceptable for a low-traffic outreach window).
