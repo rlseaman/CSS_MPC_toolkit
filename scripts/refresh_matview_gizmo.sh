@@ -205,6 +205,12 @@ fi
 # matching the prefix glob, so a single orphan back-dates the dashboard
 # "Caches refreshed …" subtext (this exact symptom led to the addition
 # of this sweep — see chat log 2026-05-11). Best-effort.
+#
+# Match pattern is .*_????????.parquet — eight chars between `_` and
+# `.parquet` enforces the 8-hex-char hash suffix that every cache
+# produced by _load_cached_query() carries (md5(...).hexdigest()[:8]).
+# That intentionally excludes hashless one-off analysis outputs like
+# `.sbdb_classification.parquet`, which must not be swept.
 if [[ -n "$TOUCHFILE" ]] && [[ -e "$TOUCHFILE" ]]; then
     SWEPT_PARQUETS=0
     SWEPT_METAS=0
@@ -213,7 +219,7 @@ if [[ -n "$TOUCHFILE" ]] && [[ -e "$TOUCHFILE" ]]; then
         log "  orphan parquet: $f"
         rm -f "$f" "${f%.parquet}.meta"
         SWEPT_PARQUETS=$((SWEPT_PARQUETS + 1))
-    done < <(find "$APP_DIR" -maxdepth 1 -type f -name '.*_*.parquet' \
+    done < <(find "$APP_DIR" -maxdepth 1 -type f -name '.*_????????.parquet' \
                   ! -newer "$TOUCHFILE" 2>/dev/null)
     # Orphan .meta whose .parquet sibling was already swept on a
     # previous run — find on its own to catch the lingering files.
@@ -222,7 +228,7 @@ if [[ -n "$TOUCHFILE" ]] && [[ -e "$TOUCHFILE" ]]; then
         log "  orphan meta:    $f"
         rm -f "$f"
         SWEPT_METAS=$((SWEPT_METAS + 1))
-    done < <(find "$APP_DIR" -maxdepth 1 -type f -name '.*_*.meta' \
+    done < <(find "$APP_DIR" -maxdepth 1 -type f -name '.*_????????.meta' \
                   ! -newer "$TOUCHFILE" 2>/dev/null)
     log "stage 4a: orphan sweep — ${SWEPT_PARQUETS} parquet(s), ${SWEPT_METAS} bare meta(s) removed"
     rm -f "$TOUCHFILE"
