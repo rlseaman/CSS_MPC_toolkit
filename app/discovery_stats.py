@@ -1069,7 +1069,19 @@ def _cache_refresh_label():
         os.path.join(_APP_DIR, ".apparition_cache_*.parquet"),
         os.path.join(_APP_DIR, ".boxscore_cache_*.parquet"),
     ]
-    mtimes = [os.path.getmtime(p) for pat in patterns for p in glob.glob(pat)]
+    mtimes = []
+    for pat in patterns:
+        for p in glob.glob(pat):
+            try:
+                mtimes.append(os.path.getmtime(p))
+            except OSError:
+                # Dangling symlink, vanished file, unreadable —
+                # skip rather than abort startup. A half-populated
+                # cache dir (dev worktree symlinks pointing at
+                # files the orphan-sweep removed, fresh clone,
+                # partial DR restore) is still usable; only the
+                # subtext might miss a stamp.
+                continue
     if not mtimes:
         return ""
     stamp = datetime.fromtimestamp(min(mtimes), tz=timezone.utc)
