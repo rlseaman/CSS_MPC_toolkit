@@ -12829,7 +12829,16 @@ def _fuc_bbox_from_state(state):
     Returns (lon_min, lon_max, lat_min, lat_max) or None.
     Lon/lat ranges (when present from equirectangular / mercator /
     miller) are exact; otherwise we project center + scale linearly
-    to a rectangle (approximate for non-rectangular projections)."""
+    to a rectangle (approximate for non-rectangular projections).
+
+    Plotly's projection.scale=1 means the entire data range fits, so
+    half-widths at scale=s are 180/s in lon and 90/s in lat. Earlier
+    versions used half of that (90/s and 45/s), which under-sized the
+    bbox by 4× in area — sites well inside the actual visible map
+    (notably I52 when the center had drifted) silently fell out of
+    the top-N. We also normalize for antimeridian wrap so the lon
+    mask in _fuc_apply_bbox can use its OR branch when the visible
+    area straddles ±180°."""
     if not state or not isinstance(state, dict):
         return None
     lon_range = state.get("lon_range")
@@ -12840,12 +12849,25 @@ def _fuc_bbox_from_state(state):
     lon_c = state.get("center_lon")
     lat_c = state.get("center_lat")
     scale = state.get("scale")
-    if lon_c is not None and lat_c is not None and scale and scale > 0:
-        lon_w = 90.0 / scale
-        lat_w = 45.0 / scale
-        return (lon_c - lon_w, lon_c + lon_w,
-                lat_c - lat_w, lat_c + lat_w)
-    return None
+    if (lon_c is None or lat_c is None
+            or not scale or scale <= 1.0):
+        # At scale ≤ 1 the whole world is visible; no bbox filter
+        # is needed (and the wrap math below stops being well-
+        # defined).
+        return None
+    lon_w = 180.0 / scale
+    lat_w = 90.0 / scale
+    lat_min = max(-90.0, lat_c - lat_w)
+    lat_max = min(90.0, lat_c + lat_w)
+    lon_min = lon_c - lon_w
+    lon_max = lon_c + lon_w
+    # Encode antimeridian wrap as lon_min > lon_max so the OR branch
+    # in _fuc_apply_bbox kicks in.
+    if lon_min < -180:
+        lon_min += 360
+    elif lon_max > 180:
+        lon_max -= 360
+    return (lon_min, lon_max, lat_min, lat_max)
 
 
 def _fuc_apply_bbox(obs_df, bbox):
