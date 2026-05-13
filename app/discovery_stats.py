@@ -5160,7 +5160,8 @@ app.layout = html.Div(
                                 delay_show=600,
                                 children=dcc.Graph(
                                     id="fuc-world-map",
-                                    config=GRAPH_CONFIG),
+                                    config={**GRAPH_CONFIG,
+                                            "scrollZoom": True}),
                             ),
                             html.Div(
                                 style={"marginTop": "12px",
