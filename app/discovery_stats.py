@@ -5164,6 +5164,16 @@ app.layout = html.Div(
                                             "scrollZoom": True}),
                             ),
                             html.Div(
+                                "Trackpad pinch or scroll wheel "
+                                "zooms; click-drag pans; "
+                                "double-click resets.",
+                                style={"marginTop": "4px",
+                                       "fontSize": "11px",
+                                       "fontStyle": "italic",
+                                       "color":
+                                           "var(--subtext-color, "
+                                           "#888)"}),
+                            html.Div(
                                 style={"marginTop": "12px",
                                        "marginBottom": "8px",
                                        "display": "flex",
