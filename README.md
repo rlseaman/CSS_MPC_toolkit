@@ -19,8 +19,9 @@ libraries, and derived data products useful to the NEO community.
 
 Interactive Dash web application for exploring NEO discovery statistics,
 survey reach, follow-up activity, and the cross-source NEO consensus
-catalog. Twelve tabbed pages (the last two are dev-only on the
-`station-report` branch):
+catalog. Twelve tabbed pages; the Station Report tab is gated behind
+the `--dev-tabs` flag and only appears on the `dev.hotwireduniverse.org`
+staging surface (currently fed from the `station-report` branch).
 
 | Tab | Content |
 |-----|---------|

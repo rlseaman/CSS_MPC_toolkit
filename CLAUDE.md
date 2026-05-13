@@ -71,10 +71,12 @@ sandbox/                      # Analysis notes, exploratory outputs
 ## Interactive App (`app/discovery_stats.py`)
 
 Dash web application at http://127.0.0.1:8050/ (prod) and
-http://127.0.0.1:8051/ (dev/`--rnd`) with twelve tabbed pages.
-Tab indices below are the layout order on the `station-report` dev
-branch; on prod (`main`) the two newest tabs (Follow-up Comparison
-and Station Report) aren't yet present and the indices shift.
+http://127.0.0.1:8051/ (dev/`--rnd --dev-tabs`) with twelve tabbed
+pages. Tab indices below are the layout order on the
+`station-report` dev branch; on prod (`main`) the Station Report
+tab is hidden by the `--dev-tabs` flag and About shifts from
+Tab 11 to Tab 10. All other tabs (including Follow-up Comparison)
+are live on prod.
 
 ### Tab 0: MPEC Browser
 - Searchable list of recent Minor Planet Electronic Circulars
@@ -130,7 +132,7 @@ and Station Report) aren't yet present and the indices shift.
 - Data: `APPARITION_SQL` uses `CROSS JOIN LATERAL` with
   `AS MATERIALIZED` CTEs for indexed scans (~1-2 min query)
 
-### Tab 5: Follow-up Comparison (dev only)
+### Tab 5: Follow-up Comparison
 - Per-site (not per-survey) follow-up activity. Sister tab to
   Multi-survey Comparison and Follow-up Timing, but pivoting on
   individual MPC site code rather than survey group.
@@ -141,6 +143,11 @@ and Station Report) aren't yet present and the indices shift.
   color scale; site-type filter (default Optical, ~99% of codes);
   NEO-active filter (default On — restricts to ~500 sites that
   have ever observed a NEO in a discovery apparition).
+- Map gestures: trackpad pinch / scroll wheel zooms, click-drag
+  pans, double-click resets — Scattergeo does not support
+  drag-rectangle zoom, so a small caption under the map states
+  the working gestures. `scrollZoom: True` is set per-graph (the
+  cartesian plots elsewhere keep the global default).
 - Stats card responsive to map pan/zoom: tallies of sites in
   viewport, NEOs in window, NEOs with follow-up there, median
   follow-up sites per NEO. Bbox derivation is exact for
