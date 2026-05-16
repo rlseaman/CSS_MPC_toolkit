@@ -1533,6 +1533,45 @@ def load_obscodes():
 
 
 # ---------------------------------------------------------------------------
+# obs_summary_all: per-object obs aggregates over the full obs_sbn (1.6M rows)
+# ---------------------------------------------------------------------------
+# Sibling to css_neo_consensus.obs_summary which is NEO-only; this one
+# covers the full mpc_orbits catalog.  Built by sql/obs_summary_all.sql
+# and refreshed nightly by scripts/refresh_matview_gizmo.sh stage 3b.
+# Joined into the boxscore cache below so the Observation history tab
+# shows authoritative first_obs / last_obs / arc / disc_by columns
+# instead of the patchy values in mpc_orbits.
+
+OBS_SUMMARY_ALL_SQL = """
+SELECT primary_desig, first_obs, last_obs, arc_days, nobs, disc_by
+FROM   public.obs_summary_all
+"""
+
+_df_obs_summary_all = None
+
+
+def load_obs_summary_all():
+    """Load per-object obs aggregates from the obs_summary_all matview.
+
+    Returns a DataFrame keyed on primary_desig (numbered objects by
+    permid, unnumbered by provid).  ~1.6M rows.  Daily refresh via the
+    same parquet-cache pattern as the other catalogs.
+    """
+    global _df_obs_summary_all
+    if _df_obs_summary_all is not None:
+        return _df_obs_summary_all
+    df, _ = _load_cached_query(
+        OBS_SUMMARY_ALL_SQL, "obs_summary_all_cache", "obs aggregates")
+    df["primary_desig"] = df["primary_desig"].astype(str)
+    # arc_days comes back as a Decimal (NUMERIC) from EXTRACT EPOCH —
+    # coerce to float so downstream code can do arithmetic.
+    df["arc_days"] = pd.to_numeric(df["arc_days"], errors="coerce")
+    _df_obs_summary_all = df
+    print(f"Loaded {len(df):,} obs aggregates from obs_summary_all")
+    return _df_obs_summary_all
+
+
+# ---------------------------------------------------------------------------
 # Boxscore: object catalog loader
 # ---------------------------------------------------------------------------
 
@@ -1585,6 +1624,31 @@ def load_boxscore_data():
 
     # Apply extended classification (MB subdivisions, Amor split, etc.)
     df = classify_extended_df(df, pha_set=pha_set)
+
+    # Enrich with obs_sbn-derived aggregates (first_obs / last_obs /
+    # arc_days / nobs / disc_by) from the obs_summary_all matview.
+    # primary_desig in the matview is COALESCE(permid, provid).
+    try:
+        osa = load_obs_summary_all()
+    except Exception as e:
+        print(f"WARN: obs_summary_all load failed ({e}); "
+              "first_obs / last_obs / disc_by columns will be blank")
+        osa = None
+    if osa is not None and len(osa):
+        permid_clean = df["permid"].astype(str).str.strip()
+        provid_clean = df["provid"].astype(str).str.strip()
+        df["primary_desig"] = permid_clean.where(
+            permid_clean.ne("") & permid_clean.ne("nan"),
+            provid_clean)
+        osa_idx = osa.set_index("primary_desig")
+        df["first_obs"] = df["primary_desig"].map(osa_idx["first_obs"])
+        df["last_obs"] = df["primary_desig"].map(osa_idx["last_obs"])
+        df["arc_days_obs"] = df["primary_desig"].map(osa_idx["arc_days"])
+        df["nobs_obs"] = df["primary_desig"].map(osa_idx["nobs"])
+        df["disc_by"] = df["primary_desig"].map(osa_idx["disc_by"])
+        joined = df["first_obs"].notna().sum()
+        print(f"Joined obs aggregates for {joined:,} of {len(df):,} "
+              "objects (boxscore × obs_summary_all)")
 
     _df_boxscore = df
     return _df_boxscore
@@ -3152,8 +3216,10 @@ _CONSENSUS_TABLE_BOOL_COLS = [
 # columns (per the original Observability scoping), with `a` and Earth
 # MOID added back since this surface is per-object rather than per-NEO.
 # obs_summary-derived columns (first_obs/last_obs/disc_by) are deferred
-# until a wider aggregation cache lands — for v1 we surface MPC's own
-# `arc_length_total` and `nobs_total` instead (NULL for ~50% of rows).
+# `first_obs`, `last_obs`, `arc_days_obs`, `nobs_obs`, `disc_by` come
+# from the obs_summary_all matview (joined into boxscore_cache at
+# load time).  `arc_days_obs` / `nobs_obs` supersede MPC's
+# `arc_length_total` / `nobs_total`, which are NULL for ~50% of rows.
 _OBS_HISTORY_TABLE_COLUMNS = [
     {"name": "Designation", "id": "provid"},
     {"name": "Permid",      "id": "permid"},
@@ -3165,8 +3231,11 @@ _OBS_HISTORY_TABLE_COLUMNS = [
     {"name": "e",           "id": "e"},
     {"name": "i (°)",       "id": "i"},
     {"name": "a (AU)",      "id": "a"},
-    {"name": "arc (d)",     "id": "arc_length_total"},
-    {"name": "n_obs",       "id": "nobs_total"},
+    {"name": "first_obs",   "id": "first_obs"},
+    {"name": "last_obs",    "id": "last_obs"},
+    {"name": "arc (d)",     "id": "arc_days_obs"},
+    {"name": "n_obs",       "id": "nobs_obs"},
+    {"name": "disc by",     "id": "disc_by"},
     {"name": "U",           "id": "u_param"},
     {"name": "Nopp",        "id": "nopp"},
 ]
@@ -6270,12 +6339,10 @@ app.layout = html.Div(
                                 "per-object observation-history plot "
                                 "above the table — V vs. obstime over "
                                 "the obs_sbn record, with elongation > "
-                                "90 ° / ≤ 90 ° shaded.  arc and n_obs "
-                                "are MPC's own counts (NULL for ~50 % "
-                                "of rows); the obs_sbn-derived "
-                                "first_obs / last_obs / disc_by / "
-                                "current-solar-elongation columns are "
-                                "queued for a wider aggregation cache.",
+                                "90 ° / ≤ 90 ° shaded.  first_obs / "
+                                "last_obs / arc / n_obs / disc by come "
+                                "from the nightly obs_summary_all "
+                                "matview over the full obs_sbn record.",
                                 className="subtext",
                                 style={"fontSize": "13px",
                                        "marginBottom": "16px",
@@ -11258,12 +11325,15 @@ def update_obshist(classes, filters, h_range, nopp_range, nobs_range,
     nobs_lo, nobs_hi = nobs_range
     if nobs_lo > 0 or nobs_hi < 500:
         # "500+" upper-end: unbounded above when the user keeps the
-        # slider at max.
+        # slider at max.  Prefer the obs_summary_all-derived count
+        # (`nobs_obs`) over MPC's patchy `nobs_total` — the matview
+        # value is always present.
+        nobs_col = "nobs_obs" if "nobs_obs" in filt.columns else "nobs_total"
         if nobs_hi >= 500:
-            mask = filt["nobs_total"].ge(nobs_lo) | filt["nobs_total"].isna()
+            mask = filt[nobs_col].ge(nobs_lo) | filt[nobs_col].isna()
         else:
-            mask = (filt["nobs_total"].between(nobs_lo, nobs_hi)
-                    | filt["nobs_total"].isna())
+            mask = (filt[nobs_col].between(nobs_lo, nobs_hi)
+                    | filt[nobs_col].isna())
         filt = filt[mask]
 
     n_match = len(filt)
@@ -11283,7 +11353,13 @@ def update_obshist(classes, filters, h_range, nopp_range, nobs_range,
         filt.loc[bound, "a"] * (1.0 + filt.loc[bound, "e"]))
 
     cols = [c["id"] for c in _OBS_HISTORY_TABLE_COLUMNS]
-    display = filt[cols].copy()
+    # Tolerate missing matview columns when the obs_summary_all join
+    # didn't run (e.g. matview not yet built locally).
+    cols_present = [c for c in cols if c in filt.columns]
+    display = filt[cols_present].copy()
+    for c in cols:
+        if c not in display.columns:
+            display[c] = ""
 
     # Numeric formatting for legibility.  Pandas writes NaN as NaN when
     # serialised to dict, which the DataTable renders as the string
@@ -11293,11 +11369,17 @@ def update_obshist(classes, filters, h_range, nopp_range, nobs_range,
     for col, fmt in fmt_map.items():
         display[col] = display[col].apply(
             lambda v, f=fmt: f % v if pd.notna(v) else "")
-    for col in ("arc_length_total", "nobs_total", "u_param", "nopp"):
-        display[col] = display[col].apply(
-            lambda v: int(v) if pd.notna(v) else "")
-    for col in ("permid", "iau_name", "ext_name"):
-        display[col] = display[col].fillna("").astype(object)
+    for col in ("arc_days_obs", "nobs_obs", "u_param", "nopp"):
+        if col in display.columns:
+            display[col] = display[col].apply(
+                lambda v: int(v) if pd.notna(v) else "")
+    for col in ("first_obs", "last_obs"):
+        if col in display.columns:
+            display[col] = display[col].apply(
+                lambda v: str(v) if pd.notna(v) else "")
+    for col in ("permid", "iau_name", "ext_name", "disc_by"):
+        if col in display.columns:
+            display[col] = display[col].fillna("").astype(object)
 
     if truncated:
         status = (f"{n_match:,} objects match; showing the brightest "
@@ -11447,6 +11529,11 @@ def _obshist_details_for(*, permid=None, provid=None):
     a = row.get("a")
     e = row.get("e")
     Q = a * (1 + e) if pd.notna(a) and pd.notna(e) and e < 1 else None
+    # Prefer obs_sbn-derived nobs_obs (always present) over MPC's
+    # nobs_total which is NULL for ~50% of mpc_orbits rows.
+    nobs_val = row.get("nobs_obs")
+    if not pd.notna(nobs_val):
+        nobs_val = row.get("nobs_total")
     items = [
         ("Class", row.get("ext_name") or "—"),
         ("H",    _f(row.get("h"), "%.2f")),
@@ -11459,8 +11546,7 @@ def _obshist_details_for(*, permid=None, provid=None):
                  if pd.notna(row.get("u_param")) else "—"),
         ("Nopp", _f(row.get("nopp"), "%d")
                  if pd.notna(row.get("nopp")) else "—"),
-        ("n_obs", _f(row.get("nobs_total"), "%d")
-                  if pd.notna(row.get("nobs_total")) else "—"),
+        ("n_obs", _f(nobs_val, "%d") if pd.notna(nobs_val) else "—"),
     ]
     chips = []
     for label, value in items:
@@ -11472,6 +11558,38 @@ def _obshist_details_for(*, permid=None, provid=None):
                       style={"fontWeight": "600",
                              "marginRight": "14px"}),
         ])
+    # External-lookup buttons (JPL SBDB, MPC Explorer).  Match the
+    # MPEC viewer's styling so they read as the same affordance.
+    # Prefer the IAU name → provid → permid as the search key.
+    from urllib.parse import quote as _urlquote
+    sbdb_key = (row.get("iau_name") or row.get("provid")
+                or row.get("permid") or "")
+    sbdb_key = str(sbdb_key).strip()
+    # MPC Explorer dislikes whitespace less than SBDB does — the
+    # `Designated` tab matches on the unpacked form with the space
+    # in place (e.g. "2024 YR4").
+    mpc_key = (row.get("provid") or row.get("permid")
+               or row.get("iau_name") or "")
+    mpc_key = str(mpc_key).strip()
+    buttons = []
+    if sbdb_key:
+        buttons.append(html.A(
+            "JPL SBDB",
+            href=("https://ssd.jpl.nasa.gov/tools/sbdb_lookup.html"
+                  f"#/?sstr={_urlquote(sbdb_key, safe='')}"),
+            target="_blank", style=_link_btn_style()))
+    if mpc_key:
+        buttons.append(html.A(
+            "MPC Explorer",
+            href=("https://data.minorplanetcenter.net/explorer/"
+                  f"?tab=Designated&search={_urlquote(mpc_key, safe='')}"),
+            target="_blank", style=_link_btn_style()))
+    if buttons:
+        chips.append(html.Span(
+            buttons,
+            style={"display": "inline-flex", "gap": "6px",
+                   "marginLeft": "8px",
+                   "verticalAlign": "middle"}))
     return chips
 
 

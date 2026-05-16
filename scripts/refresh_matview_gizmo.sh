@@ -8,6 +8,7 @@
 #   1. REFRESH MATERIALIZED VIEW CONCURRENTLY obs_sbn_neo  (~3.6 min)
 #   2. NEO consensus source_membership refresh (6 sources, best-effort)
 #   3. REFRESH MATERIALIZED VIEW CONCURRENTLY obs_summary  (~5 min, best-effort)
+#   3b. REFRESH MATERIALIZED VIEW CONCURRENTLY obs_summary_all (~2:30 min)
 #   4. python app/discovery_stats.py --refresh-only        (~15 min; all caches
 #                                                            — including
 #                                                            consensus_membership,
@@ -172,6 +173,25 @@ else
     log "WARN stage 3: rc=$STAGE3_RC elapsed=${STAGE3_ELAPSED}s — obs_summary may be stale"
 fi
 
+# -- Stage 3b: obs_summary_all matview refresh (best-effort) --
+# Full-catalog sibling of obs_summary (not NEO-restricted) that the
+# Observation history tab joins against for first_obs / last_obs /
+# arc / disc_by columns. Independent of NEO consensus — refresh
+# even if stage 2 had failures. ~2:30 on Gizmo NVMe.
+log "--- stage 3b: REFRESH MATERIALIZED VIEW CONCURRENTLY obs_summary_all ---"
+START=$(date +%s)
+"$PSQL" -d mpc_sbn -v ON_ERROR_STOP=1 \
+    -c "REFRESH MATERIALIZED VIEW CONCURRENTLY public.obs_summary_all;"
+STAGE3B_RC=$?
+STAGE3B_ELAPSED=$(( $(date +%s) - START ))
+if [[ $STAGE3B_RC -eq 0 ]]; then
+    STAGE3B_NOTE="\"obs_summary_all\": \"ok\""
+    log "stage 3b: rc=0 elapsed=${STAGE3B_ELAPSED}s"
+else
+    STAGE3B_NOTE="\"obs_summary_all\": \"fail\", \"stage3b_rc\": $STAGE3B_RC"
+    log "WARN stage 3b: rc=$STAGE3B_RC elapsed=${STAGE3B_ELAPSED}s — obs_summary_all may be stale"
+fi
+
 # -- Stage 4: python parquet cache rebuild --
 # Builds neo_cache, apparition_cache, boxscore_cache, AND
 # consensus_membership. Critical that this runs AFTER stages 2 + 3 so
@@ -324,11 +344,11 @@ STAGE5_ELAPSED=$(( $(date +%s) - START ))
 log "stage 5: elapsed=${STAGE5_ELAPSED}s"
 
 TOTAL=$(( $(date +%s) - START_ALL ))
-log "SUCCESS total ${TOTAL}s (stage1=${STAGE1_ELAPSED}s stage2=${STAGE2_ELAPSED}s stage3=${STAGE3_ELAPSED}s stage4=${STAGE4_ELAPSED}s stage5=${STAGE5_ELAPSED}s)"
+log "SUCCESS total ${TOTAL}s (stage1=${STAGE1_ELAPSED}s stage2=${STAGE2_ELAPSED}s stage3=${STAGE3_ELAPSED}s stage3b=${STAGE3B_ELAPSED}s stage4=${STAGE4_ELAPSED}s stage5=${STAGE5_ELAPSED}s)"
 
 # Record cache file sizes as a sanity-check proxy.
 CACHE_SIZES=""
-for prefix in neo_cache apparition_cache boxscore_cache consensus_membership obscodes_cache lifetime_cache site_mag_stats; do
+for prefix in neo_cache apparition_cache boxscore_cache consensus_membership obscodes_cache lifetime_cache site_mag_stats obs_summary_all_cache; do
     f=$(ls -1t "$APP_DIR"/.${prefix}_*.parquet 2>/dev/null | head -1)
     if [[ -n "$f" ]]; then
         sz=$(stat -f %z "$f")
@@ -337,9 +357,10 @@ for prefix in neo_cache apparition_cache boxscore_cache consensus_membership obs
 done
 CACHE_SIZES="${CACHE_SIZES%, }"
 
-EXTRA="\"stage1_s\": $STAGE1_ELAPSED, \"stage2_s\": $STAGE2_ELAPSED, \"stage3_s\": $STAGE3_ELAPSED, \"stage4_s\": $STAGE4_ELAPSED, \"stage5_s\": $STAGE5_ELAPSED, \"cache_sizes\": {${CACHE_SIZES}}"
+EXTRA="\"stage1_s\": $STAGE1_ELAPSED, \"stage2_s\": $STAGE2_ELAPSED, \"stage3_s\": $STAGE3_ELAPSED, \"stage3b_s\": $STAGE3B_ELAPSED, \"stage4_s\": $STAGE4_ELAPSED, \"stage5_s\": $STAGE5_ELAPSED, \"cache_sizes\": {${CACHE_SIZES}}"
 [[ -n "$CONSENSUS_RESULTS" ]] && EXTRA+=", $CONSENSUS_RESULTS"
 [[ -n "$STAGE3_NOTE" ]] && EXTRA+=", $STAGE3_NOTE"
+[[ -n "$STAGE3B_NOTE" ]] && EXTRA+=", $STAGE3B_NOTE"
 [[ -n "$STAGE5_NOTE" ]] && EXTRA+=", $STAGE5_NOTE"
 write_status OK "$TOTAL" "$EXTRA"
 log "=== gizmo refresh end — OK ==="
