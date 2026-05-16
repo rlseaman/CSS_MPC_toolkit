@@ -6291,6 +6291,37 @@ app.layout = html.Div(
                                        "alignItems": "flex-end",
                                        "marginBottom": "12px"},
                                 children=[
+                                    # Designation entry — resolves permid
+                                    # / provid / iau_name / packed forms
+                                    # via lib.mpc_convert.unpack_designation
+                                    # and the boxscore cache, then
+                                    # switches the table to the object's
+                                    # orbit class and selects its row.
+                                    html.Div(style={"width": "220px"},
+                                             children=[
+                                        html.Label(
+                                            "Designation",
+                                            style=LABEL_STYLE),
+                                        dcc.Input(
+                                            id="obshist-designation",
+                                            type="text",
+                                            placeholder=(
+                                                "e.g. Pluto, 134340, "
+                                                "2024 YR4…"),
+                                            debounce=True,
+                                            style={"width": "100%",
+                                                   "padding": "4px 8px",
+                                                   "fontSize": "12px",
+                                                   "fontFamily":
+                                                       "sans-serif"},
+                                        ),
+                                        html.Div(
+                                            id="obshist-designation-status",
+                                            className="subtext",
+                                            style={"fontSize": "11px",
+                                                   "marginTop": "4px",
+                                                   "minHeight": "14px"}),
+                                    ]),
                                     html.Div(style={"minWidth": "320px",
                                                     "flex": "1"},
                                              children=[
@@ -6527,6 +6558,11 @@ app.layout = html.Div(
                             dcc.Store(id="obshist-sink-bands"),
                             dcc.Store(id="obshist-sink-shading"),
                             dcc.Store(id="obshist-sink-vslider"),
+                            # Carries the resolved designation between
+                            # the entry-box submit handler and the
+                            # row-selection follow-up that fires once
+                            # `update_obshist` refreshes the table.
+                            dcc.Store(id="obshist-pending-target"),
                             # Status banner — row count, truncation
                             # warning, etc.  Set by the callback.
                             html.Div(
@@ -7287,6 +7323,7 @@ def _get_defaults():
         "station-date-start": "",
         "station-date-end": "",
         # Tab 11 — Observation history
+        "obshist-designation": "",
         "obshist-classes": ["TNO"],
         "obshist-filters": [],
         "obshist-h-range": [0, 32],
@@ -7323,9 +7360,9 @@ _TAB_KEYS = {
                    "tool-class-q", "tool-obs80-input", "tool-date-input",
                    "tool-airmass-x", "tool-airmass-alt",
                    "tool-cln-date", "tool-cln-offset", "tool-cln-tz"},
-    "tab-obshist": {"obshist-classes", "obshist-filters",
-                    "obshist-h-range", "obshist-nopp-range",
-                    "obshist-nobs-range"},
+    "tab-obshist": {"obshist-designation", "obshist-classes",
+                    "obshist-filters", "obshist-h-range",
+                    "obshist-nopp-range", "obshist-nobs-range"},
 }
 _SHARED_KEYS = {"group-by", "plot-height", "neo-source-filter"}
 
@@ -7349,7 +7386,7 @@ _RESET_ORDER = [
     "tool-airmass-x", "tool-airmass-alt",
     "tool-cln-date", "tool-cln-offset", "tool-cln-tz",
     "station-site", "station-date-start", "station-date-end",
-    "obshist-classes", "obshist-filters",
+    "obshist-designation", "obshist-classes", "obshist-filters",
     "obshist-h-range", "obshist-nopp-range",
     "obshist-nobs-range",
     "group-by", "plot-height", "neo-source-filter",
@@ -11448,6 +11485,137 @@ def random_obshist_row(n_clicks, data, page_size):
     return [idx], page
 
 
+def _resolve_obshist_designation(text):
+    """Resolve a free-form designation to a boxscore row.
+
+    Accepts permid (digits), provid ("2019 UZ173", "2024 YR4"), iau_name
+    ("Pluto"), or packed forms ("K24Y04R", "00433  ", "~0fr6").  Returns
+    a (permid, provid, iau_name, ext_name) tuple or None.
+
+    Packed forms route through `lib.mpc_convert.unpack_designation`
+    (which delegates to the `mpc_designation` library), then the result
+    is re-resolved as a normal designation.
+    """
+    if not text:
+        return None
+    bdf = load_boxscore_data()
+    if bdf is None or len(bdf) == 0:
+        return None
+    raw = text.strip()
+    if not raw:
+        return None
+
+    def _cell(row, col):
+        v = row.get(col)
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return None
+        s = str(v).strip()
+        return s or None
+
+    def _row_tuple(row):
+        return (_cell(row, "permid"), _cell(row, "provid"),
+                _cell(row, "iau_name"), _cell(row, "ext_name"))
+
+    # Pure-numeric → try permid first.
+    if raw.isdigit():
+        m = bdf[bdf["permid"].astype(str) == raw]
+        if len(m):
+            return _row_tuple(m.iloc[0])
+
+    # Provid (case + whitespace normalised — provids are upper-case
+    # with a single space between the year and the half-month code).
+    norm = " ".join(raw.upper().split())
+    m = bdf[bdf["provid"].astype(str).str.upper().str.strip() == norm]
+    if len(m):
+        return _row_tuple(m.iloc[0])
+
+    # IAU name (case-insensitive).
+    lower = raw.lower()
+    m = bdf[bdf["iau_name"].astype(str).str.lower().str.strip() == lower]
+    if len(m):
+        return _row_tuple(m.iloc[0])
+
+    # Last resort: try unpacking via the mpc_designation library.  If
+    # the result looks different from the input, recurse once.
+    try:
+        from lib.mpc_convert import unpack_designation
+        unpacked = unpack_designation(raw)
+    except Exception:
+        unpacked = raw
+    if unpacked and unpacked.strip() != raw:
+        return _resolve_obshist_designation(unpacked)
+    return None
+
+
+@app.callback(
+    Output("obshist-classes", "value", allow_duplicate=True),
+    Output("obshist-filters", "value", allow_duplicate=True),
+    Output("obshist-h-range", "value", allow_duplicate=True),
+    Output("obshist-nopp-range", "value", allow_duplicate=True),
+    Output("obshist-nobs-range", "value", allow_duplicate=True),
+    Output("obshist-pending-target", "data"),
+    Output("obshist-designation-status", "children"),
+    Input("obshist-designation", "value"),
+    prevent_initial_call=True,
+)
+def resolve_obshist_designation_input(value):
+    """Designation entry submit → broaden filters to the object's class.
+
+    With `debounce=True` on the Input the callback fires only when
+    the value settles (Enter or blur), not on every keystroke.  An
+    empty value is treated as a clear — no state change.
+    """
+    if not value or not value.strip():
+        return (no_update,) * 5 + (None, "")
+    result = _resolve_obshist_designation(value.strip())
+    if result is None:
+        return ((no_update,) * 5
+                + (None, f"Not found: '{value.strip()}'"))
+    permid, provid, iau_name, ext_name = result
+    label = iau_name or provid or permid or value.strip()
+    # Switch the table to the object's class and clear the other
+    # filters / sliders so the row is guaranteed to be in view.
+    target = {"permid": permid, "provid": provid, "iau_name": iau_name}
+    msg = (f"Resolved: {label}"
+           + (f" — class {ext_name}" if ext_name else ""))
+    return ([ext_name] if ext_name else no_update,
+            [], [0, 32], [0, 30], [0, 500], target, msg)
+
+
+@app.callback(
+    Output("obshist-table", "selected_rows", allow_duplicate=True),
+    Output("obshist-table", "page_current", allow_duplicate=True),
+    Output("obshist-pending-target", "data", allow_duplicate=True),
+    Input("obshist-table", "data"),
+    State("obshist-pending-target", "data"),
+    State("obshist-table", "page_size"),
+    prevent_initial_call=True,
+)
+def select_obshist_pending(data, target, page_size):
+    """When `update_obshist` rewrites the table, snap to the pending row.
+
+    The designation handler can't set `selected_rows` directly
+    because the table data hasn't been recomputed yet at that point.
+    Instead it stores the resolved target and we pick it up here on
+    the next `obshist-table.data` change.
+    """
+    if not target or not data:
+        raise PreventUpdate
+    permid = (target.get("permid") or "").strip()
+    provid = (target.get("provid") or "").strip()
+    for idx, row in enumerate(data):
+        row_permid = str(row.get("permid") or "").strip()
+        row_provid = str(row.get("provid") or "").strip()
+        if (permid and row_permid == permid) or \
+           (provid and row_provid == provid):
+            page = idx // (page_size or 50)
+            return [idx], page, None
+    # Target didn't make it into the visible (possibly truncated)
+    # table — clear the pending marker so we don't keep retrying on
+    # subsequent table refreshes.
+    return no_update, no_update, None
+
+
 # Clientside controls for the observation-history plot.  These used
 # to live as Plotly updatemenus inside the figure, but those buttons
 # render in SVG and don't pick up our theme CSS on hover (light-on-
@@ -11455,26 +11623,26 @@ def random_obshist_row(n_clicks, data, page_size):
 # calls from html.Button clicks lets the controls inherit the page
 # button styling instead.
 
-# Helper: resolve the dcc.Graph wrapper div to the inner Plotly
-# graph div.  document.getElementById('obshist-plot') returns the
-# React wrapper which doesn't carry `.data` / `.layout` — Plotly
-# attaches those to the `.js-plotly-plot` child.
-_OBSHIST_PLOTLY_DIV_HELPER = """
-function _obshist_pdiv() {
-    var c = document.getElementById('obshist-plot');
-    if (!c) { return null; }
-    var p = c.querySelector('.js-plotly-plot');
-    return p || c;
-}
-"""
+# NOTE: Each callback's JS string must be a single function expression
+# — Dash assigns it as `window.dash_clientside.<id> = <JS>`, so any
+# extra statements (e.g. a prepended `function _helper() {}`) make
+# the trailing anonymous function a statement-level function
+# declaration without a name, which is a SyntaxError and the
+# callback silently fails to register.  Keep the wrapper-to-
+# plotly-div lookup inline.
+#
+# The wrapper div carries the React id `obshist-plot`; Plotly
+# attaches `.data` / `.layout` / `._fullLayout` only to the inner
+# `.js-plotly-plot` child it controls.
 
 app.clientside_callback(
-    _OBSHIST_PLOTLY_DIV_HELPER + """
+    """
     function(n_clicks) {
         if (!n_clicks) { return null; }
-        var gd = _obshist_pdiv();
-        if (!gd || !gd.layout) { return null; }
-        var has_v = gd.layout.yaxis2 !== undefined;
+        var c = document.getElementById('obshist-plot');
+        var gd = c ? c.querySelector('.js-plotly-plot') : null;
+        if (!gd || !gd._fullLayout) { return null; }
+        var has_v = gd._fullLayout.yaxis2 !== undefined;
         if (has_v) {
             Plotly.relayout(gd, {
                 'xaxis.autorange': true,
@@ -11496,10 +11664,11 @@ app.clientside_callback(
 )
 
 app.clientside_callback(
-    _OBSHIST_PLOTLY_DIV_HELPER + """
+    """
     function(n_clicks) {
         if (!n_clicks) { return null; }
-        var gd = _obshist_pdiv();
+        var c = document.getElementById('obshist-plot');
+        var gd = c ? c.querySelector('.js-plotly-plot') : null;
         if (!gd || !gd.data) { return null; }
         var indices = gd.data.map(function(_, i) { return i; });
         Plotly.restyle(gd, {visible: true}, indices);
@@ -11512,10 +11681,11 @@ app.clientside_callback(
 )
 
 app.clientside_callback(
-    _OBSHIST_PLOTLY_DIV_HELPER + """
+    """
     function(n_clicks) {
         if (!n_clicks) { return null; }
-        var gd = _obshist_pdiv();
+        var c = document.getElementById('obshist-plot');
+        var gd = c ? c.querySelector('.js-plotly-plot') : null;
         if (!gd || !gd.layout || !gd.layout.shapes) { return null; }
         var newShapes = gd.layout.shapes.map(function(s) {
             return Object.assign({}, s, {visible: s.visible === false});
@@ -11534,11 +11704,14 @@ app.clientside_callback(
 # to [high, low].  At full-extent the slider acts as "auto" and we
 # restore autorange='reversed'.
 app.clientside_callback(
-    _OBSHIST_PLOTLY_DIV_HELPER + """
+    """
     function(value) {
         if (!value || value.length !== 2) { return null; }
-        var gd = _obshist_pdiv();
-        if (!gd || !gd.layout || !gd.layout.yaxis2) { return null; }
+        var c = document.getElementById('obshist-plot');
+        var gd = c ? c.querySelector('.js-plotly-plot') : null;
+        if (!gd || !gd._fullLayout || !gd._fullLayout.yaxis2) {
+            return null;
+        }
         if (value[0] <= 5 && value[1] >= 28) {
             Plotly.relayout(gd, {'yaxis.autorange': 'reversed'});
         } else {
