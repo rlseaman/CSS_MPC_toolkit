@@ -6266,13 +6266,16 @@ app.layout = html.Div(
                             html.Div(
                                 "Sortable catalog of mpc_orbits objects "
                                 "filtered by orbit class.  Click a row "
-                                "(coming next) to load the per-object "
-                                "observation-history plot.  Phase 1 "
-                                "surfaces MPC's own arc/nobs (NULL for "
-                                "~50 % of rows); a wider aggregation "
-                                "cache for first_obs / last_obs / "
-                                "disc_by is queued for Phase 2, as is a "
-                                "current-solar-elongation column.",
+                                "(or use Random object) to load the "
+                                "per-object observation-history plot "
+                                "above the table — V vs. obstime over "
+                                "the obs_sbn record, with elongation > "
+                                "90 ° / ≤ 90 ° shaded.  arc and n_obs "
+                                "are MPC's own counts (NULL for ~50 % "
+                                "of rows); the obs_sbn-derived "
+                                "first_obs / last_obs / disc_by / "
+                                "current-solar-elongation columns are "
+                                "queued for a wider aggregation cache.",
                                 className="subtext",
                                 style={"fontSize": "13px",
                                        "marginBottom": "16px",
@@ -6409,6 +6412,16 @@ app.layout = html.Div(
                             # figure to the default.
                             dcc.Store(id="obshist-plot-state",
                                       data={"key": None}),
+                            # Per-object orbital details — populated by
+                            # the plot callback from boxscore_cache.
+                            # Provides the table-row context without
+                            # crowding the figure with annotations.
+                            html.Div(
+                                id="obshist-details",
+                                style={"fontSize": "12px",
+                                       "marginBottom": "4px",
+                                       "minHeight": "16px",
+                                       "fontFamily": "sans-serif"}),
                             # Per-object observation-history plot sits
                             # above the table so it's the first thing
                             # the user sees after picking a class.
@@ -6472,6 +6485,16 @@ app.layout = html.Div(
                                     "backgroundColor": "transparent",
                                     "color": "inherit",
                                 },
+                                # Highlight the currently-selected row
+                                # so the user can see at a glance which
+                                # object the plot above corresponds to.
+                                style_data_conditional=[
+                                    {"if": {"state": "selected"},
+                                     "backgroundColor":
+                                         "rgba(70, 140, 70, 0.22)",
+                                     "border": "1px solid "
+                                               "rgba(70, 140, 70, 0.6)"},
+                                ],
                                 # row_selectable lets the user click a row
                                 # to load its observation-history plot
                                 # above.  `cell_selectable=False` keeps
@@ -11161,6 +11184,7 @@ _OBSHIST_DEFAULT_PERMID = "134340"  # Pluto — first thing rendered when
     Output("obshist-plot", "figure"),
     Output("obshist-plot-status", "children"),
     Output("obshist-plot-state", "data"),
+    Output("obshist-details", "children"),
     # `derived_virtual_selected_rows` is the right index into
     # `derived_virtual_data` because both refer to the *visible*
     # (sorted + filtered + paginated) view.  `derived_virtual_data`
@@ -11210,7 +11234,7 @@ def update_obshist_plot(selected_rows, theme_name, active_tab,
     else:
         # Filter cleared the selection (not a theme/tab event) — keep
         # the previous plot rather than snapping back to Pluto.
-        return no_update, no_update, no_update
+        return no_update, no_update, no_update, no_update
 
     label_bits = []
     if name:
@@ -11221,16 +11245,21 @@ def update_obshist_plot(selected_rows, theme_name, active_tab,
         label_bits.append(f"permid {permid}")
     label = " — ".join(label_bits) if label_bits else "?"
 
+    # Look up orbital details from boxscore so the panel above the
+    # plot stays in sync even when the selection was triggered from
+    # outside the table (e.g., Random object, default Pluto).
+    details = _obshist_details_for(permid=permid, provid=provid)
+
     try:
         if permid:
             df = fetch_obs(permid=permid)
         else:
             df = fetch_obs(provid=provid)
     except Exception as e:
-        return go.Figure(), f"Query failed for {label}: {e}", no_update
+        return go.Figure(), f"Query failed for {label}: {e}", no_update, details
 
     if df.empty:
-        return go.Figure(), f"No obs_sbn rows for {label}.", no_update
+        return go.Figure(), f"No obs_sbn rows for {label}.", no_update, details
 
     theme_dict = theme(theme_name)
     fig = build_history_figure(
@@ -11238,26 +11267,85 @@ def update_obshist_plot(selected_rows, theme_name, active_tab,
     status = (f"Plotted {len(df):,} obs for {label} "
               f"({df['stn'].nunique()} stations, "
               f"{df['obstime'].min():%Y} – {df['obstime'].max():%Y}).")
-    return fig, status, {"key": new_key}
+    return fig, status, {"key": new_key}, details
+
+
+def _obshist_details_for(*, permid=None, provid=None):
+    """Render an inline orbital-parameter panel for one object.
+
+    Looks up the row in boxscore_cache so the panel works regardless
+    of whether the object is in the table's current filter (the
+    Random-pick and default-Pluto code paths bypass the table).
+    """
+    bdf = load_boxscore_data()
+    row = None
+    if permid:
+        match = bdf[bdf["permid"] == permid]
+        if len(match):
+            row = match.iloc[0]
+    if row is None and provid:
+        match = bdf[bdf["provid"] == provid]
+        if len(match):
+            row = match.iloc[0]
+    if row is None:
+        return ""
+
+    def _f(v, fmt):
+        return fmt % v if pd.notna(v) else "—"
+
+    a = row.get("a")
+    e = row.get("e")
+    Q = a * (1 + e) if pd.notna(a) and pd.notna(e) and e < 1 else None
+    items = [
+        ("Class", row.get("ext_name") or "—"),
+        ("H",    _f(row.get("h"), "%.2f")),
+        ("q",    _f(row.get("q"), "%.4f AU")),
+        ("Q",    _f(Q, "%.4f AU")),
+        ("e",    _f(row.get("e"), "%.4f")),
+        ("i",    _f(row.get("i"), "%.3f°")),
+        ("a",    _f(row.get("a"), "%.4f AU")),
+        ("U",    _f(row.get("u_param"), "%d")
+                 if pd.notna(row.get("u_param")) else "—"),
+        ("Nopp", _f(row.get("nopp"), "%d")
+                 if pd.notna(row.get("nopp")) else "—"),
+        ("n_obs", _f(row.get("nobs_total"), "%d")
+                  if pd.notna(row.get("nobs_total")) else "—"),
+    ]
+    chips = []
+    for label, value in items:
+        chips.extend([
+            html.Span(f"{label}: ",
+                      style={"color": "var(--subtext, #888)",
+                             "marginRight": "2px"}),
+            html.Span(str(value),
+                      style={"fontWeight": "600",
+                             "marginRight": "14px"}),
+        ])
+    return chips
 
 
 @app.callback(
     Output("obshist-table", "selected_rows", allow_duplicate=True),
+    Output("obshist-table", "page_current", allow_duplicate=True),
     Input("obshist-random-btn", "n_clicks"),
     State("obshist-table", "data"),
+    State("obshist-table", "page_size"),
     prevent_initial_call=True,
 )
-def random_obshist_row(n_clicks, data):
+def random_obshist_row(n_clicks, data, page_size):
     """Pick a uniform-random row from the current table data.
 
     Setting `selected_rows` triggers the plot callback through the
     normal `derived_virtual_selected_rows` chain, so the random pick
-    flows through the same code path as a user click.
+    flows through the same code path as a user click.  Also paginates
+    so the highlighted row is actually visible.
     """
     if not n_clicks or not data:
         raise PreventUpdate
     import random
-    return [random.randrange(len(data))]
+    idx = random.randrange(len(data))
+    page = idx // (page_size or 50)
+    return [idx], page
 
 
 # ---------------------------------------------------------------------------

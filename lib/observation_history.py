@@ -328,8 +328,12 @@ def build_history_figure(df: pd.DataFrame, *, name: str,
             ("12 – 25", dict(autorange=False, range=[25, 12])),
         ]
 
-    button_style = dict(bgcolor=button_bg, bordercolor=button_border,
-                        font=dict(color=fg_color))
+    button_style = dict(
+        bgcolor=button_bg,
+        bordercolor=button_border,
+        borderwidth=1,
+        font=dict(color=fg_color, size=12, family="sans-serif"),
+    )
 
     # The Reset-axes args list depends on whether the V panel exists.
     # When it does we restore the reversed V autoscale AND yaxis2; in
@@ -364,13 +368,18 @@ def build_history_figure(df: pd.DataFrame, *, name: str,
         ),
     ]
     if has_v:
+        # V range as a button row (was a dropdown — Plotly's dropdown
+        # popup uses light styling in some browsers regardless of the
+        # menu bgcolor / font config, which made the options unreadable
+        # in dark mode).  Inline buttons render with the same explicit
+        # style as the Reset / Show all / Toggle row.
         updatemenus.append(dict(
-            type="dropdown", direction="up", showactive=True,
+            type="buttons", direction="right", showactive=False,
             x=0.555, xanchor="left", y=controls_y, yanchor="top",
             pad=dict(t=4, b=4),
             **button_style,
             buttons=[
-                dict(label=f"V range: {lbl}", method="relayout",
+                dict(label=f"V: {lbl}", method="relayout",
                      args=[{f"yaxis.{k}": v for k, v in spec.items()}])
                 for lbl, spec in v_presets
             ],
