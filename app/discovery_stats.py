@@ -11780,18 +11780,32 @@ app.clientside_callback(
 
 # Selected-row highlight for the obshist table.  dash-table's
 # `state: "selected"` style_data_conditional only matches active
-# cells, not radio-selected rows, so we drive the highlight from
-# `derived_virtual_selected_rows` (the visible-view index) which is
-# the same input the plot callback uses.
+# cells, not radio-selected rows.  `row_index` semantics in
+# style_data_conditional are also unreliable across sort/filter
+# states.  Match by the row's actual permid (or provid for
+# unnumbered objects) via `filter_query` — index-independent.
 @app.callback(
     Output("obshist-table", "style_data_conditional"),
-    Input("obshist-table", "derived_virtual_selected_rows"),
+    Input("obshist-table", "selected_rows"),
+    State("obshist-table", "data"),
 )
-def highlight_obshist_selected(selected):
-    if not selected:
+def highlight_obshist_selected(selected, data):
+    if not selected or not data:
+        return []
+    idx = selected[0]
+    if not (0 <= idx < len(data)):
+        return []
+    row = data[idx]
+    permid = str(row.get("permid") or "").strip()
+    provid = str(row.get("provid") or "").strip()
+    if permid:
+        query = '{permid} eq "' + permid + '"'
+    elif provid:
+        query = '{provid} eq "' + provid + '"'
+    else:
         return []
     return [{
-        "if": {"row_index": selected[0]},
+        "if": {"filter_query": query},
         "backgroundColor": "rgba(70, 140, 70, 0.32)",
         "borderTop": "1px solid rgba(70, 140, 70, 0.75)",
         "borderBottom": "1px solid rgba(70, 140, 70, 0.75)",
