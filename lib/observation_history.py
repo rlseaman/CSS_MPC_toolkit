@@ -208,7 +208,8 @@ def build_history_figure(df: pd.DataFrame, *, name: str,
                          v_presets: list[tuple[str, dict]] | None = None,
                          top_n_sites: int = 10,
                          height: int = 820,
-                         theme: dict | None = None) -> go.Figure:
+                         theme: dict | None = None,
+                         with_controls: bool = True) -> go.Figure:
     """Two-panel observation history figure.
 
     Top panel: V (band-corrected) vs obstime, per-band scatter, with vertical
@@ -346,11 +347,15 @@ def build_history_figure(df: pd.DataFrame, *, name: str,
         reset_args = {"xaxis.autorange": True,
                       "yaxis.autorange": True}
 
-    # Buttons sit well below the bottom subplot's x-axis title; the
-    # earlier y=-0.22 overlapped "Observation time".
+    # In-figure controls are only useful for the sandbox / standalone
+    # paths.  The Dash app sets with_controls=False and drives the plot
+    # via html.Button + dcc.RangeSlider below the dcc.Graph, which lets
+    # them inherit the theme's button CSS instead of fighting Plotly's
+    # built-in light hover styling.
     controls_y = -0.32
-    updatemenus = [
-        dict(
+    updatemenus = []
+    if with_controls:
+        updatemenus.append(dict(
             type="buttons", direction="right", showactive=False,
             x=0.30, xanchor="left", y=controls_y, yanchor="top",
             pad=dict(t=4, b=4),
@@ -365,25 +370,19 @@ def build_history_figure(df: pd.DataFrame, *, name: str,
                      args=[dict(shapes=shapes_hidden)],
                      args2=[dict(shapes=shapes_visible)]),
             ],
-        ),
-    ]
-    if has_v:
-        # V range as a button row (was a dropdown — Plotly's dropdown
-        # popup uses light styling in some browsers regardless of the
-        # menu bgcolor / font config, which made the options unreadable
-        # in dark mode).  Inline buttons render with the same explicit
-        # style as the Reset / Show all / Toggle row.
-        updatemenus.append(dict(
-            type="buttons", direction="right", showactive=False,
-            x=0.555, xanchor="left", y=controls_y, yanchor="top",
-            pad=dict(t=4, b=4),
-            **button_style,
-            buttons=[
-                dict(label=f"V: {lbl}", method="relayout",
-                     args=[{f"yaxis.{k}": v for k, v in spec.items()}])
-                for lbl, spec in v_presets
-            ],
         ))
+        if has_v:
+            updatemenus.append(dict(
+                type="buttons", direction="right", showactive=False,
+                x=0.555, xanchor="left", y=controls_y, yanchor="top",
+                pad=dict(t=4, b=4),
+                **button_style,
+                buttons=[
+                    dict(label=f"V: {lbl}", method="relayout",
+                         args=[{f"yaxis.{k}": v for k, v in spec.items()}])
+                    for lbl, spec in v_presets
+                ],
+            ))
 
     caption = ("Shading: pale yellow / muted gold = solar elongation "
                "> 90° (observable); grey = ≤ 90° (near conjunction).  "
@@ -391,7 +390,8 @@ def build_history_figure(df: pd.DataFrame, *, name: str,
                "time.")
     annotations = [dict(
         text=caption, xref="paper", yref="paper",
-        x=0, y=-0.44, xanchor="left", showarrow=False,
+        x=0, y=(-0.44 if with_controls else -0.20),
+        xanchor="left", showarrow=False,
         font=dict(size=11, color=subtext_color),
     )]
     if not has_v:
@@ -419,7 +419,7 @@ def build_history_figure(df: pd.DataFrame, *, name: str,
         ),
         updatemenus=updatemenus,
         annotations=annotations,
-        margin=dict(t=110, b=220, r=180),
+        margin=dict(t=110, b=(220 if with_controls else 110), r=180),
         paper_bgcolor=(theme.get("paper") if theme else None),
         plot_bgcolor=(theme.get("plot") if theme else None),
     )

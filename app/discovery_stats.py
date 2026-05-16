@@ -6441,6 +6441,92 @@ app.layout = html.Div(
                                     config={"displayModeBar": True},
                                 ),
                             ),
+                            # Plot controls — moved out of the Plotly
+                            # figure so they inherit assets/theme.css
+                            # button styling (the in-figure updatemenus
+                            # ignored our theme on hover).  Wired via
+                            # clientside callbacks below.
+                            html.Div(
+                                id="obshist-controls",
+                                style={"display": "flex",
+                                       "flexWrap": "wrap",
+                                       "gap": "8px",
+                                       "alignItems": "center",
+                                       "marginTop": "8px",
+                                       "marginBottom": "12px",
+                                       "fontSize": "12px",
+                                       "fontFamily": "sans-serif"},
+                                children=[
+                                    html.Button(
+                                        "Reset axes",
+                                        id="obshist-btn-reset",
+                                        n_clicks=0,
+                                        style={"padding": "4px 12px",
+                                               "fontSize": "12px",
+                                               "cursor": "pointer"}),
+                                    html.Button(
+                                        "Show all bands",
+                                        id="obshist-btn-bands",
+                                        n_clicks=0,
+                                        style={"padding": "4px 12px",
+                                               "fontSize": "12px",
+                                               "cursor": "pointer"}),
+                                    html.Button(
+                                        "Toggle elongation shading",
+                                        id="obshist-btn-shading",
+                                        n_clicks=0,
+                                        style={"padding": "4px 12px",
+                                               "fontSize": "12px",
+                                               "cursor": "pointer"}),
+                                    # V range slider — driven by the
+                                    # callback to reset on plot change
+                                    # and hidden when the loaded object
+                                    # has no V data.
+                                    html.Div(
+                                        id="obshist-vslider-container",
+                                        style={"flex": "1",
+                                               "minWidth": "260px",
+                                               "marginLeft": "16px",
+                                               "display": "flex",
+                                               "alignItems": "center",
+                                               "gap": "10px"},
+                                        children=[
+                                            html.Span(
+                                                "V range:",
+                                                style={"whiteSpace":
+                                                       "nowrap"}),
+                                            html.Div(
+                                                style={"flex": "1"},
+                                                children=dcc.RangeSlider(
+                                                    id="obshist-vslider",
+                                                    min=5, max=28,
+                                                    step=0.5,
+                                                    value=[5, 28],
+                                                    marks={5: "5",
+                                                           10: "10",
+                                                           15: "15",
+                                                           20: "20",
+                                                           25: "25",
+                                                           28: "28"},
+                                                    tooltip={
+                                                        "placement":
+                                                            "bottom",
+                                                        "always_visible":
+                                                            False},
+                                                    allowCross=False,
+                                                ),
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            # Sink Stores absorb the clientside-callback
+                            # returns (Plotly.relayout doesn't have a
+                            # natural Output target).
+                            dcc.Store(id="obshist-sink-reset"),
+                            dcc.Store(id="obshist-sink-bands"),
+                            dcc.Store(id="obshist-sink-shading"),
+                            dcc.Store(id="obshist-sink-vslider"),
                             # Status banner — row count, truncation
                             # warning, etc.  Set by the callback.
                             html.Div(
@@ -6485,16 +6571,12 @@ app.layout = html.Div(
                                     "backgroundColor": "transparent",
                                     "color": "inherit",
                                 },
-                                # Highlight the currently-selected row
-                                # so the user can see at a glance which
-                                # object the plot above corresponds to.
-                                style_data_conditional=[
-                                    {"if": {"state": "selected"},
-                                     "backgroundColor":
-                                         "rgba(70, 140, 70, 0.22)",
-                                     "border": "1px solid "
-                                               "rgba(70, 140, 70, 0.6)"},
-                                ],
+                                # Selected-row highlight is wired below
+                                # via a callback on `derived_virtual_
+                                # selected_rows` — dash-table's built-in
+                                # `state: "selected"` rule only matches
+                                # active cells, not radio-selected rows.
+                                style_data_conditional=[],
                                 # row_selectable lets the user click a row
                                 # to load its observation-history plot
                                 # above.  `cell_selectable=False` keeps
@@ -11185,6 +11267,8 @@ _OBSHIST_DEFAULT_PERMID = "134340"  # Pluto — first thing rendered when
     Output("obshist-plot-status", "children"),
     Output("obshist-plot-state", "data"),
     Output("obshist-details", "children"),
+    Output("obshist-vslider-container", "style"),
+    Output("obshist-vslider", "value"),
     # `derived_virtual_selected_rows` is the right index into
     # `derived_virtual_data` because both refer to the *visible*
     # (sorted + filtered + paginated) view.  `derived_virtual_data`
@@ -11234,7 +11318,8 @@ def update_obshist_plot(selected_rows, theme_name, active_tab,
     else:
         # Filter cleared the selection (not a theme/tab event) — keep
         # the previous plot rather than snapping back to Pluto.
-        return no_update, no_update, no_update, no_update
+        return (no_update, no_update, no_update, no_update,
+                no_update, no_update)
 
     label_bits = []
     if name:
@@ -11250,24 +11335,39 @@ def update_obshist_plot(selected_rows, theme_name, active_tab,
     # outside the table (e.g., Random object, default Pluto).
     details = _obshist_details_for(permid=permid, provid=provid)
 
+    # Style dict for the V-slider container — hidden when the loaded
+    # object has no V data (slider wouldn't have a target).
+    vslider_visible = {"flex": "1", "minWidth": "260px",
+                       "marginLeft": "16px",
+                       "display": "flex",
+                       "alignItems": "center", "gap": "10px"}
+    vslider_hidden = {**vslider_visible, "display": "none"}
+    vslider_reset = [5, 28]
+
     try:
         if permid:
             df = fetch_obs(permid=permid)
         else:
             df = fetch_obs(provid=provid)
     except Exception as e:
-        return go.Figure(), f"Query failed for {label}: {e}", no_update, details
+        return (go.Figure(), f"Query failed for {label}: {e}",
+                no_update, details, vslider_hidden, vslider_reset)
 
     if df.empty:
-        return go.Figure(), f"No obs_sbn rows for {label}.", no_update, details
+        return (go.Figure(), f"No obs_sbn rows for {label}.",
+                no_update, details, vslider_hidden, vslider_reset)
 
     theme_dict = theme(theme_name)
     fig = build_history_figure(
-        df, name=label, height=900, theme=theme_dict)
+        df, name=label, height=900, theme=theme_dict,
+        with_controls=False)
     status = (f"Plotted {len(df):,} obs for {label} "
               f"({df['stn'].nunique()} stations, "
               f"{df['obstime'].min():%Y} – {df['obstime'].max():%Y}).")
-    return fig, status, {"key": new_key}, details
+    has_v = bool(df["v_mag"].notna().any())
+    return (fig, status, {"key": new_key}, details,
+            vslider_visible if has_v else vslider_hidden,
+            vslider_reset)
 
 
 def _obshist_details_for(*, permid=None, provid=None):
@@ -11346,6 +11446,121 @@ def random_obshist_row(n_clicks, data, page_size):
     idx = random.randrange(len(data))
     page = idx // (page_size or 50)
     return [idx], page
+
+
+# Clientside controls for the observation-history plot.  These used
+# to live as Plotly updatemenus inside the figure, but those buttons
+# render in SVG and don't pick up our theme CSS on hover (light-on-
+# light in dark mode).  Driving the same Plotly.relayout / restyle
+# calls from html.Button clicks lets the controls inherit the page
+# button styling instead.
+
+app.clientside_callback(
+    """
+    function(n_clicks) {
+        if (!n_clicks) { return null; }
+        var gd = document.getElementById('obshist-plot');
+        if (!gd || !gd.layout) { return null; }
+        var has_v = gd.layout.yaxis2 !== undefined;
+        if (has_v) {
+            Plotly.relayout(gd, {
+                'xaxis.autorange': true,
+                'yaxis.autorange': 'reversed',
+                'yaxis2.autorange': true
+            });
+        } else {
+            Plotly.relayout(gd, {
+                'xaxis.autorange': true,
+                'yaxis.autorange': true
+            });
+        }
+        return n_clicks;
+    }
+    """,
+    Output("obshist-sink-reset", "data"),
+    Input("obshist-btn-reset", "n_clicks"),
+    prevent_initial_call=True,
+)
+
+app.clientside_callback(
+    """
+    function(n_clicks) {
+        if (!n_clicks) { return null; }
+        var gd = document.getElementById('obshist-plot');
+        if (!gd || !gd.data) { return null; }
+        var indices = gd.data.map(function(_, i) { return i; });
+        Plotly.restyle(gd, {visible: true}, indices);
+        return n_clicks;
+    }
+    """,
+    Output("obshist-sink-bands", "data"),
+    Input("obshist-btn-bands", "n_clicks"),
+    prevent_initial_call=True,
+)
+
+app.clientside_callback(
+    """
+    function(n_clicks) {
+        if (!n_clicks) { return null; }
+        var gd = document.getElementById('obshist-plot');
+        if (!gd || !gd.layout || !gd.layout.shapes) { return null; }
+        var newShapes = gd.layout.shapes.map(function(s) {
+            return Object.assign({}, s, {visible: s.visible === false});
+        });
+        Plotly.relayout(gd, {shapes: newShapes});
+        return n_clicks;
+    }
+    """,
+    Output("obshist-sink-shading", "data"),
+    Input("obshist-btn-shading", "n_clicks"),
+    prevent_initial_call=True,
+)
+
+# V range slider — reversed axis convention (V grows downward).
+# Slider returns [low, high] with low < high; the relayout reverses
+# to [high, low].  At full-extent the slider acts as "auto" and we
+# restore autorange='reversed'.
+app.clientside_callback(
+    """
+    function(value) {
+        if (!value || value.length !== 2) { return null; }
+        var gd = document.getElementById('obshist-plot');
+        if (!gd || !gd.layout || !gd.layout.yaxis2) { return null; }
+        if (value[0] <= 5 && value[1] >= 28) {
+            Plotly.relayout(gd, {'yaxis.autorange': 'reversed'});
+        } else {
+            Plotly.relayout(gd, {
+                'yaxis.autorange': false,
+                'yaxis.range': [value[1], value[0]]
+            });
+        }
+        return value;
+    }
+    """,
+    Output("obshist-sink-vslider", "data"),
+    Input("obshist-vslider", "value"),
+    prevent_initial_call=True,
+)
+
+
+# Selected-row highlight for the obshist table.  dash-table's
+# `state: "selected"` style_data_conditional only matches active
+# cells, not radio-selected rows, so we drive the highlight from
+# `derived_virtual_selected_rows` (the visible-view index) which is
+# the same input the plot callback uses.
+@app.callback(
+    Output("obshist-table", "style_data_conditional"),
+    Input("obshist-table", "derived_virtual_selected_rows"),
+)
+def highlight_obshist_selected(selected):
+    if not selected:
+        return []
+    return [{
+        "if": {"row_index": selected[0]},
+        "backgroundColor": "rgba(70, 140, 70, 0.32)",
+        "borderTop": "1px solid rgba(70, 140, 70, 0.75)",
+        "borderBottom": "1px solid rgba(70, 140, 70, 0.75)",
+    }]
 
 
 # ---------------------------------------------------------------------------
