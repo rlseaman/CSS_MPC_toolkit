@@ -50,6 +50,7 @@ downloads/
 # Local health checks and output images
 health_check_*.txt
 sandbox/*.png
+sandbox/*.html
 
 # Pipeline working files
 /tmp/
