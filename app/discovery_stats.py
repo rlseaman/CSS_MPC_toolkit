@@ -46,6 +46,7 @@ from lib.sbdb_moid import load_sbdb_moid_lookup
 from lib.solar import (sun_altitude, classify_twilight,
                        _observer_latitude, TWILIGHT_ORDER)
 from lib.identifications import resolve_designation
+from lib.orbit_classes import EXTENDED_ORBIT_TYPES
 from lib.station_report import (fetch_station_report,
                                 split_neo_non_neo as _split_station_neo,
                                 summarize as _summarize_station)
@@ -980,6 +981,7 @@ SELECT
     mo.unpacked_primary_provisional_designation AS provid,
     mo.packed_primary_provisional_designation AS packed_provid,
     ni.permid AS permid,
+    ni.iau_name AS iau_name,
     mo.orbit_type_int,
     mo.q::double precision,
     mo.e::double precision,
@@ -989,7 +991,9 @@ SELECT
     mo.earth_moid::double precision,
     mo.epoch_mjd::double precision,
     mo.arc_length_total::integer,
-    mo.nobs_total::integer
+    mo.nobs_total::integer,
+    mo.u_param::integer AS u_param,
+    mo.nopp::integer AS nopp
 FROM mpc_orbits mo
 LEFT JOIN numbered_identifications ni
     ON ni.packed_primary_provisional_designation
@@ -3140,6 +3144,35 @@ _CONSENSUS_TABLE_BOOL_COLS = [
     "in_mpc", "in_mpc_orbits", "in_cneos",
     "in_neocc", "in_neofixer", "in_lowell",
 ]
+
+# Static columns for the Observation history dev-tab DataTable.  Mirrors
+# the consensus table layout minus the six catalog booleans and three NF
+# columns (per the original Observability scoping), with `a` and Earth
+# MOID added back since this surface is per-object rather than per-NEO.
+# obs_summary-derived columns (first_obs/last_obs/disc_by) are deferred
+# until a wider aggregation cache lands — for v1 we surface MPC's own
+# `arc_length_total` and `nobs_total` instead (NULL for ~50% of rows).
+_OBS_HISTORY_TABLE_COLUMNS = [
+    {"name": "Designation", "id": "provid"},
+    {"name": "Permid",      "id": "permid"},
+    {"name": "Name",        "id": "iau_name"},
+    {"name": "Class",       "id": "ext_name"},
+    {"name": "H",           "id": "h"},
+    {"name": "q (AU)",      "id": "q"},
+    {"name": "e",           "id": "e"},
+    {"name": "i (°)",       "id": "i"},
+    {"name": "a (AU)",      "id": "a"},
+    {"name": "E-MOID (AU)", "id": "earth_moid"},
+    {"name": "arc (d)",     "id": "arc_length_total"},
+    {"name": "n_obs",       "id": "nobs_total"},
+    {"name": "U",           "id": "u_param"},
+    {"name": "Nopp",        "id": "nopp"},
+]
+
+# Cap rows returned to the DataTable.  Designed for the non-MBA classes
+# (~80K objects total) plus a single MBA fine-class selection truncated
+# at the cap with an explanatory banner.
+_OBS_HISTORY_ROW_CAP = 5000
 
 # Three-way per-source filter: "include" → list must contain the source,
 # "exclude" → list must not, "any" → don't constrain on this source.
@@ -6206,6 +6239,157 @@ app.layout = html.Div(
                                 "site, with bibcode and DOI links.",
                                 className="subtext",
                                 style={"fontSize": "13px"}),
+                        ]),
+                    ],
+                )] if _DEV_TABS else []),
+                # ━━━ Tab: Observation history (dev-only, --dev-tabs) ━━
+                # Phase 1: class-filtered catalog of objects sourced from
+                # boxscore_cache.  Phase 2 (next) wires row-click to a
+                # per-object observation-history plot rendered below the
+                # table (Eris/UZ173 sandbox prototypes live in
+                # `sandbox/observation_history_*.py`).
+                *([dcc.Tab(
+                    label="Observation history",
+                    value="tab-obshist",
+                    className="nav-tab",
+                    selected_className="nav-tab--selected",
+                    children=[
+                        html.Div(style={"paddingTop": "15px",
+                                        "fontFamily": "sans-serif"},
+                                 children=[
+                            html.H2("Observation history",
+                                    style={"fontSize": "20px",
+                                           "fontWeight": "600",
+                                           "marginBottom": "4px"}),
+                            html.Div(
+                                "Sortable catalog of mpc_orbits objects "
+                                "filtered by orbit class.  Click a row "
+                                "(coming next) to load the per-object "
+                                "observation-history plot.  Phase 1 "
+                                "surfaces MPC's own arc/nobs (NULL for "
+                                "~50 % of rows); a wider aggregation "
+                                "cache for first_obs / last_obs / "
+                                "disc_by is queued for Phase 2.",
+                                className="subtext",
+                                style={"fontSize": "13px",
+                                       "marginBottom": "16px",
+                                       "maxWidth": "780px"}),
+                            # Controls row — mirrors the Asteroid
+                            # Classes filter set with the addition of a
+                            # class multi-select (the per-object view
+                            # needs an explicit class pick, where the
+                            # cross-tab view shows all classes at once).
+                            html.Div(
+                                style={"display": "flex", "gap": "20px",
+                                       "flexWrap": "wrap",
+                                       "alignItems": "flex-end",
+                                       "marginBottom": "12px"},
+                                children=[
+                                    html.Div(style={"minWidth": "320px",
+                                                    "flex": "1"},
+                                             children=[
+                                        html.Label(
+                                            "Classes (fine)",
+                                            style=LABEL_STYLE),
+                                        dcc.Dropdown(
+                                            id="obshist-classes",
+                                            options=[
+                                                {"label": v[1],
+                                                 "value": v[1]}
+                                                for k, v in
+                                                EXTENDED_ORBIT_TYPES.items()
+                                                if k is not None
+                                            ],
+                                            value=["TNO"],
+                                            multi=True,
+                                            placeholder="Pick one or more "
+                                                        "classes…",
+                                            style={"fontSize": "12px"},
+                                        ),
+                                    ]),
+                                    html.Div(children=[
+                                        html.Label("Filters",
+                                                   style=LABEL_STYLE),
+                                        dcc.Checklist(
+                                            id="obshist-filters",
+                                            options=[
+                                                {"label": " NEO only",
+                                                 "value": "neo"},
+                                                {"label": " PHA only",
+                                                 "value": "pha"},
+                                                {"label": " Retrograde",
+                                                 "value": "retro"},
+                                            ],
+                                            value=[],
+                                            inline=True,
+                                            labelStyle=RADIO_LABEL_STYLE,
+                                            style=RADIO_STYLE,
+                                        ),
+                                    ]),
+                                    html.Div(style={"width": "250px"},
+                                             children=[
+                                        html.Label("H range",
+                                                   style=LABEL_STYLE),
+                                        dcc.RangeSlider(
+                                            id="obshist-h-range",
+                                            min=0, max=32,
+                                            value=[0, 32],
+                                            marks={0: "0", 5: "5",
+                                                   10: "10", 15: "15",
+                                                   20: "20", 25: "25",
+                                                   30: "30"},
+                                            tooltip={
+                                                "placement": "bottom",
+                                                "always_visible": False,
+                                            },
+                                        ),
+                                    ]),
+                                ],
+                            ),
+                            # Status banner — row count, truncation
+                            # warning, etc.  Set by the callback.
+                            html.Div(
+                                id="obshist-status",
+                                className="subtext",
+                                style={"fontSize": "12px",
+                                       "marginBottom": "8px",
+                                       "minHeight": "16px"}),
+                            # Result table — declared once in the layout
+                            # so callbacks only mutate `data`, never
+                            # replace the component (avoids React-state
+                            # weirdness, same pattern as consensus).
+                            dash_table.DataTable(
+                                id="obshist-table",
+                                columns=_OBS_HISTORY_TABLE_COLUMNS,
+                                data=[],
+                                page_size=50,
+                                page_current=0,
+                                sort_action="native",
+                                filter_action="native",
+                                style_table={"overflowX": "auto"},
+                                style_cell={
+                                    "fontFamily": "sans-serif",
+                                    "fontSize": "12px",
+                                    "padding": "4px 8px",
+                                    "textAlign": "left",
+                                    "backgroundColor": "transparent",
+                                    "color": "inherit",
+                                    "borderColor":
+                                        "var(--hr-color, #ccc)",
+                                },
+                                style_header={
+                                    "fontWeight": "600",
+                                    "backgroundColor":
+                                        "var(--paper-bg, #f5f5f5)",
+                                    "color": "inherit",
+                                    "borderBottom":
+                                        "2px solid var(--hr-color, #999)",
+                                },
+                                style_filter={
+                                    "backgroundColor": "transparent",
+                                    "color": "inherit",
+                                },
+                            ),
                         ]),
                     ],
                 )] if _DEV_TABS else []),
@@ -10749,6 +10933,75 @@ def download_boxscore(n_clicks, grouping, filters, h_range):
     avail = [c for c in export_cols if c in filt.columns]
     return send_data_frame(filt[avail].to_csv, "boxscore_objects.csv",
                            index=False)
+
+
+# ---------------------------------------------------------------------------
+# Observation history (dev-only tab) — Phase 1: catalog table
+# ---------------------------------------------------------------------------
+
+@app.callback(
+    Output("obshist-table", "data"),
+    Output("obshist-status", "children"),
+    Input("obshist-classes", "value"),
+    Input("obshist-filters", "value"),
+    Input("obshist-h-range", "value"),
+    Input("tabs", "value"),
+)
+def update_obshist(classes, filters, h_range, active_tab):
+    if active_tab != "tab-obshist":
+        raise PreventUpdate
+
+    bdf = load_boxscore_data()
+    if bdf is None or len(bdf) == 0:
+        return [], "No catalog data loaded."
+
+    filt = bdf
+    if classes:
+        filt = filt[filt["ext_name"].isin(classes)]
+    if "neo" in (filters or []):
+        filt = filt[filt["neo"]]
+    if "pha" in (filters or []):
+        filt = filt[filt["pha"]]
+    if "retro" in (filters or []):
+        filt = filt[filt["retrograde"]]
+    h_lo, h_hi = h_range
+    if h_lo > 0 or h_hi < 32:
+        filt = filt[filt["h"].between(h_lo, h_hi) | filt["h"].isna()]
+
+    n_match = len(filt)
+    truncated = n_match > _OBS_HISTORY_ROW_CAP
+    if truncated:
+        # Sort by H ascending (biggest objects first) when truncating,
+        # so the cap-limited view picks the most useful tail of the
+        # selected class rather than a random alphabetic slice.
+        filt = filt.sort_values("h", na_position="last").head(
+            _OBS_HISTORY_ROW_CAP)
+
+    cols = [c["id"] for c in _OBS_HISTORY_TABLE_COLUMNS]
+    display = filt[cols].copy()
+
+    # Numeric formatting for legibility.  Pandas writes NaN as NaN when
+    # serialised to dict, which the DataTable renders as the string
+    # "NaN" — so we coerce missing values to "" up front.
+    fmt_map = {"h": "%.2f", "q": "%.4f", "e": "%.4f", "i": "%.3f",
+               "a": "%.4f", "earth_moid": "%.4f"}
+    for col, fmt in fmt_map.items():
+        display[col] = display[col].apply(
+            lambda v, f=fmt: f % v if pd.notna(v) else "")
+    for col in ("arc_length_total", "nobs_total", "u_param", "nopp"):
+        display[col] = display[col].apply(
+            lambda v: int(v) if pd.notna(v) else "")
+    for col in ("permid", "iau_name", "ext_name"):
+        display[col] = display[col].fillna("").astype(object)
+
+    if truncated:
+        status = (f"{n_match:,} objects match; showing the brightest "
+                  f"{_OBS_HISTORY_ROW_CAP:,} (sorted by H).  Narrow the "
+                  "class or H filter to see the rest.")
+    else:
+        status = f"{n_match:,} objects match."
+
+    return display.to_dict("records"), status
 
 
 # ---------------------------------------------------------------------------
