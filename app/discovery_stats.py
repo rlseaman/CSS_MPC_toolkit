@@ -11328,16 +11328,18 @@ def download_boxscore(n_clicks, grouping, filters, h_range):
     Input("obshist-nopp-range", "value"),
     Input("obshist-nobs-range", "value"),
     Input("tabs", "value"),
-    # State, not Input — designation resolution writes pending_target
-    # *and* the new class/filter values at the same time, and we don't
-    # want the downstream clear of pending_target (by
-    # select_obshist_pending after the row lands) to refilter the
-    # table.  The pending-target check below only needs to see the
-    # value that was in flight when the filter inputs changed.
+    # Both States, not Inputs.  We want filter-driven refilters to
+    # honour the pin but not refire the table when the pin source
+    # changes (the plot callback rewriting plot-state would
+    # otherwise refilter on every click).  pending_target is the
+    # bridge during a resolver flow (set before the plot loads);
+    # plot-state takes over once the plot is up and persists across
+    # filter changes for as long as that object is displayed.
     State("obshist-pending-target", "data"),
+    State("obshist-plot-state", "data"),
 )
 def update_obshist(classes, filters, h_range, arc_range, nopp_range,
-                   nobs_range, active_tab, pending_target):
+                   nobs_range, active_tab, pending_target, plot_state):
     if active_tab != "tab-obshist":
         raise PreventUpdate
 
@@ -11345,25 +11347,35 @@ def update_obshist(classes, filters, h_range, arc_range, nopp_range,
     if bdf is None or len(bdf) == 0:
         return [], "No catalog data loaded."
 
-    # Locate the pinned row (if a designation was just resolved) in
-    # the *unfiltered* catalog.  We use it later to guarantee the
-    # target shows up in the table even when its H lands it below
-    # the truncation cap (common for medium-faint MBAs in a class
-    # with > 5,000 members).
-    pin_mask = None
+    # Locate the pinned row (whatever the user is currently looking
+    # at) in the *unfiltered* catalog.  Used after truncation to
+    # guarantee the displayed object stays in the table regardless
+    # of class/H/etc. filters or the 5000-row cap.  Order of
+    # precedence:
+    #   1. pending_target — just-typed designation, plot hasn't
+    #      yet caught up,
+    #   2. plot-state.key — currently-displayed object.
+    pin_permid = pin_provid = ""
     if pending_target:
-        permid_pin = (pending_target.get("permid") or "").strip()
-        provid_pin = (pending_target.get("provid") or "").strip()
-        if permid_pin or provid_pin:
-            permid_str = bdf["permid"].astype(str).str.strip()
-            provid_str = bdf["provid"].astype(str).str.strip()
-            pin_mask = pd.Series(False, index=bdf.index)
-            if permid_pin:
-                pin_mask |= permid_str == permid_pin
-            if provid_pin:
-                pin_mask |= provid_str == provid_pin
-            if not pin_mask.any():
-                pin_mask = None
+        pin_permid = (pending_target.get("permid") or "").strip()
+        pin_provid = (pending_target.get("provid") or "").strip()
+    if not pin_permid and not pin_provid:
+        if plot_state and plot_state.get("key"):
+            key = plot_state["key"]
+            if isinstance(key, (list, tuple)) and len(key) >= 2:
+                pin_permid = str(key[0] or "").strip()
+                pin_provid = str(key[1] or "").strip()
+    pin_mask = None
+    if pin_permid or pin_provid:
+        permid_str = bdf["permid"].astype(str).str.strip()
+        provid_str = bdf["provid"].astype(str).str.strip()
+        candidate = pd.Series(False, index=bdf.index)
+        if pin_permid:
+            candidate |= permid_str == pin_permid
+        if pin_provid:
+            candidate |= provid_str == pin_provid
+        if candidate.any():
+            pin_mask = candidate
 
     filt = bdf
     if classes:
@@ -11422,11 +11434,12 @@ def update_obshist(classes, filters, h_range, arc_range, nopp_range,
         filt = filt.sort_values("h", na_position="last").head(
             _OBS_HISTORY_ROW_CAP)
 
-    # Pin the resolved-designation row into the visible set.  Medium-H
-    # MBAs are the canonical case: an asteroid like 12211 Lewseaman
-    # (H ≈ 13.4) ranks ~12,000th by brightness within MBA, so it gets
-    # clipped by the 5000-row cap.  Without this the highlight has no
-    # row to anchor to and the table↔plot pairing breaks.
+    # Pin the currently-displayed row into the visible set so the
+    # table↔plot pairing survives the 5000-row H-sort cap *and*
+    # arbitrary user filter changes.  Inner Main Belt + Lewseaman
+    # (399979, H 17.0, ranks 77,744th in IMB) is the canonical
+    # case — without this any later filter change would drop the
+    # row that the plot above is actually about.
     pinned_extra = False
     if pin_mask is not None:
         pin_rows = bdf.loc[pin_mask]
@@ -11476,9 +11489,11 @@ def update_obshist(classes, filters, h_range, arc_range, nopp_range,
                   f"{_OBS_HISTORY_ROW_CAP:,} (sorted by H).  Narrow the "
                   "class or H filter to see the rest.")
         if pinned_extra:
-            status += "  Resolved target pinned to top."
+            status += "  Displayed object pinned to top."
     else:
         status = f"{n_match:,} objects match."
+        if pinned_extra:
+            status += "  Displayed object pinned to top."
 
     return display.to_dict("records"), status
 
@@ -11530,6 +11545,13 @@ def update_obshist_plot(selected_rows, theme_name, active_tab,
     if permid or provid:
         # Active selection — fetch this object.
         new_key = [permid, provid, name]
+        # Programmatic re-selection of the already-displayed object
+        # (typical after a filter change resnaps selected_rows to
+        # the pinned row's new index).  Plot is already correct.
+        if (state.get("key") == new_key
+                and triggered == "obshist-table"):
+            return (no_update, no_update, no_update, no_update,
+                    no_update, no_update)
     elif state["key"] and triggered in ("theme-toggle", "tabs"):
         # Theme or tab change with prior state — re-render the same
         # object in the new context.
@@ -11687,6 +11709,17 @@ def _obshist_details_for(*, permid=None, provid=None):
             href=("https://data.minorplanetcenter.net/explorer/"
                   f"?tab=Designated&search={_urlquote(mpc_key, safe='')}"),
             target="_blank", style=_link_btn_style()))
+    # NEOfixer button — only useful for NEOs (CSS site 500 ephemeris
+    # target list).  NEOfixer indexes by packed designation; mpc_orbits
+    # exposes the packed primary provisional for every row.
+    if bool(row.get("neo")):
+        packed = str(row.get("packed_provid") or "").strip()
+        if packed and packed != "nan":
+            buttons.append(html.A(
+                "NEOfixer",
+                href=("https://neofixer.arizona.edu/site/500/"
+                      f"{_urlquote(packed, safe='')}"),
+                target="_blank", style=_link_btn_style()))
     if buttons:
         chips.append(html.Span(
             buttons,
@@ -11825,32 +11858,51 @@ def resolve_obshist_designation_input(_n_submit, value):
     Output("obshist-pending-target", "data", allow_duplicate=True),
     Input("obshist-table", "data"),
     State("obshist-pending-target", "data"),
+    State("obshist-plot-state", "data"),
     State("obshist-table", "page_size"),
     prevent_initial_call=True,
 )
-def select_obshist_pending(data, target, page_size):
-    """When `update_obshist` rewrites the table, snap to the pending row.
+def select_obshist_pending(data, target, plot_state, page_size):
+    """When `update_obshist` rewrites the table, snap to the displayed row.
 
-    The designation handler can't set `selected_rows` directly
-    because the table data hasn't been recomputed yet at that point.
-    Instead it stores the resolved target and we pick it up here on
-    the next `obshist-table.data` change.
+    Source preference:
+      1. pending_target — a just-typed designation that the plot
+         hasn't yet caught up to.  Cleared once the row is located.
+      2. plot-state.key — the currently-displayed object.  Persists,
+         so subsequent filter changes (which re-fire this callback
+         on the data update) keep the selection pointed at the same
+         object — at whatever new index it lands on once
+         update_obshist pins it to row 0.
     """
-    if not target or not data:
+    if not data:
         raise PreventUpdate
-    permid = (target.get("permid") or "").strip()
-    provid = (target.get("provid") or "").strip()
+    permid = provid = ""
+    target_was_source = False
+    if target:
+        permid = (target.get("permid") or "").strip()
+        provid = (target.get("provid") or "").strip()
+        if permid or provid:
+            target_was_source = True
+    if not permid and not provid and plot_state and plot_state.get("key"):
+        key = plot_state["key"]
+        if isinstance(key, (list, tuple)) and len(key) >= 2:
+            permid = str(key[0] or "").strip() if key[0] else ""
+            provid = str(key[1] or "").strip() if key[1] else ""
+    if not permid and not provid:
+        raise PreventUpdate
     for idx, row in enumerate(data):
         row_permid = str(row.get("permid") or "").strip()
         row_provid = str(row.get("provid") or "").strip()
         if (permid and row_permid == permid) or \
            (provid and row_provid == provid):
             page = idx // (page_size or 50)
-            return [idx], page, None
-    # Target didn't make it into the visible (possibly truncated)
-    # table — clear the pending marker so we don't keep retrying on
-    # subsequent table refreshes.
-    return no_update, no_update, None
+            # Only clear pending_target when it was the source — if
+            # we found the displayed object via plot-state, leave
+            # pending_target alone.
+            target_clear = None if target_was_source else no_update
+            return [idx], page, target_clear
+    target_clear = None if target_was_source else no_update
+    return no_update, no_update, target_clear
 
 
 # Reset axes also resets the V-range slider widget.  The clientside
