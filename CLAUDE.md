@@ -71,12 +71,12 @@ sandbox/                      # Analysis notes, exploratory outputs
 ## Interactive App (`app/discovery_stats.py`)
 
 Dash web application at http://127.0.0.1:8050/ (prod) and
-http://127.0.0.1:8051/ (dev/`--rnd --dev-tabs`) with twelve tabbed
-pages. Tab indices below are the layout order on the
-`station-report` dev branch; on prod (`main`) the Station Report
-tab is hidden by the `--dev-tabs` flag and About shifts from
-Tab 11 to Tab 10. All other tabs (including Follow-up Comparison)
-are live on prod.
+http://127.0.0.1:8051/ (dev/`--rnd --dev-tabs`) with thirteen
+tabbed pages on dev, twelve on prod. Tab indices below are the
+layout order on the `station-report` dev branch; on prod (`main`)
+the Station Report tab is hidden by the `--dev-tabs` flag and
+About shifts from Tab 12 to Tab 11. All other tabs — including
+Observation history — are live on prod.
 
 ### Tab 0: MPEC Browser
 - Searchable list of recent Minor Planet Electronic Circulars
@@ -209,7 +209,36 @@ are live on prod.
 - Data: `tracklet_obs_all` and `discovery_tracklet_stats` CTEs added
   to `LOAD_SQL`; same ~44K rows, 6 new columns
 
-### Tab 8: Asteroid Classes
+### Tab 8: Observation history
+- Class-filtered catalog of mpc_orbits objects, paired with a
+  per-object plot of band-corrected V vs. obstime over the full
+  obs_sbn record. Site-code lifeline on the lower panel; vertical
+  shading marks solar elongation > 90° (observable) vs. ≤ 90°.
+- Designation entry box (Enter to submit) resolves permid
+  (`134340`), provid (`2019 UZ173`), iau_name (`Pluto`), and
+  packed forms (`K24Y04R` → unpacks via
+  `lib/mpc_convert.unpack_designation`). On submit, switches
+  Classes to the resolved object's orbit class, clears the other
+  filters, and pins the row to the top of the table.
+- Plot controls (Reset axes / Show all bands / Toggle elongation
+  shading / V-range slider) are html.Buttons + dcc.RangeSlider
+  below the dcc.Graph — they pick up the page's theme CSS on
+  hover, where the in-figure Plotly updatemenus rendered
+  light-on-light in dark mode.
+- Details panel above the plot: Class / H / q / Q / e / i / a /
+  U / Nopp / n_obs / arc / disc-by chips + JPL SBDB · MPC
+  Explorer · NEOfixer (NEOs only) link buttons.
+- Pin tracks the currently-displayed object across arbitrary
+  filter changes — selecting a row, pressing Random, or typing
+  another designation moves the pin. With the 5000-row H-sort
+  cap on classes >5K (any MBA fine class), this is how an object
+  like Lewseaman (H 17.0, IMB H-rank 77,744) stays in the table
+  while it's plotted.
+- Data: `boxscore_cache` (same source as Asteroid Classes), joined
+  at load time with `obs_summary_all_cache` for the authoritative
+  first_obs / last_obs / arc / nobs / disc_by columns.
+
+### Tab 9: Asteroid Classes
 - Cross-tabulation of the full `mpc_orbits` catalog (~1.5M objects,
   all classes — not just NEOs) by orbit type and selected attributes.
 - Class grouping: Fine (21), Standard (17), Coarse (7) MPC orbit
@@ -223,7 +252,7 @@ are live on prod.
   identifications join). Same ~1.5M rows that drive boxscore-class
   callbacks elsewhere.
 
-### Tab 9: Tools
+### Tab 10: Tools
 - Standalone calculators and converters for planetary-defense work.
   No data dependencies; all pure Python computation via `lib/`.
 - Currently 10 cards:
@@ -239,7 +268,7 @@ are live on prod.
   conversion primitives the SQL `css_utilities` schema exposes
   server-side.
 
-### Tab 10: Station Report (dev only)
+### Tab 11: Station Report (dev only)
 - Per-site deep-dive — site code + optional date range yields a
   summary line, year × class breakdown for NEOs (Atira / Aten /
   Apollo / Amor) and non-NEOs, and an MPEC-publications stub
@@ -253,7 +282,7 @@ are live on prod.
   doc are intended to land here as context for the literature
   search.
 
-### Tab 11: About
+### Tab 12: About
 - Static project page: short description, GitHub repo link, contact
   email (`contact@hotwireduniverse.org` via Cloudflare Email Routing),
   maintainer line. Release notes card + FAQ (data freshness, NEO

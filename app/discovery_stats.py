@@ -5609,13 +5609,15 @@ app.layout = html.Div(
                         ]),
                     ],
                 ),
-                # ━━━ Tab: Observation history (dev-only, --dev-tabs) ━━
-                # Phase 1: class-filtered catalog of objects sourced from
-                # boxscore_cache.  Phase 2 (next) wires row-click to a
-                # per-object observation-history plot rendered below the
-                # table (Eris/UZ173 sandbox prototypes live in
-                # `sandbox/observation_history_*.py`).
-                *([dcc.Tab(
+                # ━━━ Tab: Observation history ━━━━━━━━━━━━━━━━━━━━━
+                # Class-filtered catalog of mpc_orbits objects, with a
+                # designation entry that resolves permid / provid /
+                # iau_name / packed forms and a per-object plot
+                # rendered above the table (V vs. obstime over obs_sbn,
+                # site-code lifeline, elongation shading).  See
+                # sandbox/observation_history_{eris,uz173}.py for the
+                # standalone prototypes that seeded the design.
+                dcc.Tab(
                     label="Observation history",
                     value="tab-obshist",
                     className="nav-tab",
@@ -6029,7 +6031,7 @@ app.layout = html.Div(
                             ),
                         ]),
                     ],
-                )] if _DEV_TABS else []),
+                ),
                 # ━━━ Tab 6: Asteroid Classes ━━━━━━━━━━━━━━━━━━━━━━
                 dcc.Tab(
                     label="Asteroid Classes",
