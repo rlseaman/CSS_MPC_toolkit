@@ -248,7 +248,7 @@ def build_history_figure(df: pd.DataFrame, *, name: str,
     if has_v:
         fig = make_subplots(
             rows=2, cols=1, shared_xaxes=True,
-            row_heights=[0.62, 0.38], vertical_spacing=0.04,
+            row_heights=[0.55, 0.45], vertical_spacing=0.04,
         )
         shading_yrefs = ["y domain", "y2 domain"]
     else:
@@ -342,10 +342,13 @@ def build_history_figure(df: pd.DataFrame, *, name: str,
         reset_args = {"xaxis.autorange": True,
                       "yaxis.autorange": True}
 
+    # Buttons sit well below the bottom subplot's x-axis title; the
+    # earlier y=-0.22 overlapped "Observation time".
+    controls_y = -0.32
     updatemenus = [
         dict(
             type="buttons", direction="right", showactive=False,
-            x=0.30, xanchor="left", y=-0.22, yanchor="top",
+            x=0.30, xanchor="left", y=controls_y, yanchor="top",
             pad=dict(t=4, b=4),
             **button_style,
             buttons=[
@@ -363,7 +366,7 @@ def build_history_figure(df: pd.DataFrame, *, name: str,
     if has_v:
         updatemenus.append(dict(
             type="dropdown", direction="up", showactive=True,
-            x=0.555, xanchor="left", y=-0.22, yanchor="top",
+            x=0.555, xanchor="left", y=controls_y, yanchor="top",
             pad=dict(t=4, b=4),
             **button_style,
             buttons=[
@@ -379,7 +382,7 @@ def build_history_figure(df: pd.DataFrame, *, name: str,
                "time.")
     annotations = [dict(
         text=caption, xref="paper", yref="paper",
-        x=0, y=-0.36, xanchor="left", showarrow=False,
+        x=0, y=-0.44, xanchor="left", showarrow=False,
         font=dict(size=11, color=subtext_color),
     )]
     if not has_v:
@@ -407,7 +410,7 @@ def build_history_figure(df: pd.DataFrame, *, name: str,
         ),
         updatemenus=updatemenus,
         annotations=annotations,
-        margin=dict(t=110, b=180, r=180),
+        margin=dict(t=110, b=220, r=180),
         paper_bgcolor=(theme.get("paper") if theme else None),
         plot_bgcolor=(theme.get("plot") if theme else None),
     )

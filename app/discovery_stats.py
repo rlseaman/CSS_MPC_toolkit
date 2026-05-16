@@ -6363,8 +6363,52 @@ app.layout = html.Div(
                                             },
                                         ),
                                     ]),
+                                    html.Div(style={"width": "250px"},
+                                             children=[
+                                        html.Label("n_obs range",
+                                                   style=LABEL_STYLE),
+                                        dcc.RangeSlider(
+                                            id="obshist-nobs-range",
+                                            min=0, max=500,
+                                            value=[0, 500],
+                                            marks={0: "0", 10: "10",
+                                                   100: "100",
+                                                   250: "250",
+                                                   500: "500+"},
+                                            tooltip={
+                                                "placement": "bottom",
+                                                "always_visible": False,
+                                            },
+                                        ),
+                                    ]),
+                                    # Random pick from the current table —
+                                    # convenient way to surface an object
+                                    # the user hasn't seen before.
+                                    html.Div(
+                                        style={"alignSelf": "flex-end"},
+                                        children=[
+                                            html.Button(
+                                                "Random object",
+                                                id="obshist-random-btn",
+                                                n_clicks=0,
+                                                style={
+                                                    "padding": "6px 14px",
+                                                    "fontSize": "12px",
+                                                    "fontFamily":
+                                                        "sans-serif",
+                                                    "cursor": "pointer",
+                                                },
+                                            ),
+                                        ],
+                                    ),
                                 ],
                             ),
+                            # Stores the last-rendered plot's resolved
+                            # designation so callback changes from filter
+                            # / theme / tab don't accidentally reset the
+                            # figure to the default.
+                            dcc.Store(id="obshist-plot-state",
+                                      data={"key": None}),
                             # Per-object observation-history plot sits
                             # above the table so it's the first thing
                             # the user sees after picking a class.
@@ -7142,6 +7186,7 @@ def _get_defaults():
         "obshist-filters": [],
         "obshist-h-range": [0, 32],
         "obshist-nopp-range": [0, 30],
+        "obshist-nobs-range": [0, 500],
         # Shared
         "group-by": "combined",
         "plot-height": "700",
@@ -7174,7 +7219,8 @@ _TAB_KEYS = {
                    "tool-airmass-x", "tool-airmass-alt",
                    "tool-cln-date", "tool-cln-offset", "tool-cln-tz"},
     "tab-obshist": {"obshist-classes", "obshist-filters",
-                    "obshist-h-range", "obshist-nopp-range"},
+                    "obshist-h-range", "obshist-nopp-range",
+                    "obshist-nobs-range"},
 }
 _SHARED_KEYS = {"group-by", "plot-height", "neo-source-filter"}
 
@@ -7200,6 +7246,7 @@ _RESET_ORDER = [
     "station-site", "station-date-start", "station-date-end",
     "obshist-classes", "obshist-filters",
     "obshist-h-range", "obshist-nopp-range",
+    "obshist-nobs-range",
     "group-by", "plot-height", "neo-source-filter",
 ]
 
@@ -11020,9 +11067,11 @@ def download_boxscore(n_clicks, grouping, filters, h_range):
     Input("obshist-filters", "value"),
     Input("obshist-h-range", "value"),
     Input("obshist-nopp-range", "value"),
+    Input("obshist-nobs-range", "value"),
     Input("tabs", "value"),
 )
-def update_obshist(classes, filters, h_range, nopp_range, active_tab):
+def update_obshist(classes, filters, h_range, nopp_range, nobs_range,
+                   active_tab):
     if active_tab != "tab-obshist":
         raise PreventUpdate
 
@@ -11049,6 +11098,16 @@ def update_obshist(classes, filters, h_range, nopp_range, active_tab):
             mask = filt["nopp"].ge(nopp_lo) | filt["nopp"].isna()
         else:
             mask = filt["nopp"].between(nopp_lo, nopp_hi) | filt["nopp"].isna()
+        filt = filt[mask]
+    nobs_lo, nobs_hi = nobs_range
+    if nobs_lo > 0 or nobs_hi < 500:
+        # "500+" upper-end: unbounded above when the user keeps the
+        # slider at max.
+        if nobs_hi >= 500:
+            mask = filt["nobs_total"].ge(nobs_lo) | filt["nobs_total"].isna()
+        else:
+            mask = (filt["nobs_total"].between(nobs_lo, nobs_hi)
+                    | filt["nobs_total"].isna())
         filt = filt[mask]
 
     n_match = len(filt)
@@ -11101,29 +11160,31 @@ _OBSHIST_DEFAULT_PERMID = "134340"  # Pluto — first thing rendered when
 @app.callback(
     Output("obshist-plot", "figure"),
     Output("obshist-plot-status", "children"),
-    # derived_virtual_selected_rows is the right index into
-    # derived_virtual_data — it tracks the *visible* (sorted + filtered +
-    # paginated) view.  Using plain `selected_rows` would index into the
-    # *original* `data` payload and silently mis-pair table → plot when
-    # the user has sorted or filtered the table.
+    Output("obshist-plot-state", "data"),
+    # `derived_virtual_selected_rows` is the right index into
+    # `derived_virtual_data` because both refer to the *visible*
+    # (sorted + filtered + paginated) view.  `derived_virtual_data`
+    # itself is State, not Input — we don't want a filter change to
+    # refetch the plot.  If a filter happens to drop the currently
+    # selected row out of view, the callback fires with an empty
+    # selection; the stored `key` lets us keep the previous plot
+    # instead of falling back to the Pluto default.
     Input("obshist-table", "derived_virtual_selected_rows"),
-    Input("obshist-table", "derived_virtual_data"),
     Input("theme-toggle", "value"),
     Input("tabs", "value"),
+    State("obshist-table", "derived_virtual_data"),
+    State("obshist-plot-state", "data"),
 )
-def update_obshist_plot(selected_rows, derived_data, theme_name, active_tab):
-    """Render the observation-history plot for the user's row pick.
-
-    On first activation (no selection yet) we load Pluto so the figure
-    space isn't empty.  `dcc.Loading` keeps whatever was previously
-    shown visible until the next fetch completes.
-    """
+def update_obshist_plot(selected_rows, theme_name, active_tab,
+                        derived_data, plot_state):
     if active_tab != "tab-obshist":
         raise PreventUpdate
 
     from lib.observation_history import fetch_obs, build_history_figure
 
-    # Resolve the active designation.  Empty selection → Pluto default.
+    state = plot_state or {"key": None}
+    triggered = ctx.triggered_id
+
     permid = provid = name = None
     if selected_rows and derived_data:
         idx = selected_rows[0]
@@ -11132,9 +11193,24 @@ def update_obshist_plot(selected_rows, derived_data, theme_name, active_tab):
             permid = (row.get("permid") or "").strip() or None
             provid = (row.get("provid") or "").strip() or None
             name = row.get("iau_name") or None
-    if not (permid or provid):
+
+    if permid or provid:
+        # Active selection — fetch this object.
+        new_key = [permid, provid, name]
+    elif state["key"] and triggered in ("theme-toggle", "tabs"):
+        # Theme or tab change with prior state — re-render the same
+        # object in the new context.
+        permid, provid, name = state["key"]
+        new_key = state["key"]
+    elif state["key"] is None:
+        # First ever activation of the tab → Pluto default.
         permid = _OBSHIST_DEFAULT_PERMID
         name = "Pluto"
+        new_key = [permid, None, name]
+    else:
+        # Filter cleared the selection (not a theme/tab event) — keep
+        # the previous plot rather than snapping back to Pluto.
+        return no_update, no_update, no_update
 
     label_bits = []
     if name:
@@ -11151,18 +11227,37 @@ def update_obshist_plot(selected_rows, derived_data, theme_name, active_tab):
         else:
             df = fetch_obs(provid=provid)
     except Exception as e:
-        return go.Figure(), f"Query failed for {label}: {e}"
+        return go.Figure(), f"Query failed for {label}: {e}", no_update
 
     if df.empty:
-        return go.Figure(), f"No obs_sbn rows for {label}."
+        return go.Figure(), f"No obs_sbn rows for {label}.", no_update
 
     theme_dict = theme(theme_name)
     fig = build_history_figure(
-        df, name=label, height=720, theme=theme_dict)
+        df, name=label, height=900, theme=theme_dict)
     status = (f"Plotted {len(df):,} obs for {label} "
               f"({df['stn'].nunique()} stations, "
               f"{df['obstime'].min():%Y} – {df['obstime'].max():%Y}).")
-    return fig, status
+    return fig, status, {"key": new_key}
+
+
+@app.callback(
+    Output("obshist-table", "selected_rows", allow_duplicate=True),
+    Input("obshist-random-btn", "n_clicks"),
+    State("obshist-table", "data"),
+    prevent_initial_call=True,
+)
+def random_obshist_row(n_clicks, data):
+    """Pick a uniform-random row from the current table data.
+
+    Setting `selected_rows` triggers the plot callback through the
+    normal `derived_virtual_selected_rows` chain, so the random pick
+    flows through the same code path as a user click.
+    """
+    if not n_clicks or not data:
+        raise PreventUpdate
+    import random
+    return [random.randrange(len(data))]
 
 
 # ---------------------------------------------------------------------------
