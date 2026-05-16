@@ -11328,15 +11328,42 @@ def download_boxscore(n_clicks, grouping, filters, h_range):
     Input("obshist-nopp-range", "value"),
     Input("obshist-nobs-range", "value"),
     Input("tabs", "value"),
+    # State, not Input — designation resolution writes pending_target
+    # *and* the new class/filter values at the same time, and we don't
+    # want the downstream clear of pending_target (by
+    # select_obshist_pending after the row lands) to refilter the
+    # table.  The pending-target check below only needs to see the
+    # value that was in flight when the filter inputs changed.
+    State("obshist-pending-target", "data"),
 )
 def update_obshist(classes, filters, h_range, arc_range, nopp_range,
-                   nobs_range, active_tab):
+                   nobs_range, active_tab, pending_target):
     if active_tab != "tab-obshist":
         raise PreventUpdate
 
     bdf = load_boxscore_data()
     if bdf is None or len(bdf) == 0:
         return [], "No catalog data loaded."
+
+    # Locate the pinned row (if a designation was just resolved) in
+    # the *unfiltered* catalog.  We use it later to guarantee the
+    # target shows up in the table even when its H lands it below
+    # the truncation cap (common for medium-faint MBAs in a class
+    # with > 5,000 members).
+    pin_mask = None
+    if pending_target:
+        permid_pin = (pending_target.get("permid") or "").strip()
+        provid_pin = (pending_target.get("provid") or "").strip()
+        if permid_pin or provid_pin:
+            permid_str = bdf["permid"].astype(str).str.strip()
+            provid_str = bdf["provid"].astype(str).str.strip()
+            pin_mask = pd.Series(False, index=bdf.index)
+            if permid_pin:
+                pin_mask |= permid_str == permid_pin
+            if provid_pin:
+                pin_mask |= provid_str == provid_pin
+            if not pin_mask.any():
+                pin_mask = None
 
     filt = bdf
     if classes:
@@ -11395,6 +11422,19 @@ def update_obshist(classes, filters, h_range, arc_range, nopp_range,
         filt = filt.sort_values("h", na_position="last").head(
             _OBS_HISTORY_ROW_CAP)
 
+    # Pin the resolved-designation row into the visible set.  Medium-H
+    # MBAs are the canonical case: an asteroid like 12211 Lewseaman
+    # (H ≈ 13.4) ranks ~12,000th by brightness within MBA, so it gets
+    # clipped by the 5000-row cap.  Without this the highlight has no
+    # row to anchor to and the table↔plot pairing breaks.
+    pinned_extra = False
+    if pin_mask is not None:
+        pin_rows = bdf.loc[pin_mask]
+        already = pin_rows.index.isin(filt.index).any()
+        if not already and len(pin_rows):
+            filt = pd.concat([pin_rows, filt])
+            pinned_extra = True
+
     # Compute Q (aphelion) for bound orbits.  For e≥1 (hyperbolic /
     # parabolic) Q is undefined — leave NaN so the row renders blank.
     filt = filt.copy()
@@ -11435,6 +11475,8 @@ def update_obshist(classes, filters, h_range, arc_range, nopp_range,
         status = (f"{n_match:,} objects match; showing the brightest "
                   f"{_OBS_HISTORY_ROW_CAP:,} (sorted by H).  Narrow the "
                   "class or H filter to see the rest.")
+        if pinned_extra:
+            status += "  Resolved target pinned to top."
     else:
         status = f"{n_match:,} objects match."
 
