@@ -11455,11 +11455,24 @@ def random_obshist_row(n_clicks, data, page_size):
 # calls from html.Button clicks lets the controls inherit the page
 # button styling instead.
 
+# Helper: resolve the dcc.Graph wrapper div to the inner Plotly
+# graph div.  document.getElementById('obshist-plot') returns the
+# React wrapper which doesn't carry `.data` / `.layout` — Plotly
+# attaches those to the `.js-plotly-plot` child.
+_OBSHIST_PLOTLY_DIV_HELPER = """
+function _obshist_pdiv() {
+    var c = document.getElementById('obshist-plot');
+    if (!c) { return null; }
+    var p = c.querySelector('.js-plotly-plot');
+    return p || c;
+}
+"""
+
 app.clientside_callback(
-    """
+    _OBSHIST_PLOTLY_DIV_HELPER + """
     function(n_clicks) {
         if (!n_clicks) { return null; }
-        var gd = document.getElementById('obshist-plot');
+        var gd = _obshist_pdiv();
         if (!gd || !gd.layout) { return null; }
         var has_v = gd.layout.yaxis2 !== undefined;
         if (has_v) {
@@ -11483,10 +11496,10 @@ app.clientside_callback(
 )
 
 app.clientside_callback(
-    """
+    _OBSHIST_PLOTLY_DIV_HELPER + """
     function(n_clicks) {
         if (!n_clicks) { return null; }
-        var gd = document.getElementById('obshist-plot');
+        var gd = _obshist_pdiv();
         if (!gd || !gd.data) { return null; }
         var indices = gd.data.map(function(_, i) { return i; });
         Plotly.restyle(gd, {visible: true}, indices);
@@ -11499,10 +11512,10 @@ app.clientside_callback(
 )
 
 app.clientside_callback(
-    """
+    _OBSHIST_PLOTLY_DIV_HELPER + """
     function(n_clicks) {
         if (!n_clicks) { return null; }
-        var gd = document.getElementById('obshist-plot');
+        var gd = _obshist_pdiv();
         if (!gd || !gd.layout || !gd.layout.shapes) { return null; }
         var newShapes = gd.layout.shapes.map(function(s) {
             return Object.assign({}, s, {visible: s.visible === false});
@@ -11521,10 +11534,10 @@ app.clientside_callback(
 # to [high, low].  At full-extent the slider acts as "auto" and we
 # restore autorange='reversed'.
 app.clientside_callback(
-    """
+    _OBSHIST_PLOTLY_DIV_HELPER + """
     function(value) {
         if (!value || value.length !== 2) { return null; }
-        var gd = document.getElementById('obshist-plot');
+        var gd = _obshist_pdiv();
         if (!gd || !gd.layout || !gd.layout.yaxis2) { return null; }
         if (value[0] <= 5 && value[1] >= 28) {
             Plotly.relayout(gd, {'yaxis.autorange': 'reversed'});
