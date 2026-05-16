@@ -1635,11 +1635,17 @@ def load_boxscore_data():
               "first_obs / last_obs / disc_by columns will be blank")
         osa = None
     if osa is not None and len(osa):
-        permid_clean = df["permid"].astype(str).str.strip()
-        provid_clean = df["provid"].astype(str).str.strip()
-        df["primary_desig"] = permid_clean.where(
-            permid_clean.ne("") & permid_clean.ne("nan"),
-            provid_clean)
+        # Build the join key as `permid` if non-empty, else `provid`.
+        # `astype(str)` on a column with NaN can yield either "nan" or
+        # leave it as float NaN depending on dtype, so normalise via
+        # fillna("") first.
+        permid_str = df["permid"].fillna("").astype(str).str.strip()
+        provid_str = df["provid"].fillna("").astype(str).str.strip()
+        permid_str = permid_str.where(permid_str.ne("nan"), "")
+        provid_str = provid_str.where(provid_str.ne("nan"), "")
+        key = permid_str.where(permid_str.ne(""), provid_str)
+        key = key.where(key.ne(""), None)
+        df["primary_desig"] = key
         osa_idx = osa.set_index("primary_desig")
         df["first_obs"] = df["primary_desig"].map(osa_idx["first_obs"])
         df["last_obs"] = df["primary_desig"].map(osa_idx["last_obs"])
