@@ -981,7 +981,7 @@ SELECT
     mo.unpacked_primary_provisional_designation AS provid,
     mo.packed_primary_provisional_designation AS packed_provid,
     ni.permid AS permid,
-    ni.iau_name AS iau_name,
+    mpn.name AS iau_name,
     mo.orbit_type_int,
     mo.q::double precision,
     mo.e::double precision,
@@ -998,6 +998,8 @@ FROM mpc_orbits mo
 LEFT JOIN numbered_identifications ni
     ON ni.packed_primary_provisional_designation
      = mo.packed_primary_provisional_designation
+LEFT JOIN minor_planet_names mpn
+    ON mpn.mp_number = ni.permid
 """
 
 CACHE_MAX_AGE_SEC = 86400  # 1 day
@@ -6269,7 +6271,10 @@ app.layout = html.Div(
                                 "surfaces MPC's own arc/nobs (NULL for "
                                 "~50 % of rows); a wider aggregation "
                                 "cache for first_obs / last_obs / "
-                                "disc_by is queued for Phase 2.",
+                                "disc_by is queued for Phase 2, as is a "
+                                "current-solar-elongation column.  "
+                                "E-MOID is meaningful only for the NEO "
+                                "subset (MPC + SBDB only fill it there).",
                                 className="subtext",
                                 style={"fontSize": "13px",
                                        "marginBottom": "16px",

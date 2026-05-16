@@ -70,6 +70,32 @@ def sun_ra_dec(obstime_utc):
     return ra, dec
 
 
+def solar_elongation(obstime_utc, ra_deg, dec_deg):
+    """Angular separation between the Sun and a sky position (degrees).
+
+    Same accuracy class as `sun_ra_dec` (~1°, J2000 ignored).  Mirrors
+    `lib.lunar.lunar_elongation` so callers can swap the two with no
+    other change.
+
+    Parameters
+    ----------
+    obstime_utc : array-like of datetime64 or pandas Timestamps
+    ra_deg, dec_deg : ndarray (degrees), target position
+
+    Returns
+    -------
+    elongation : ndarray (degrees)
+    """
+    sun_ra, sun_dec = sun_ra_dec(obstime_utc)
+    ra1 = np.radians(np.asarray(ra_deg, dtype=float))
+    dec1 = np.radians(np.asarray(dec_deg, dtype=float))
+    ra2 = np.radians(sun_ra)
+    dec2 = np.radians(sun_dec)
+    cos_elong = (np.sin(dec1) * np.sin(dec2)
+                 + np.cos(dec1) * np.cos(dec2) * np.cos(ra1 - ra2))
+    return np.degrees(np.arccos(np.clip(cos_elong, -1, 1)))
+
+
 def sun_altitude(obstime_utc, longitude_deg, latitude_deg):
     """Sun altitude (degrees) for arrays of times and observer locations.
 
