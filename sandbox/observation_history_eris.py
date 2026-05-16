@@ -24,7 +24,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from sandbox._observation_history_helpers import (  # noqa: E402
+from lib.observation_history import (  # noqa: E402
     fetch_obs, build_history_figure, write_html,
 )
 

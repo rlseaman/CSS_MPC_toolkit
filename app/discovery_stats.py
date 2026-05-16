@@ -3164,7 +3164,6 @@ _OBS_HISTORY_TABLE_COLUMNS = [
     {"name": "e",           "id": "e"},
     {"name": "i (°)",       "id": "i"},
     {"name": "a (AU)",      "id": "a"},
-    {"name": "E-MOID (AU)", "id": "earth_moid"},
     {"name": "arc (d)",     "id": "arc_length_total"},
     {"name": "n_obs",       "id": "nobs_total"},
     {"name": "U",           "id": "u_param"},
@@ -6272,9 +6271,7 @@ app.layout = html.Div(
                                 "~50 % of rows); a wider aggregation "
                                 "cache for first_obs / last_obs / "
                                 "disc_by is queued for Phase 2, as is a "
-                                "current-solar-elongation column.  "
-                                "E-MOID is meaningful only for the NEO "
-                                "subset (MPC + SBDB only fill it there).",
+                                "current-solar-elongation column.",
                                 className="subtext",
                                 style={"fontSize": "13px",
                                        "marginBottom": "16px",
@@ -6394,6 +6391,32 @@ app.layout = html.Div(
                                     "backgroundColor": "transparent",
                                     "color": "inherit",
                                 },
+                                # row_selectable lets the user click a row
+                                # to load its observation-history plot
+                                # below.  `cell_selectable=False` keeps
+                                # clicks on data cells from triggering
+                                # the same callback (active_cell would
+                                # also fire on text-cell focus).
+                                row_selectable="single",
+                                cell_selectable=False,
+                                selected_rows=[],
+                            ),
+                            # Slot for the per-object observation history
+                            # plot rendered when a table row is selected.
+                            html.Div(
+                                id="obshist-plot-status",
+                                className="subtext",
+                                style={"fontSize": "12px",
+                                       "marginTop": "12px",
+                                       "minHeight": "16px"}),
+                            dcc.Loading(
+                                id="obshist-plot-loading",
+                                type="circle",
+                                children=dcc.Graph(
+                                    id="obshist-plot",
+                                    config={"displayModeBar": True},
+                                    style={"display": "none"},
+                                ),
                             ),
                         ]),
                     ],
@@ -10989,7 +11012,7 @@ def update_obshist(classes, filters, h_range, active_tab):
     # serialised to dict, which the DataTable renders as the string
     # "NaN" — so we coerce missing values to "" up front.
     fmt_map = {"h": "%.2f", "q": "%.4f", "e": "%.4f", "i": "%.3f",
-               "a": "%.4f", "earth_moid": "%.4f"}
+               "a": "%.4f"}
     for col, fmt in fmt_map.items():
         display[col] = display[col].apply(
             lambda v, f=fmt: f % v if pd.notna(v) else "")
@@ -11007,6 +11030,69 @@ def update_obshist(classes, filters, h_range, active_tab):
         status = f"{n_match:,} objects match."
 
     return display.to_dict("records"), status
+
+
+@app.callback(
+    Output("obshist-plot", "figure"),
+    Output("obshist-plot", "style"),
+    Output("obshist-plot-status", "children"),
+    Input("obshist-table", "selected_rows"),
+    Input("obshist-table", "derived_virtual_data"),
+    Input("tabs", "value"),
+)
+def update_obshist_plot(selected_rows, derived_data, active_tab):
+    """Render the observation-history plot for the row the user clicked.
+
+    `derived_virtual_data` is the table's currently-rendered (filtered +
+    sorted) row payload; `selected_rows` indexes into it.  Falls back to
+    a hidden Graph + status hint when nothing is selected.
+    """
+    if active_tab != "tab-obshist":
+        raise PreventUpdate
+
+    hidden_style = {"display": "none"}
+    visible_style = {"display": "block", "marginTop": "8px"}
+
+    if not selected_rows or not derived_data:
+        return go.Figure(), hidden_style, (
+            "Click a row to load its observation-history plot.")
+
+    idx = selected_rows[0]
+    if idx >= len(derived_data):
+        return go.Figure(), hidden_style, ""
+    row = derived_data[idx]
+
+    from lib.observation_history import fetch_obs, build_history_figure
+
+    permid = (row.get("permid") or "").strip() or None
+    provid = (row.get("provid") or "").strip() or None
+    name = row.get("iau_name") or provid or permid or "?"
+    label = f"{provid or '?'}"
+    if permid:
+        label += f" (permid {permid})"
+    if name and name not in (provid, permid):
+        label = f"{name} — {label}"
+
+    try:
+        if permid:
+            df = fetch_obs(permid=permid)
+        elif provid:
+            df = fetch_obs(provid=provid)
+        else:
+            return go.Figure(), hidden_style, "No designation on this row."
+    except Exception as e:
+        return (go.Figure(), hidden_style,
+                f"Query failed for {label}: {e}")
+
+    if df.empty:
+        return (go.Figure(), hidden_style,
+                f"No obs_sbn rows for {label}.")
+
+    fig = build_history_figure(df, name=label, height=720)
+    status = (f"Plotted {len(df):,} obs for {label} "
+              f"({df['stn'].nunique()} stations, "
+              f"{df['obstime'].min():%Y} – {df['obstime'].max():%Y}).")
+    return fig, visible_style, status
 
 
 # ---------------------------------------------------------------------------

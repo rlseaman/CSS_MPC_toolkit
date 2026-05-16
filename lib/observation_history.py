@@ -1,15 +1,14 @@
-"""Shared helpers for the observation-history sandbox prototypes.
+"""Observation-history plot helpers.
 
-`observation_history_eris.py` and `observation_history_uz173.py` import
-from this module so the V-vs-time plot and the per-site lifeline plot
-can be built once and reused for each target.  Anything here should
-remain prototype-grade until the Observability tab lands in `lib/`.
+Two-panel observation history figure: band-corrected V vs obstime on top,
+site-code lifeline vs obstime on the bottom, sharing an x-axis and a
+rangeslider.  Vertical bands shade intervals where solar elongation > 90°
+(observable) vs ≤ 90° (near conjunction).
+
+Sourced from the `sandbox/observation_history_*.py` prototypes (commit
+b45a597); kept compatible with those scripts so they keep working.
 """
 from __future__ import annotations
-
-import os
-import sys
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -17,10 +16,7 @@ import plotly.graph_objects as go
 import plotly.io as pio
 from plotly.subplots import make_subplots
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO_ROOT))
-
-from lib.db import connect, timed_query  # noqa: E402
+from lib.db import connect, timed_query
 
 # ---- Photometric band → V offsets ----------------------------------------
 # Singles from sql/discovery_tracklets.sql + docs/band_corrections.md.
@@ -61,6 +57,10 @@ def sun_ra_dec(jd: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
     Meeus, Astronomical Algorithms ch. 25 (low-accuracy form).  Better than
     0.01° in longitude over 1950–2050 — plenty for an elongation threshold.
+
+    Independent of `lib.solar.sun_ra_dec` because the latter takes pandas
+    datetime arrays whereas the shading code here works in JD; harmonising
+    is a follow-up.
     """
     T = (jd - 2451545.0) / 36525.0
     L0 = (280.46646 + 36000.76983 * T + 0.0003032 * T**2) % 360.0
@@ -92,11 +92,16 @@ def to_v(mag: pd.Series, band: pd.Series) -> pd.Series:
 # ---- Data loading ---------------------------------------------------------
 
 def fetch_obs(*, permid: str | None = None,
-              provid: str | None = None) -> pd.DataFrame:
+              provid: str | None = None,
+              conn=None) -> pd.DataFrame:
     """Pull astrometry from obs_sbn for the given designation.
 
     Exactly one of `permid` or `provid` must be supplied.  Returns the
     canonical columns with elongation and V_approx already computed.
+
+    If `conn` is None a fresh connection is opened (uses PGHOST env var).
+    Callers in a callback context that already hold a connection should
+    pass it through to avoid the connect/disconnect overhead.
     """
     if (permid is None) == (provid is None):
         raise ValueError("supply exactly one of permid or provid")
@@ -116,8 +121,10 @@ def fetch_obs(*, permid: str | None = None,
         params = (provid,)
         label = f"obs_sbn[provid={provid}]"
 
-    host = os.environ.get("PGHOST") or "sibyl"
-    with connect(host=host) as conn:
+    if conn is None:
+        with connect() as c:
+            df = timed_query(c, sql, params=params, label=label)
+    else:
         df = timed_query(conn, sql, params=params, label=label)
     if df.empty:
         return df
@@ -193,7 +200,8 @@ def build_history_figure(df: pd.DataFrame, *, name: str,
                          grid_start: pd.Timestamp | None = None,
                          grid_end_pad_days: int = 0,
                          v_presets: list[tuple[str, dict]] | None = None,
-                         top_n_sites: int = 6) -> go.Figure:
+                         top_n_sites: int = 6,
+                         height: int = 820) -> go.Figure:
     """Two-panel observation history figure.
 
     Top panel: V (band-corrected) vs obstime, per-band scatter, with vertical
@@ -288,7 +296,7 @@ def build_history_figure(df: pd.DataFrame, *, name: str,
         shapes=shapes_visible,
         title=title,
         template="plotly_white",
-        height=820,
+        height=height,
         legend=dict(
             title="Photometric band<br><sub>click to hide · "
                   "double-click to isolate</sub>",
@@ -358,6 +366,7 @@ def build_history_figure(df: pd.DataFrame, *, name: str,
     return fig
 
 
-def write_html(fig: go.Figure, output_path: Path) -> None:
+def write_html(fig: go.Figure, output_path) -> None:
+    """Write `fig` to `output_path` as a self-contained HTML page."""
     output_path.write_text(
         pio.to_html(fig, include_plotlyjs="cdn", full_html=True))
