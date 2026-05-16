@@ -195,13 +195,20 @@ def site_groups(df: pd.DataFrame, top_n: int = 6,
 
 # ---- Figure builder -------------------------------------------------------
 
+_DARK_BAND_ABOVE = "#3d3520"   # muted yellow-ish for elong > 90°
+_DARK_BAND_BELOW = "#2a2a2a"   # grey for elong ≤ 90°
+_LIGHT_BAND_ABOVE = "#fff2c7"
+_LIGHT_BAND_BELOW = "#e6e6e6"
+
+
 def build_history_figure(df: pd.DataFrame, *, name: str,
                          title_extra: str = "",
                          grid_start: pd.Timestamp | None = None,
                          grid_end_pad_days: int = 0,
                          v_presets: list[tuple[str, dict]] | None = None,
-                         top_n_sites: int = 6,
-                         height: int = 820) -> go.Figure:
+                         top_n_sites: int = 10,
+                         height: int = 820,
+                         theme: dict | None = None) -> go.Figure:
     """Two-panel observation history figure.
 
     Top panel: V (band-corrected) vs obstime, per-band scatter, with vertical
@@ -221,6 +228,16 @@ def build_history_figure(df: pd.DataFrame, *, name: str,
     df = df.copy()
     df["site_row"], site_order = site_groups(df, top_n=top_n_sites)
 
+    is_dark = bool(theme and theme.get("template") == "plotly_dark")
+    band_above = _DARK_BAND_ABOVE if is_dark else _LIGHT_BAND_ABOVE
+    band_below = _DARK_BAND_BELOW if is_dark else _LIGHT_BAND_BELOW
+    plot_template = (theme.get("template") if theme
+                     else "plotly_white")
+    fg_color = theme.get("text") if theme else "#222"
+    subtext_color = theme.get("subtext") if theme else "#666"
+    button_bg = theme.get("paper") if theme else "#ffffff"
+    button_border = theme.get("hr_color") if theme else "#cccccc"
+
     fig = make_subplots(
         rows=2, cols=1, shared_xaxes=True,
         row_heights=[0.62, 0.38], vertical_spacing=0.04,
@@ -233,7 +250,7 @@ def build_history_figure(df: pd.DataFrame, *, name: str,
         return [
             dict(type="rect", xref="x", yref=yref,
                  x0=x0, x1=x1, y0=0, y1=1,
-                 fillcolor="#fff2c7" if is_above else "#e6e6e6",
+                 fillcolor=band_above if is_above else band_below,
                  opacity=0.55, line=dict(width=0), layer="below")
             for x0, x1, is_above in segments
         ]
@@ -292,24 +309,32 @@ def build_history_figure(df: pd.DataFrame, *, name: str,
             ("12 – 25", dict(autorange=False, range=[25, 12])),
         ]
 
+    button_style = dict(bgcolor=button_bg, bordercolor=button_border,
+                        font=dict(color=fg_color))
+
     fig.update_layout(
         shapes=shapes_visible,
-        title=title,
-        template="plotly_white",
+        title=dict(text=title, font=dict(color=fg_color)),
+        template=plot_template,
         height=height,
         legend=dict(
-            title="Photometric band<br><sub>click to hide · "
-                  "double-click to isolate</sub>",
+            title=dict(text=(
+                "Photometric band<br><sub>click to hide · "
+                "double-click to isolate</sub>"),
+                       font=dict(color=fg_color)),
+            font=dict(color=fg_color),
+            bgcolor="rgba(0,0,0,0)",
             itemsizing="constant", traceorder="normal",
         ),
         updatemenus=[
             # Single centred control row under the rangeslider — three
             # momentary buttons packed via direction='right', then the V
-            # range dropdown to their right.  Cluster centred near x=0.5.
+            # range dropdown directly to their right (gap kept small).
             dict(
                 type="buttons", direction="right", showactive=False,
-                x=0.27, xanchor="left", y=-0.22, yanchor="top",
+                x=0.30, xanchor="left", y=-0.22, yanchor="top",
                 pad=dict(t=4, b=4),
+                **button_style,
                 buttons=[
                     dict(
                         label="Reset axes",
@@ -333,8 +358,9 @@ def build_history_figure(df: pd.DataFrame, *, name: str,
             ),
             dict(
                 type="dropdown", direction="up", showactive=True,
-                x=0.65, xanchor="left", y=-0.22, yanchor="top",
+                x=0.555, xanchor="left", y=-0.22, yanchor="top",
                 pad=dict(t=4, b=4),
+                **button_style,
                 buttons=[
                     dict(label=f"V range: {lbl}", method="relayout",
                          args=[{f"yaxis.{k}": v for k, v in spec.items()}])
@@ -343,15 +369,18 @@ def build_history_figure(df: pd.DataFrame, *, name: str,
             ),
         ],
         annotations=[dict(
-            text=("Shading: pale yellow = solar elongation > 90° "
-                  "(observable); grey = ≤ 90° (near conjunction).  Drag the "
-                  "strip below the lower panel to scrub through time."),
+            text=("Shading: pale yellow / muted gold = solar elongation "
+                  "> 90° (observable); grey = ≤ 90° (near conjunction).  "
+                  "Drag the strip below the lower panel to scrub through "
+                  "time."),
             xref="paper", yref="paper",
             x=0, y=-0.36, xanchor="left",
             showarrow=False,
-            font=dict(size=11, color="#666"),
+            font=dict(size=11, color=subtext_color),
         )],
         margin=dict(t=110, b=180, r=180),
+        paper_bgcolor=(theme.get("paper") if theme else None),
+        plot_bgcolor=(theme.get("plot") if theme else None),
     )
 
     fig.update_yaxes(title_text="V (band-corrected, mag)",

@@ -3161,6 +3161,7 @@ _OBS_HISTORY_TABLE_COLUMNS = [
     {"name": "Class",       "id": "ext_name"},
     {"name": "H",           "id": "h"},
     {"name": "q (AU)",      "id": "q"},
+    {"name": "Q (AU)",      "id": "Q"},
     {"name": "e",           "id": "e"},
     {"name": "i (°)",       "id": "i"},
     {"name": "a (AU)",      "id": "a"},
@@ -6315,8 +6316,6 @@ app.layout = html.Div(
                                         dcc.Checklist(
                                             id="obshist-filters",
                                             options=[
-                                                {"label": " NEO only",
-                                                 "value": "neo"},
                                                 {"label": " PHA only",
                                                  "value": "pha"},
                                                 {"label": " Retrograde",
@@ -6346,7 +6345,44 @@ app.layout = html.Div(
                                             },
                                         ),
                                     ]),
+                                    html.Div(style={"width": "250px"},
+                                             children=[
+                                        html.Label("Nopp range",
+                                                   style=LABEL_STYLE),
+                                        dcc.RangeSlider(
+                                            id="obshist-nopp-range",
+                                            min=0, max=30,
+                                            value=[0, 30],
+                                            marks={0: "0", 1: "1", 5: "5",
+                                                   10: "10", 15: "15",
+                                                   20: "20", 25: "25",
+                                                   30: "30+"},
+                                            tooltip={
+                                                "placement": "bottom",
+                                                "always_visible": False,
+                                            },
+                                        ),
+                                    ]),
                                 ],
+                            ),
+                            # Per-object observation-history plot sits
+                            # above the table so it's the first thing
+                            # the user sees after picking a class.
+                            # dcc.Loading retains the previous figure
+                            # while a new one is being fetched.
+                            html.Div(
+                                id="obshist-plot-status",
+                                className="subtext",
+                                style={"fontSize": "12px",
+                                       "marginBottom": "4px",
+                                       "minHeight": "16px"}),
+                            dcc.Loading(
+                                id="obshist-plot-loading",
+                                type="circle",
+                                children=dcc.Graph(
+                                    id="obshist-plot",
+                                    config={"displayModeBar": True},
+                                ),
                             ),
                             # Status banner — row count, truncation
                             # warning, etc.  Set by the callback.
@@ -6354,6 +6390,7 @@ app.layout = html.Div(
                                 id="obshist-status",
                                 className="subtext",
                                 style={"fontSize": "12px",
+                                       "marginTop": "16px",
                                        "marginBottom": "8px",
                                        "minHeight": "16px"}),
                             # Result table — declared once in the layout
@@ -6393,30 +6430,13 @@ app.layout = html.Div(
                                 },
                                 # row_selectable lets the user click a row
                                 # to load its observation-history plot
-                                # below.  `cell_selectable=False` keeps
+                                # above.  `cell_selectable=False` keeps
                                 # clicks on data cells from triggering
                                 # the same callback (active_cell would
                                 # also fire on text-cell focus).
                                 row_selectable="single",
                                 cell_selectable=False,
                                 selected_rows=[],
-                            ),
-                            # Slot for the per-object observation history
-                            # plot rendered when a table row is selected.
-                            html.Div(
-                                id="obshist-plot-status",
-                                className="subtext",
-                                style={"fontSize": "12px",
-                                       "marginTop": "12px",
-                                       "minHeight": "16px"}),
-                            dcc.Loading(
-                                id="obshist-plot-loading",
-                                type="circle",
-                                children=dcc.Graph(
-                                    id="obshist-plot",
-                                    config={"displayModeBar": True},
-                                    style={"display": "none"},
-                                ),
                             ),
                         ]),
                     ],
@@ -10973,9 +10993,10 @@ def download_boxscore(n_clicks, grouping, filters, h_range):
     Input("obshist-classes", "value"),
     Input("obshist-filters", "value"),
     Input("obshist-h-range", "value"),
+    Input("obshist-nopp-range", "value"),
     Input("tabs", "value"),
 )
-def update_obshist(classes, filters, h_range, active_tab):
+def update_obshist(classes, filters, h_range, nopp_range, active_tab):
     if active_tab != "tab-obshist":
         raise PreventUpdate
 
@@ -10986,8 +11007,6 @@ def update_obshist(classes, filters, h_range, active_tab):
     filt = bdf
     if classes:
         filt = filt[filt["ext_name"].isin(classes)]
-    if "neo" in (filters or []):
-        filt = filt[filt["neo"]]
     if "pha" in (filters or []):
         filt = filt[filt["pha"]]
     if "retro" in (filters or []):
@@ -10995,6 +11014,16 @@ def update_obshist(classes, filters, h_range, active_tab):
     h_lo, h_hi = h_range
     if h_lo > 0 or h_hi < 32:
         filt = filt[filt["h"].between(h_lo, h_hi) | filt["h"].isna()]
+    nopp_lo, nopp_hi = nopp_range
+    if nopp_lo > 0 or nopp_hi < 30:
+        # Treat the upper-end mark as "30 or more".  NaN nopp passes the
+        # filter so newly-fitted objects without a recorded count aren't
+        # silently hidden.
+        if nopp_hi >= 30:
+            mask = filt["nopp"].ge(nopp_lo) | filt["nopp"].isna()
+        else:
+            mask = filt["nopp"].between(nopp_lo, nopp_hi) | filt["nopp"].isna()
+        filt = filt[mask]
 
     n_match = len(filt)
     truncated = n_match > _OBS_HISTORY_ROW_CAP
@@ -11005,14 +11034,21 @@ def update_obshist(classes, filters, h_range, active_tab):
         filt = filt.sort_values("h", na_position="last").head(
             _OBS_HISTORY_ROW_CAP)
 
+    # Compute Q (aphelion) for bound orbits.  For e≥1 (hyperbolic /
+    # parabolic) Q is undefined — leave NaN so the row renders blank.
+    filt = filt.copy()
+    bound = filt["e"].lt(1.0).fillna(False)
+    filt.loc[bound, "Q"] = (
+        filt.loc[bound, "a"] * (1.0 + filt.loc[bound, "e"]))
+
     cols = [c["id"] for c in _OBS_HISTORY_TABLE_COLUMNS]
     display = filt[cols].copy()
 
     # Numeric formatting for legibility.  Pandas writes NaN as NaN when
     # serialised to dict, which the DataTable renders as the string
     # "NaN" — so we coerce missing values to "" up front.
-    fmt_map = {"h": "%.2f", "q": "%.4f", "e": "%.4f", "i": "%.3f",
-               "a": "%.4f"}
+    fmt_map = {"h": "%.2f", "q": "%.4f", "Q": "%.4f", "e": "%.4f",
+               "i": "%.3f", "a": "%.4f"}
     for col, fmt in fmt_map.items():
         display[col] = display[col].apply(
             lambda v, f=fmt: f % v if pd.notna(v) else "")
@@ -11032,67 +11068,70 @@ def update_obshist(classes, filters, h_range, active_tab):
     return display.to_dict("records"), status
 
 
+_OBSHIST_DEFAULT_PERMID = "134340"  # Pluto — first thing rendered when
+                                    # the user has not yet clicked a row.
+
+
 @app.callback(
     Output("obshist-plot", "figure"),
-    Output("obshist-plot", "style"),
     Output("obshist-plot-status", "children"),
     Input("obshist-table", "selected_rows"),
     Input("obshist-table", "derived_virtual_data"),
+    Input("theme-toggle", "value"),
     Input("tabs", "value"),
 )
-def update_obshist_plot(selected_rows, derived_data, active_tab):
-    """Render the observation-history plot for the row the user clicked.
+def update_obshist_plot(selected_rows, derived_data, theme_name, active_tab):
+    """Render the observation-history plot for the user's row pick.
 
-    `derived_virtual_data` is the table's currently-rendered (filtered +
-    sorted) row payload; `selected_rows` indexes into it.  Falls back to
-    a hidden Graph + status hint when nothing is selected.
+    On first activation (no selection yet) we load Pluto so the figure
+    space isn't empty.  `dcc.Loading` keeps whatever was previously
+    shown visible until the next fetch completes.
     """
     if active_tab != "tab-obshist":
         raise PreventUpdate
 
-    hidden_style = {"display": "none"}
-    visible_style = {"display": "block", "marginTop": "8px"}
-
-    if not selected_rows or not derived_data:
-        return go.Figure(), hidden_style, (
-            "Click a row to load its observation-history plot.")
-
-    idx = selected_rows[0]
-    if idx >= len(derived_data):
-        return go.Figure(), hidden_style, ""
-    row = derived_data[idx]
-
     from lib.observation_history import fetch_obs, build_history_figure
 
-    permid = (row.get("permid") or "").strip() or None
-    provid = (row.get("provid") or "").strip() or None
-    name = row.get("iau_name") or provid or permid or "?"
-    label = f"{provid or '?'}"
+    # Resolve the active designation.  Empty selection → Pluto default.
+    permid = provid = name = None
+    if selected_rows and derived_data:
+        idx = selected_rows[0]
+        if 0 <= idx < len(derived_data):
+            row = derived_data[idx]
+            permid = (row.get("permid") or "").strip() or None
+            provid = (row.get("provid") or "").strip() or None
+            name = row.get("iau_name") or None
+    if not (permid or provid):
+        permid = _OBSHIST_DEFAULT_PERMID
+        name = "Pluto"
+
+    label_bits = []
+    if name:
+        label_bits.append(name)
+    if provid:
+        label_bits.append(provid)
     if permid:
-        label += f" (permid {permid})"
-    if name and name not in (provid, permid):
-        label = f"{name} — {label}"
+        label_bits.append(f"permid {permid}")
+    label = " — ".join(label_bits) if label_bits else "?"
 
     try:
         if permid:
             df = fetch_obs(permid=permid)
-        elif provid:
-            df = fetch_obs(provid=provid)
         else:
-            return go.Figure(), hidden_style, "No designation on this row."
+            df = fetch_obs(provid=provid)
     except Exception as e:
-        return (go.Figure(), hidden_style,
-                f"Query failed for {label}: {e}")
+        return go.Figure(), f"Query failed for {label}: {e}"
 
     if df.empty:
-        return (go.Figure(), hidden_style,
-                f"No obs_sbn rows for {label}.")
+        return go.Figure(), f"No obs_sbn rows for {label}."
 
-    fig = build_history_figure(df, name=label, height=720)
+    theme_dict = theme(theme_name)
+    fig = build_history_figure(
+        df, name=label, height=720, theme=theme_dict)
     status = (f"Plotted {len(df):,} obs for {label} "
               f"({df['stn'].nunique()} stations, "
               f"{df['obstime'].min():%Y} – {df['obstime'].max():%Y}).")
-    return fig, visible_style, status
+    return fig, status
 
 
 # ---------------------------------------------------------------------------
