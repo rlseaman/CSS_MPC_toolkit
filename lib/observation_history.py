@@ -238,14 +238,23 @@ def build_history_figure(df: pd.DataFrame, *, name: str,
     button_bg = theme.get("paper") if theme else "#ffffff"
     button_border = theme.get("hr_color") if theme else "#cccccc"
 
-    fig = make_subplots(
-        rows=2, cols=1, shared_xaxes=True,
-        row_heights=[0.62, 0.38], vertical_spacing=0.04,
-    )
+    # When the object has no usable photometry (all mag NULL — e.g.
+    # historical photographic plates), omit the V panel entirely and
+    # surface a single-panel site lifeline.  This is the right shape
+    # for old comets like C/1913 J1 where positional data exists but
+    # there are no calibrated magnitudes.
+    has_v = bool(df["v_mag"].notna().any())
 
-    # Two parallel shape lists — one per panel — anchored to each subplot's
-    # y-domain rather than the figure paper, so they don't bleed into the
-    # rangeslider strip below the bottom panel.
+    if has_v:
+        fig = make_subplots(
+            rows=2, cols=1, shared_xaxes=True,
+            row_heights=[0.62, 0.38], vertical_spacing=0.04,
+        )
+        shading_yrefs = ["y domain", "y2 domain"]
+    else:
+        fig = make_subplots(rows=1, cols=1)
+        shading_yrefs = ["y domain"]
+
     def _shapes_for(yref: str) -> list[dict]:
         return [
             dict(type="rect", xref="x", yref=yref,
@@ -254,9 +263,10 @@ def build_history_figure(df: pd.DataFrame, *, name: str,
                  opacity=0.55, line=dict(width=0), layer="below")
             for x0, x1, is_above in segments
         ]
-    shapes_visible = _shapes_for("y domain") + _shapes_for("y2 domain")
+    shapes_visible = sum((_shapes_for(yref) for yref in shading_yrefs), [])
     shapes_hidden = [{**s, "visible": False} for s in shapes_visible]
 
+    site_row = 2 if has_v else 1
     band_counts = df["band_norm"].value_counts()
     for i, band in enumerate(band_counts.index):
         sub = df[df["band_norm"] == band]
@@ -264,28 +274,37 @@ def build_history_figure(df: pd.DataFrame, *, name: str,
             continue
         label = band if band else "(blank)"
         color = PALETTE[i % len(PALETTE)]
-        top_hover = [
-            f"{r.obstime:%Y-%m-%d %H:%M}<br>"
-            f"stn {r.stn}  band {label}<br>"
-            f"m={r.mag:.2f}  V≈{r.v_mag:.2f}<br>"
-            f"elong={r.elong:.1f}°"
-            for r in sub.itertuples()
-        ]
-        bot_hover = [
-            f"{r.obstime:%Y-%m-%d %H:%M}<br>"
-            f"stn {r.stn}  band {label}<br>"
-            f"V≈{r.v_mag:.2f}  elong={r.elong:.1f}°"
-            for r in sub.itertuples()
-        ]
+        if has_v:
+            top_hover = [
+                f"{r.obstime:%Y-%m-%d %H:%M}<br>"
+                f"stn {r.stn}  band {label}<br>"
+                f"m={r.mag:.2f}  V≈{r.v_mag:.2f}<br>"
+                f"elong={r.elong:.1f}°"
+                for r in sub.itertuples()
+            ]
+            bot_hover = [
+                f"{r.obstime:%Y-%m-%d %H:%M}<br>"
+                f"stn {r.stn}  band {label}<br>"
+                f"V≈{r.v_mag:.2f}  elong={r.elong:.1f}°"
+                for r in sub.itertuples()
+            ]
+        else:
+            bot_hover = [
+                f"{r.obstime:%Y-%m-%d %H:%M}<br>"
+                f"stn {r.stn}  band {label}<br>"
+                f"elong={r.elong:.1f}°"
+                for r in sub.itertuples()
+            ]
         legendgroup = f"band:{label}"
-        fig.add_trace(go.Scatter(
-            x=sub["obstime"], y=sub["v_mag"],
-            mode="markers",
-            marker=dict(size=5, color=color, line=dict(width=0)),
-            text=top_hover, hoverinfo="text",
-            name=f"{label}  ({len(sub):,})",
-            legendgroup=legendgroup, showlegend=True,
-        ), row=1, col=1)
+        if has_v:
+            fig.add_trace(go.Scatter(
+                x=sub["obstime"], y=sub["v_mag"],
+                mode="markers",
+                marker=dict(size=5, color=color, line=dict(width=0)),
+                text=top_hover, hoverinfo="text",
+                name=f"{label}  ({len(sub):,})",
+                legendgroup=legendgroup, showlegend=True,
+            ), row=1, col=1)
         fig.add_trace(go.Scatter(
             x=sub["obstime"], y=sub["site_row"],
             mode="markers",
@@ -293,9 +312,9 @@ def build_history_figure(df: pd.DataFrame, *, name: str,
                         symbol="line-ns-open",
                         line=dict(width=1.5, color=color)),
             text=bot_hover, hoverinfo="text",
-            name=f"{label}",
-            legendgroup=legendgroup, showlegend=False,
-        ), row=2, col=1)
+            name=f"{label}  ({len(sub):,})",
+            legendgroup=legendgroup, showlegend=not has_v,
+        ), row=site_row, col=1)
 
     title = (f"Observation history — {name}<br>"
              f"<sub>{len(df):,} obs from obs_sbn, "
@@ -312,6 +331,66 @@ def build_history_figure(df: pd.DataFrame, *, name: str,
     button_style = dict(bgcolor=button_bg, bordercolor=button_border,
                         font=dict(color=fg_color))
 
+    # The Reset-axes args list depends on whether the V panel exists.
+    # When it does we restore the reversed V autoscale AND yaxis2; in
+    # the lifeline-only case yaxis is the categorical site axis.
+    if has_v:
+        reset_args = {"xaxis.autorange": True,
+                      "yaxis.autorange": "reversed",
+                      "yaxis2.autorange": True}
+    else:
+        reset_args = {"xaxis.autorange": True,
+                      "yaxis.autorange": True}
+
+    updatemenus = [
+        dict(
+            type="buttons", direction="right", showactive=False,
+            x=0.30, xanchor="left", y=-0.22, yanchor="top",
+            pad=dict(t=4, b=4),
+            **button_style,
+            buttons=[
+                dict(label="Reset axes",
+                     method="relayout", args=[reset_args]),
+                dict(label="Show all bands",
+                     method="restyle", args=[{"visible": True}]),
+                dict(label="Toggle elongation shading",
+                     method="relayout",
+                     args=[dict(shapes=shapes_hidden)],
+                     args2=[dict(shapes=shapes_visible)]),
+            ],
+        ),
+    ]
+    if has_v:
+        updatemenus.append(dict(
+            type="dropdown", direction="up", showactive=True,
+            x=0.555, xanchor="left", y=-0.22, yanchor="top",
+            pad=dict(t=4, b=4),
+            **button_style,
+            buttons=[
+                dict(label=f"V range: {lbl}", method="relayout",
+                     args=[{f"yaxis.{k}": v for k, v in spec.items()}])
+                for lbl, spec in v_presets
+            ],
+        ))
+
+    caption = ("Shading: pale yellow / muted gold = solar elongation "
+               "> 90° (observable); grey = ≤ 90° (near conjunction).  "
+               "Drag the strip below the lower panel to scrub through "
+               "time.")
+    annotations = [dict(
+        text=caption, xref="paper", yref="paper",
+        x=0, y=-0.36, xanchor="left", showarrow=False,
+        font=dict(size=11, color=subtext_color),
+    )]
+    if not has_v:
+        annotations.append(dict(
+            text=("No V-band magnitudes available for this object — "
+                  "showing observation timing only."),
+            xref="paper", yref="paper",
+            x=0.5, y=1.06, xanchor="center", showarrow=False,
+            font=dict(size=12, color=subtext_color, family="sans-serif"),
+        ))
+
     fig.update_layout(
         shapes=shapes_visible,
         title=dict(text=title, font=dict(color=fg_color)),
@@ -326,72 +405,31 @@ def build_history_figure(df: pd.DataFrame, *, name: str,
             bgcolor="rgba(0,0,0,0)",
             itemsizing="constant", traceorder="normal",
         ),
-        updatemenus=[
-            # Single centred control row under the rangeslider — three
-            # momentary buttons packed via direction='right', then the V
-            # range dropdown directly to their right (gap kept small).
-            dict(
-                type="buttons", direction="right", showactive=False,
-                x=0.30, xanchor="left", y=-0.22, yanchor="top",
-                pad=dict(t=4, b=4),
-                **button_style,
-                buttons=[
-                    dict(
-                        label="Reset axes",
-                        method="relayout",
-                        args=[dict(**{"xaxis.autorange": True,
-                                      "yaxis.autorange": "reversed",
-                                      "yaxis2.autorange": True})],
-                    ),
-                    dict(
-                        label="Show all bands",
-                        method="restyle",
-                        args=[{"visible": True}],
-                    ),
-                    dict(
-                        label="Toggle elongation shading",
-                        method="relayout",
-                        args=[dict(shapes=shapes_hidden)],
-                        args2=[dict(shapes=shapes_visible)],
-                    ),
-                ],
-            ),
-            dict(
-                type="dropdown", direction="up", showactive=True,
-                x=0.555, xanchor="left", y=-0.22, yanchor="top",
-                pad=dict(t=4, b=4),
-                **button_style,
-                buttons=[
-                    dict(label=f"V range: {lbl}", method="relayout",
-                         args=[{f"yaxis.{k}": v for k, v in spec.items()}])
-                    for lbl, spec in v_presets
-                ],
-            ),
-        ],
-        annotations=[dict(
-            text=("Shading: pale yellow / muted gold = solar elongation "
-                  "> 90° (observable); grey = ≤ 90° (near conjunction).  "
-                  "Drag the strip below the lower panel to scrub through "
-                  "time."),
-            xref="paper", yref="paper",
-            x=0, y=-0.36, xanchor="left",
-            showarrow=False,
-            font=dict(size=11, color=subtext_color),
-        )],
+        updatemenus=updatemenus,
+        annotations=annotations,
         margin=dict(t=110, b=180, r=180),
         paper_bgcolor=(theme.get("paper") if theme else None),
         plot_bgcolor=(theme.get("plot") if theme else None),
     )
 
-    fig.update_yaxes(title_text="V (band-corrected, mag)",
-                     autorange="reversed", row=1, col=1)
-    fig.update_yaxes(title_text="Site code",
-                     categoryorder="array",
-                     categoryarray=list(reversed(site_order)),
-                     row=2, col=1)
-    fig.update_xaxes(title_text="Observation time",
-                     rangeslider=dict(visible=True, thickness=0.05),
-                     type="date", row=2, col=1)
+    if has_v:
+        fig.update_yaxes(title_text="V (band-corrected, mag)",
+                         autorange="reversed", row=1, col=1)
+        fig.update_yaxes(title_text="Site code",
+                         categoryorder="array",
+                         categoryarray=list(reversed(site_order)),
+                         row=2, col=1)
+        fig.update_xaxes(title_text="Observation time",
+                         rangeslider=dict(visible=True, thickness=0.05),
+                         type="date", row=2, col=1)
+    else:
+        fig.update_yaxes(title_text="Site code",
+                         categoryorder="array",
+                         categoryarray=list(reversed(site_order)),
+                         row=1, col=1)
+        fig.update_xaxes(title_text="Observation time",
+                         rangeslider=dict(visible=True, thickness=0.05),
+                         type="date", row=1, col=1)
     return fig
 
 

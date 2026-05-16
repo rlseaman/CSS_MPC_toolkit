@@ -3676,7 +3676,7 @@ app.layout = html.Div(
                         labelStyle=RADIO_LABEL_STYLE,
                     ),
                 ]),
-                html.Div(children=[
+                html.Div(id="plot-height-container", children=[
                     html.Label("Plot height", style=LABEL_STYLE),
                     dcc.RadioItems(
                         id="plot-height",
@@ -7137,6 +7137,11 @@ def _get_defaults():
         "station-site": "V00",
         "station-date-start": "",
         "station-date-end": "",
+        # Tab 11 — Observation history
+        "obshist-classes": ["TNO"],
+        "obshist-filters": [],
+        "obshist-h-range": [0, 32],
+        "obshist-nopp-range": [0, 30],
         # Shared
         "group-by": "combined",
         "plot-height": "700",
@@ -7168,6 +7173,8 @@ _TAB_KEYS = {
                    "tool-class-q", "tool-obs80-input", "tool-date-input",
                    "tool-airmass-x", "tool-airmass-alt",
                    "tool-cln-date", "tool-cln-offset", "tool-cln-tz"},
+    "tab-obshist": {"obshist-classes", "obshist-filters",
+                    "obshist-h-range", "obshist-nopp-range"},
 }
 _SHARED_KEYS = {"group-by", "plot-height", "neo-source-filter"}
 
@@ -7191,6 +7198,8 @@ _RESET_ORDER = [
     "tool-airmass-x", "tool-airmass-alt",
     "tool-cln-date", "tool-cln-offset", "tool-cln-tz",
     "station-site", "station-date-start", "station-date-end",
+    "obshist-classes", "obshist-filters",
+    "obshist-h-range", "obshist-nopp-range",
     "group-by", "plot-height", "neo-source-filter",
 ]
 
@@ -7254,6 +7263,23 @@ def _toggle_group_by_visibility(active_tab, size_filter, circ_color_by):
     if active_tab == "tab-circumstances":
         return show if circ_color_by == "survey" else hide
     return hide
+
+
+# Plot-height has no effect on the Observation-history tab (the
+# per-object plot ships at a fixed 720 px) — hide the selector when
+# the user is on that tab so they don't think it's broken.
+_NO_PLOT_HEIGHT_TABS = {"tab-mpec", "tab-tools", "tab-consensus",
+                        "tab-about", "tab-obshist", "tab-station"}
+
+
+@app.callback(
+    Output("plot-height-container", "style"),
+    Input("tabs", "value"),
+)
+def _toggle_plot_height_visibility(active_tab):
+    if active_tab in _NO_PLOT_HEIGHT_TABS:
+        return {"display": "none"}
+    return {"display": "block"}
 
 
 @app.callback(
@@ -11075,7 +11101,12 @@ _OBSHIST_DEFAULT_PERMID = "134340"  # Pluto — first thing rendered when
 @app.callback(
     Output("obshist-plot", "figure"),
     Output("obshist-plot-status", "children"),
-    Input("obshist-table", "selected_rows"),
+    # derived_virtual_selected_rows is the right index into
+    # derived_virtual_data — it tracks the *visible* (sorted + filtered +
+    # paginated) view.  Using plain `selected_rows` would index into the
+    # *original* `data` payload and silently mis-pair table → plot when
+    # the user has sorted or filtered the table.
+    Input("obshist-table", "derived_virtual_selected_rows"),
     Input("obshist-table", "derived_virtual_data"),
     Input("theme-toggle", "value"),
     Input("tabs", "value"),
