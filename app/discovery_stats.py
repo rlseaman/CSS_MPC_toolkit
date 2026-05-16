@@ -6297,7 +6297,14 @@ app.layout = html.Div(
                                     # and the boxscore cache, then
                                     # switches the table to the object's
                                     # orbit class and selects its row.
-                                    html.Div(style={"width": "220px"},
+                                    # The status sub-line is absolutely
+                                    # positioned so it doesn't add to the
+                                    # div's height — without that, the
+                                    # parent flex's `alignItems: flex-end`
+                                    # pushes the Input above the other
+                                    # controls' baseline.
+                                    html.Div(style={"width": "220px",
+                                                    "position": "relative"},
                                              children=[
                                         html.Label(
                                             "Designation",
@@ -6313,14 +6320,21 @@ app.layout = html.Div(
                                                    "padding": "4px 8px",
                                                    "fontSize": "12px",
                                                    "fontFamily":
-                                                       "sans-serif"},
+                                                       "sans-serif",
+                                                   "boxSizing": "border-box"},
                                         ),
                                         html.Div(
                                             id="obshist-designation-status",
                                             className="subtext",
-                                            style={"fontSize": "11px",
+                                            style={"position": "absolute",
+                                                   "top": "100%",
+                                                   "left": 0, "right": 0,
                                                    "marginTop": "4px",
-                                                   "minHeight": "14px"}),
+                                                   "fontSize": "11px",
+                                                   "whiteSpace": "nowrap",
+                                                   "overflow": "hidden",
+                                                   "textOverflow":
+                                                       "ellipsis"}),
                                     ]),
                                     html.Div(style={"minWidth": "320px",
                                                     "flex": "1"},
@@ -11555,18 +11569,19 @@ def _resolve_obshist_designation(text):
     Output("obshist-nobs-range", "value", allow_duplicate=True),
     Output("obshist-pending-target", "data"),
     Output("obshist-designation-status", "children"),
-    Input("obshist-designation", "value"),
+    # Fire on Enter only.  Driving the callback off `value` makes
+    # every programmatic box-update (the sync-to-plot callback
+    # below) re-enter this handler, which flashes the status line
+    # and re-resolves on each load.  `n_submit` increments only on
+    # explicit user Enter, so programmatic value-set is invisible.
+    Input("obshist-designation", "n_submit"),
+    State("obshist-designation", "value"),
     prevent_initial_call=True,
 )
-def resolve_obshist_designation_input(value):
-    """Designation entry submit → broaden filters to the object's class.
-
-    With `debounce=True` on the Input the callback fires only when
-    the value settles (Enter or blur), not on every keystroke.  An
-    empty value is treated as a clear — no state change.
-    """
+def resolve_obshist_designation_input(_n_submit, value):
+    """Designation entry submit → broaden filters to the object's class."""
     if not value or not value.strip():
-        return (no_update,) * 5 + (None, "")
+        return (no_update,) * 5 + (None, no_update)
     result = _resolve_obshist_designation(value.strip())
     if result is None:
         return ((no_update,) * 5
@@ -11614,6 +11629,40 @@ def select_obshist_pending(data, target, page_size):
     # table — clear the pending marker so we don't keep retrying on
     # subsequent table refreshes.
     return no_update, no_update, None
+
+
+# Reset axes also resets the V-range slider widget.  The clientside
+# callback wired below restores the figure's autorange, but the
+# slider's stored value is a Dash-side state — without this it
+# would still show whatever range the user dragged it to.
+@app.callback(
+    Output("obshist-vslider", "value", allow_duplicate=True),
+    Input("obshist-btn-reset", "n_clicks"),
+    prevent_initial_call=True,
+)
+def reset_obshist_vslider_on_reset(n_clicks):
+    if not n_clicks:
+        raise PreventUpdate
+    return [5, 28]
+
+
+# Mirror the loaded-plot object back into the designation entry
+# box so it always shows what's currently displayed.  Same store
+# the plot callback writes after a successful fetch, so this fires
+# uniformly for typed queries, Random clicks, row selections, and
+# the default Pluto load.  The resolver above is wired on
+# `n_submit` (not `value`), so this programmatic write doesn't
+# re-enter it.
+@app.callback(
+    Output("obshist-designation", "value", allow_duplicate=True),
+    Input("obshist-plot-state", "data"),
+    prevent_initial_call=True,
+)
+def sync_obshist_designation_to_plot(state):
+    if not state or not state.get("key"):
+        return no_update
+    permid, provid, name = state["key"]
+    return name or provid or permid or ""
 
 
 # Clientside controls for the observation-history plot.  These used
