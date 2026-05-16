@@ -5609,6 +5609,427 @@ app.layout = html.Div(
                         ]),
                     ],
                 ),
+                # ━━━ Tab: Observation history (dev-only, --dev-tabs) ━━
+                # Phase 1: class-filtered catalog of objects sourced from
+                # boxscore_cache.  Phase 2 (next) wires row-click to a
+                # per-object observation-history plot rendered below the
+                # table (Eris/UZ173 sandbox prototypes live in
+                # `sandbox/observation_history_*.py`).
+                *([dcc.Tab(
+                    label="Observation history",
+                    value="tab-obshist",
+                    className="nav-tab",
+                    selected_className="nav-tab--selected",
+                    children=[
+                        html.Div(style={"paddingTop": "15px",
+                                        "fontFamily": "sans-serif"},
+                                 children=[
+                            html.H2("Observation history",
+                                    style={"fontSize": "20px",
+                                           "fontWeight": "600",
+                                           "marginBottom": "4px"}),
+                            html.Div(
+                                "Sortable catalog of mpc_orbits objects "
+                                "filtered by orbit class.  Click a row "
+                                "(or use Random object) to load the "
+                                "per-object observation-history plot "
+                                "above the table — V vs. obstime over "
+                                "the obs_sbn record, with elongation > "
+                                "90 ° / ≤ 90 ° shaded.  first_obs / "
+                                "last_obs / arc / n_obs / disc by come "
+                                "from the nightly obs_summary_all "
+                                "matview over the full obs_sbn record.",
+                                className="subtext",
+                                style={"fontSize": "13px",
+                                       "marginBottom": "16px",
+                                       "maxWidth": "780px"}),
+                            # Controls row — mirrors the Asteroid
+                            # Classes filter set with the addition of a
+                            # class multi-select (the per-object view
+                            # needs an explicit class pick, where the
+                            # cross-tab view shows all classes at once).
+                            html.Div(
+                                style={"display": "flex", "gap": "20px",
+                                       "flexWrap": "wrap",
+                                       "alignItems": "flex-end",
+                                       "marginBottom": "12px"},
+                                children=[
+                                    # Designation entry — resolves permid
+                                    # / provid / iau_name / packed forms
+                                    # via lib.mpc_convert.unpack_designation
+                                    # and the boxscore cache, then
+                                    # switches the table to the object's
+                                    # orbit class and selects its row.
+                                    # The status sub-line is absolutely
+                                    # positioned so it doesn't add to the
+                                    # div's height — without that, the
+                                    # parent flex's `alignItems: flex-end`
+                                    # pushes the Input above the other
+                                    # controls' baseline.
+                                    html.Div(style={"width": "220px",
+                                                    "position": "relative"},
+                                             children=[
+                                        html.Label(
+                                            "Designation",
+                                            style=LABEL_STYLE),
+                                        dcc.Input(
+                                            id="obshist-designation",
+                                            type="text",
+                                            placeholder=(
+                                                "e.g. Pluto, 134340, "
+                                                "2024 YR4…"),
+                                            debounce=True,
+                                            style={"width": "100%",
+                                                   "padding": "4px 8px",
+                                                   "fontSize": "12px",
+                                                   "fontFamily":
+                                                       "sans-serif",
+                                                   "boxSizing": "border-box"},
+                                        ),
+                                        html.Div(
+                                            id="obshist-designation-status",
+                                            className="subtext",
+                                            style={"position": "absolute",
+                                                   "top": "100%",
+                                                   "left": 0, "right": 0,
+                                                   "marginTop": "4px",
+                                                   "fontSize": "11px",
+                                                   "whiteSpace": "nowrap",
+                                                   "overflow": "hidden",
+                                                   "textOverflow":
+                                                       "ellipsis"}),
+                                    ]),
+                                    html.Div(style={"minWidth": "320px",
+                                                    "flex": "1"},
+                                             children=[
+                                        html.Label(
+                                            "Classes (fine)",
+                                            style=LABEL_STYLE),
+                                        dcc.Dropdown(
+                                            id="obshist-classes",
+                                            options=[
+                                                {"label": v[1],
+                                                 "value": v[1]}
+                                                for k, v in
+                                                EXTENDED_ORBIT_TYPES.items()
+                                                if k is not None
+                                            ],
+                                            value=["TNO"],
+                                            multi=True,
+                                            placeholder="Pick one or more "
+                                                        "classes…",
+                                            style={"fontSize": "12px"},
+                                        ),
+                                    ]),
+                                    html.Div(children=[
+                                        html.Label("Filters",
+                                                   style=LABEL_STYLE),
+                                        dcc.Checklist(
+                                            id="obshist-filters",
+                                            options=[
+                                                {"label": " PHA only",
+                                                 "value": "pha"},
+                                                {"label": " Retrograde",
+                                                 "value": "retro"},
+                                            ],
+                                            value=[],
+                                            inline=True,
+                                            labelStyle=RADIO_LABEL_STYLE,
+                                            style=RADIO_STYLE,
+                                        ),
+                                    ]),
+                                    html.Div(style={"width": "250px"},
+                                             children=[
+                                        html.Label("H range",
+                                                   style=LABEL_STYLE),
+                                        dcc.RangeSlider(
+                                            id="obshist-h-range",
+                                            min=0, max=32,
+                                            value=[0, 32],
+                                            marks={0: "0", 5: "5",
+                                                   10: "10", 15: "15",
+                                                   20: "20", 25: "25",
+                                                   30: "30"},
+                                            tooltip={
+                                                "placement": "bottom",
+                                                "always_visible": False,
+                                            },
+                                        ),
+                                    ]),
+                                    # Arc range (days).  Linear slider over a
+                                    # span that comfortably covers historical
+                                    # objects (Pluto's arc ≈ 41 kd ≈ 112 yr).
+                                    # Marks calibrate the visual to
+                                    # astronomically meaningful intervals
+                                    # so the user can drag to "1 year" or
+                                    # "10 year" without doing day math.
+                                    html.Div(style={"width": "250px"},
+                                             children=[
+                                        html.Label("Arc range (d)",
+                                                   style=LABEL_STYLE),
+                                        dcc.RangeSlider(
+                                            id="obshist-arc-range",
+                                            min=0, max=50000,
+                                            value=[0, 50000],
+                                            marks={0: "0",
+                                                   365: "1y",
+                                                   3650: "10y",
+                                                   18250: "50y",
+                                                   36500: "100y",
+                                                   50000: "100y+"},
+                                            tooltip={
+                                                "placement": "bottom",
+                                                "always_visible": False,
+                                            },
+                                        ),
+                                    ]),
+                                    html.Div(style={"width": "250px"},
+                                             children=[
+                                        html.Label("Nopp range",
+                                                   style=LABEL_STYLE),
+                                        dcc.RangeSlider(
+                                            id="obshist-nopp-range",
+                                            min=0, max=30,
+                                            value=[0, 30],
+                                            marks={0: "0", 1: "1", 5: "5",
+                                                   10: "10", 15: "15",
+                                                   20: "20", 25: "25",
+                                                   30: "30+"},
+                                            tooltip={
+                                                "placement": "bottom",
+                                                "always_visible": False,
+                                            },
+                                        ),
+                                    ]),
+                                    html.Div(style={"width": "250px"},
+                                             children=[
+                                        html.Label("n_obs range",
+                                                   style=LABEL_STYLE),
+                                        dcc.RangeSlider(
+                                            id="obshist-nobs-range",
+                                            min=0, max=500,
+                                            value=[0, 500],
+                                            marks={0: "0", 10: "10",
+                                                   100: "100",
+                                                   250: "250",
+                                                   500: "500+"},
+                                            tooltip={
+                                                "placement": "bottom",
+                                                "always_visible": False,
+                                            },
+                                        ),
+                                    ]),
+                                    # Random pick from the current table —
+                                    # convenient way to surface an object
+                                    # the user hasn't seen before.
+                                    html.Div(
+                                        style={"alignSelf": "flex-end"},
+                                        children=[
+                                            html.Button(
+                                                "Random object",
+                                                id="obshist-random-btn",
+                                                n_clicks=0,
+                                                style={
+                                                    "padding": "6px 14px",
+                                                    "fontSize": "12px",
+                                                    "fontFamily":
+                                                        "sans-serif",
+                                                    "cursor": "pointer",
+                                                },
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            # Stores the last-rendered plot's resolved
+                            # designation so callback changes from filter
+                            # / theme / tab don't accidentally reset the
+                            # figure to the default.
+                            dcc.Store(id="obshist-plot-state",
+                                      data={"key": None}),
+                            # Per-object orbital details — populated by
+                            # the plot callback from boxscore_cache.
+                            # Provides the table-row context without
+                            # crowding the figure with annotations.
+                            html.Div(
+                                id="obshist-details",
+                                style={"fontSize": "12px",
+                                       "marginBottom": "4px",
+                                       "minHeight": "16px",
+                                       "fontFamily": "sans-serif"}),
+                            # Per-object observation-history plot sits
+                            # above the table so it's the first thing
+                            # the user sees after picking a class.
+                            # dcc.Loading retains the previous figure
+                            # while a new one is being fetched.
+                            html.Div(
+                                id="obshist-plot-status",
+                                className="subtext",
+                                style={"fontSize": "12px",
+                                       "marginBottom": "4px",
+                                       "minHeight": "16px"}),
+                            dcc.Loading(
+                                id="obshist-plot-loading",
+                                type="circle",
+                                children=dcc.Graph(
+                                    id="obshist-plot",
+                                    config={"displayModeBar": True},
+                                ),
+                            ),
+                            # Plot controls — moved out of the Plotly
+                            # figure so they inherit assets/theme.css
+                            # button styling (the in-figure updatemenus
+                            # ignored our theme on hover).  Wired via
+                            # clientside callbacks below.
+                            html.Div(
+                                id="obshist-controls",
+                                style={"display": "flex",
+                                       "flexWrap": "wrap",
+                                       "gap": "8px",
+                                       "alignItems": "center",
+                                       "marginTop": "8px",
+                                       "marginBottom": "12px",
+                                       "fontSize": "12px",
+                                       "fontFamily": "sans-serif"},
+                                children=[
+                                    html.Button(
+                                        "Reset axes",
+                                        id="obshist-btn-reset",
+                                        n_clicks=0,
+                                        style={"padding": "4px 12px",
+                                               "fontSize": "12px",
+                                               "cursor": "pointer"}),
+                                    html.Button(
+                                        "Show all bands",
+                                        id="obshist-btn-bands",
+                                        n_clicks=0,
+                                        style={"padding": "4px 12px",
+                                               "fontSize": "12px",
+                                               "cursor": "pointer"}),
+                                    html.Button(
+                                        "Toggle elongation shading",
+                                        id="obshist-btn-shading",
+                                        n_clicks=0,
+                                        style={"padding": "4px 12px",
+                                               "fontSize": "12px",
+                                               "cursor": "pointer"}),
+                                    # V range slider — driven by the
+                                    # callback to reset on plot change
+                                    # and hidden when the loaded object
+                                    # has no V data.
+                                    html.Div(
+                                        id="obshist-vslider-container",
+                                        style={"flex": "1",
+                                               "minWidth": "260px",
+                                               "marginLeft": "16px",
+                                               "display": "flex",
+                                               "alignItems": "center",
+                                               "gap": "10px"},
+                                        children=[
+                                            html.Span(
+                                                "V range:",
+                                                style={"whiteSpace":
+                                                       "nowrap"}),
+                                            html.Div(
+                                                style={"flex": "1"},
+                                                children=dcc.RangeSlider(
+                                                    id="obshist-vslider",
+                                                    min=5, max=28,
+                                                    step=0.5,
+                                                    value=[5, 28],
+                                                    marks={5: "5",
+                                                           10: "10",
+                                                           15: "15",
+                                                           20: "20",
+                                                           25: "25",
+                                                           28: "28"},
+                                                    tooltip={
+                                                        "placement":
+                                                            "bottom",
+                                                        "always_visible":
+                                                            False},
+                                                    allowCross=False,
+                                                ),
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            # Sink Stores absorb the clientside-callback
+                            # returns (Plotly.relayout doesn't have a
+                            # natural Output target).
+                            dcc.Store(id="obshist-sink-reset"),
+                            dcc.Store(id="obshist-sink-bands"),
+                            dcc.Store(id="obshist-sink-shading"),
+                            dcc.Store(id="obshist-sink-vslider"),
+                            # Carries the resolved designation between
+                            # the entry-box submit handler and the
+                            # row-selection follow-up that fires once
+                            # `update_obshist` refreshes the table.
+                            dcc.Store(id="obshist-pending-target"),
+                            # Status banner — row count, truncation
+                            # warning, etc.  Set by the callback.
+                            html.Div(
+                                id="obshist-status",
+                                className="subtext",
+                                style={"fontSize": "12px",
+                                       "marginTop": "16px",
+                                       "marginBottom": "8px",
+                                       "minHeight": "16px"}),
+                            # Result table — declared once in the layout
+                            # so callbacks only mutate `data`, never
+                            # replace the component (avoids React-state
+                            # weirdness, same pattern as consensus).
+                            dash_table.DataTable(
+                                id="obshist-table",
+                                columns=_OBS_HISTORY_TABLE_COLUMNS,
+                                data=[],
+                                page_size=50,
+                                page_current=0,
+                                sort_action="native",
+                                filter_action="native",
+                                style_table={"overflowX": "auto"},
+                                style_cell={
+                                    "fontFamily": "sans-serif",
+                                    "fontSize": "12px",
+                                    "padding": "4px 8px",
+                                    "textAlign": "left",
+                                    "backgroundColor": "transparent",
+                                    "color": "inherit",
+                                    "borderColor":
+                                        "var(--hr-color, #ccc)",
+                                },
+                                style_header={
+                                    "fontWeight": "600",
+                                    "backgroundColor":
+                                        "var(--paper-bg, #f5f5f5)",
+                                    "color": "inherit",
+                                    "borderBottom":
+                                        "2px solid var(--hr-color, #999)",
+                                },
+                                style_filter={
+                                    "backgroundColor": "transparent",
+                                    "color": "inherit",
+                                },
+                                # Selected-row highlight is wired below
+                                # via a callback on `derived_virtual_
+                                # selected_rows` — dash-table's built-in
+                                # `state: "selected"` rule only matches
+                                # active cells, not radio-selected rows.
+                                style_data_conditional=[],
+                                # row_selectable lets the user click a row
+                                # to load its observation-history plot
+                                # above.  `cell_selectable=False` keeps
+                                # clicks on data cells from triggering
+                                # the same callback (active_cell would
+                                # also fire on text-cell focus).
+                                row_selectable="single",
+                                cell_selectable=False,
+                                selected_rows=[],
+                            ),
+                        ]),
+                    ],
+                )] if _DEV_TABS else []),
                 # ━━━ Tab 6: Asteroid Classes ━━━━━━━━━━━━━━━━━━━━━━
                 dcc.Tab(
                     label="Asteroid Classes",
@@ -6319,400 +6740,6 @@ app.layout = html.Div(
                         ]),
                     ],
                 )] if _DEV_TABS else []),
-                # ━━━ Tab: Observation history (dev-only, --dev-tabs) ━━
-                # Phase 1: class-filtered catalog of objects sourced from
-                # boxscore_cache.  Phase 2 (next) wires row-click to a
-                # per-object observation-history plot rendered below the
-                # table (Eris/UZ173 sandbox prototypes live in
-                # `sandbox/observation_history_*.py`).
-                *([dcc.Tab(
-                    label="Observation history",
-                    value="tab-obshist",
-                    className="nav-tab",
-                    selected_className="nav-tab--selected",
-                    children=[
-                        html.Div(style={"paddingTop": "15px",
-                                        "fontFamily": "sans-serif"},
-                                 children=[
-                            html.H2("Observation history",
-                                    style={"fontSize": "20px",
-                                           "fontWeight": "600",
-                                           "marginBottom": "4px"}),
-                            html.Div(
-                                "Sortable catalog of mpc_orbits objects "
-                                "filtered by orbit class.  Click a row "
-                                "(or use Random object) to load the "
-                                "per-object observation-history plot "
-                                "above the table — V vs. obstime over "
-                                "the obs_sbn record, with elongation > "
-                                "90 ° / ≤ 90 ° shaded.  first_obs / "
-                                "last_obs / arc / n_obs / disc by come "
-                                "from the nightly obs_summary_all "
-                                "matview over the full obs_sbn record.",
-                                className="subtext",
-                                style={"fontSize": "13px",
-                                       "marginBottom": "16px",
-                                       "maxWidth": "780px"}),
-                            # Controls row — mirrors the Asteroid
-                            # Classes filter set with the addition of a
-                            # class multi-select (the per-object view
-                            # needs an explicit class pick, where the
-                            # cross-tab view shows all classes at once).
-                            html.Div(
-                                style={"display": "flex", "gap": "20px",
-                                       "flexWrap": "wrap",
-                                       "alignItems": "flex-end",
-                                       "marginBottom": "12px"},
-                                children=[
-                                    # Designation entry — resolves permid
-                                    # / provid / iau_name / packed forms
-                                    # via lib.mpc_convert.unpack_designation
-                                    # and the boxscore cache, then
-                                    # switches the table to the object's
-                                    # orbit class and selects its row.
-                                    # The status sub-line is absolutely
-                                    # positioned so it doesn't add to the
-                                    # div's height — without that, the
-                                    # parent flex's `alignItems: flex-end`
-                                    # pushes the Input above the other
-                                    # controls' baseline.
-                                    html.Div(style={"width": "220px",
-                                                    "position": "relative"},
-                                             children=[
-                                        html.Label(
-                                            "Designation",
-                                            style=LABEL_STYLE),
-                                        dcc.Input(
-                                            id="obshist-designation",
-                                            type="text",
-                                            placeholder=(
-                                                "e.g. Pluto, 134340, "
-                                                "2024 YR4…"),
-                                            debounce=True,
-                                            style={"width": "100%",
-                                                   "padding": "4px 8px",
-                                                   "fontSize": "12px",
-                                                   "fontFamily":
-                                                       "sans-serif",
-                                                   "boxSizing": "border-box"},
-                                        ),
-                                        html.Div(
-                                            id="obshist-designation-status",
-                                            className="subtext",
-                                            style={"position": "absolute",
-                                                   "top": "100%",
-                                                   "left": 0, "right": 0,
-                                                   "marginTop": "4px",
-                                                   "fontSize": "11px",
-                                                   "whiteSpace": "nowrap",
-                                                   "overflow": "hidden",
-                                                   "textOverflow":
-                                                       "ellipsis"}),
-                                    ]),
-                                    html.Div(style={"minWidth": "320px",
-                                                    "flex": "1"},
-                                             children=[
-                                        html.Label(
-                                            "Classes (fine)",
-                                            style=LABEL_STYLE),
-                                        dcc.Dropdown(
-                                            id="obshist-classes",
-                                            options=[
-                                                {"label": v[1],
-                                                 "value": v[1]}
-                                                for k, v in
-                                                EXTENDED_ORBIT_TYPES.items()
-                                                if k is not None
-                                            ],
-                                            value=["TNO"],
-                                            multi=True,
-                                            placeholder="Pick one or more "
-                                                        "classes…",
-                                            style={"fontSize": "12px"},
-                                        ),
-                                    ]),
-                                    html.Div(children=[
-                                        html.Label("Filters",
-                                                   style=LABEL_STYLE),
-                                        dcc.Checklist(
-                                            id="obshist-filters",
-                                            options=[
-                                                {"label": " PHA only",
-                                                 "value": "pha"},
-                                                {"label": " Retrograde",
-                                                 "value": "retro"},
-                                            ],
-                                            value=[],
-                                            inline=True,
-                                            labelStyle=RADIO_LABEL_STYLE,
-                                            style=RADIO_STYLE,
-                                        ),
-                                    ]),
-                                    html.Div(style={"width": "250px"},
-                                             children=[
-                                        html.Label("H range",
-                                                   style=LABEL_STYLE),
-                                        dcc.RangeSlider(
-                                            id="obshist-h-range",
-                                            min=0, max=32,
-                                            value=[0, 32],
-                                            marks={0: "0", 5: "5",
-                                                   10: "10", 15: "15",
-                                                   20: "20", 25: "25",
-                                                   30: "30"},
-                                            tooltip={
-                                                "placement": "bottom",
-                                                "always_visible": False,
-                                            },
-                                        ),
-                                    ]),
-                                    html.Div(style={"width": "250px"},
-                                             children=[
-                                        html.Label("Nopp range",
-                                                   style=LABEL_STYLE),
-                                        dcc.RangeSlider(
-                                            id="obshist-nopp-range",
-                                            min=0, max=30,
-                                            value=[0, 30],
-                                            marks={0: "0", 1: "1", 5: "5",
-                                                   10: "10", 15: "15",
-                                                   20: "20", 25: "25",
-                                                   30: "30+"},
-                                            tooltip={
-                                                "placement": "bottom",
-                                                "always_visible": False,
-                                            },
-                                        ),
-                                    ]),
-                                    html.Div(style={"width": "250px"},
-                                             children=[
-                                        html.Label("n_obs range",
-                                                   style=LABEL_STYLE),
-                                        dcc.RangeSlider(
-                                            id="obshist-nobs-range",
-                                            min=0, max=500,
-                                            value=[0, 500],
-                                            marks={0: "0", 10: "10",
-                                                   100: "100",
-                                                   250: "250",
-                                                   500: "500+"},
-                                            tooltip={
-                                                "placement": "bottom",
-                                                "always_visible": False,
-                                            },
-                                        ),
-                                    ]),
-                                    # Random pick from the current table —
-                                    # convenient way to surface an object
-                                    # the user hasn't seen before.
-                                    html.Div(
-                                        style={"alignSelf": "flex-end"},
-                                        children=[
-                                            html.Button(
-                                                "Random object",
-                                                id="obshist-random-btn",
-                                                n_clicks=0,
-                                                style={
-                                                    "padding": "6px 14px",
-                                                    "fontSize": "12px",
-                                                    "fontFamily":
-                                                        "sans-serif",
-                                                    "cursor": "pointer",
-                                                },
-                                            ),
-                                        ],
-                                    ),
-                                ],
-                            ),
-                            # Stores the last-rendered plot's resolved
-                            # designation so callback changes from filter
-                            # / theme / tab don't accidentally reset the
-                            # figure to the default.
-                            dcc.Store(id="obshist-plot-state",
-                                      data={"key": None}),
-                            # Per-object orbital details — populated by
-                            # the plot callback from boxscore_cache.
-                            # Provides the table-row context without
-                            # crowding the figure with annotations.
-                            html.Div(
-                                id="obshist-details",
-                                style={"fontSize": "12px",
-                                       "marginBottom": "4px",
-                                       "minHeight": "16px",
-                                       "fontFamily": "sans-serif"}),
-                            # Per-object observation-history plot sits
-                            # above the table so it's the first thing
-                            # the user sees after picking a class.
-                            # dcc.Loading retains the previous figure
-                            # while a new one is being fetched.
-                            html.Div(
-                                id="obshist-plot-status",
-                                className="subtext",
-                                style={"fontSize": "12px",
-                                       "marginBottom": "4px",
-                                       "minHeight": "16px"}),
-                            dcc.Loading(
-                                id="obshist-plot-loading",
-                                type="circle",
-                                children=dcc.Graph(
-                                    id="obshist-plot",
-                                    config={"displayModeBar": True},
-                                ),
-                            ),
-                            # Plot controls — moved out of the Plotly
-                            # figure so they inherit assets/theme.css
-                            # button styling (the in-figure updatemenus
-                            # ignored our theme on hover).  Wired via
-                            # clientside callbacks below.
-                            html.Div(
-                                id="obshist-controls",
-                                style={"display": "flex",
-                                       "flexWrap": "wrap",
-                                       "gap": "8px",
-                                       "alignItems": "center",
-                                       "marginTop": "8px",
-                                       "marginBottom": "12px",
-                                       "fontSize": "12px",
-                                       "fontFamily": "sans-serif"},
-                                children=[
-                                    html.Button(
-                                        "Reset axes",
-                                        id="obshist-btn-reset",
-                                        n_clicks=0,
-                                        style={"padding": "4px 12px",
-                                               "fontSize": "12px",
-                                               "cursor": "pointer"}),
-                                    html.Button(
-                                        "Show all bands",
-                                        id="obshist-btn-bands",
-                                        n_clicks=0,
-                                        style={"padding": "4px 12px",
-                                               "fontSize": "12px",
-                                               "cursor": "pointer"}),
-                                    html.Button(
-                                        "Toggle elongation shading",
-                                        id="obshist-btn-shading",
-                                        n_clicks=0,
-                                        style={"padding": "4px 12px",
-                                               "fontSize": "12px",
-                                               "cursor": "pointer"}),
-                                    # V range slider — driven by the
-                                    # callback to reset on plot change
-                                    # and hidden when the loaded object
-                                    # has no V data.
-                                    html.Div(
-                                        id="obshist-vslider-container",
-                                        style={"flex": "1",
-                                               "minWidth": "260px",
-                                               "marginLeft": "16px",
-                                               "display": "flex",
-                                               "alignItems": "center",
-                                               "gap": "10px"},
-                                        children=[
-                                            html.Span(
-                                                "V range:",
-                                                style={"whiteSpace":
-                                                       "nowrap"}),
-                                            html.Div(
-                                                style={"flex": "1"},
-                                                children=dcc.RangeSlider(
-                                                    id="obshist-vslider",
-                                                    min=5, max=28,
-                                                    step=0.5,
-                                                    value=[5, 28],
-                                                    marks={5: "5",
-                                                           10: "10",
-                                                           15: "15",
-                                                           20: "20",
-                                                           25: "25",
-                                                           28: "28"},
-                                                    tooltip={
-                                                        "placement":
-                                                            "bottom",
-                                                        "always_visible":
-                                                            False},
-                                                    allowCross=False,
-                                                ),
-                                            ),
-                                        ],
-                                    ),
-                                ],
-                            ),
-                            # Sink Stores absorb the clientside-callback
-                            # returns (Plotly.relayout doesn't have a
-                            # natural Output target).
-                            dcc.Store(id="obshist-sink-reset"),
-                            dcc.Store(id="obshist-sink-bands"),
-                            dcc.Store(id="obshist-sink-shading"),
-                            dcc.Store(id="obshist-sink-vslider"),
-                            # Carries the resolved designation between
-                            # the entry-box submit handler and the
-                            # row-selection follow-up that fires once
-                            # `update_obshist` refreshes the table.
-                            dcc.Store(id="obshist-pending-target"),
-                            # Status banner — row count, truncation
-                            # warning, etc.  Set by the callback.
-                            html.Div(
-                                id="obshist-status",
-                                className="subtext",
-                                style={"fontSize": "12px",
-                                       "marginTop": "16px",
-                                       "marginBottom": "8px",
-                                       "minHeight": "16px"}),
-                            # Result table — declared once in the layout
-                            # so callbacks only mutate `data`, never
-                            # replace the component (avoids React-state
-                            # weirdness, same pattern as consensus).
-                            dash_table.DataTable(
-                                id="obshist-table",
-                                columns=_OBS_HISTORY_TABLE_COLUMNS,
-                                data=[],
-                                page_size=50,
-                                page_current=0,
-                                sort_action="native",
-                                filter_action="native",
-                                style_table={"overflowX": "auto"},
-                                style_cell={
-                                    "fontFamily": "sans-serif",
-                                    "fontSize": "12px",
-                                    "padding": "4px 8px",
-                                    "textAlign": "left",
-                                    "backgroundColor": "transparent",
-                                    "color": "inherit",
-                                    "borderColor":
-                                        "var(--hr-color, #ccc)",
-                                },
-                                style_header={
-                                    "fontWeight": "600",
-                                    "backgroundColor":
-                                        "var(--paper-bg, #f5f5f5)",
-                                    "color": "inherit",
-                                    "borderBottom":
-                                        "2px solid var(--hr-color, #999)",
-                                },
-                                style_filter={
-                                    "backgroundColor": "transparent",
-                                    "color": "inherit",
-                                },
-                                # Selected-row highlight is wired below
-                                # via a callback on `derived_virtual_
-                                # selected_rows` — dash-table's built-in
-                                # `state: "selected"` rule only matches
-                                # active cells, not radio-selected rows.
-                                style_data_conditional=[],
-                                # row_selectable lets the user click a row
-                                # to load its observation-history plot
-                                # above.  `cell_selectable=False` keeps
-                                # clicks on data cells from triggering
-                                # the same callback (active_cell would
-                                # also fire on text-cell focus).
-                                row_selectable="single",
-                                cell_selectable=False,
-                                selected_rows=[],
-                            ),
-                        ]),
-                    ],
-                )] if _DEV_TABS else []),
                 # ━━━ Tab: About ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
                 dcc.Tab(
                     label="About",
@@ -7414,6 +7441,7 @@ def _get_defaults():
         "obshist-classes": ["TNO"],
         "obshist-filters": [],
         "obshist-h-range": [0, 32],
+        "obshist-arc-range": [0, 50000],
         "obshist-nopp-range": [0, 30],
         "obshist-nobs-range": [0, 500],
         # Shared
@@ -7449,7 +7477,8 @@ _TAB_KEYS = {
                    "tool-cln-date", "tool-cln-offset", "tool-cln-tz"},
     "tab-obshist": {"obshist-designation", "obshist-classes",
                     "obshist-filters", "obshist-h-range",
-                    "obshist-nopp-range", "obshist-nobs-range"},
+                    "obshist-arc-range", "obshist-nopp-range",
+                    "obshist-nobs-range"},
 }
 _SHARED_KEYS = {"group-by", "plot-height", "neo-source-filter"}
 
@@ -7474,7 +7503,7 @@ _RESET_ORDER = [
     "tool-cln-date", "tool-cln-offset", "tool-cln-tz",
     "station-site", "station-date-start", "station-date-end",
     "obshist-designation", "obshist-classes", "obshist-filters",
-    "obshist-h-range", "obshist-nopp-range",
+    "obshist-h-range", "obshist-arc-range", "obshist-nopp-range",
     "obshist-nobs-range",
     "group-by", "plot-height", "neo-source-filter",
 ]
@@ -11295,12 +11324,13 @@ def download_boxscore(n_clicks, grouping, filters, h_range):
     Input("obshist-classes", "value"),
     Input("obshist-filters", "value"),
     Input("obshist-h-range", "value"),
+    Input("obshist-arc-range", "value"),
     Input("obshist-nopp-range", "value"),
     Input("obshist-nobs-range", "value"),
     Input("tabs", "value"),
 )
-def update_obshist(classes, filters, h_range, nopp_range, nobs_range,
-                   active_tab):
+def update_obshist(classes, filters, h_range, arc_range, nopp_range,
+                   nobs_range, active_tab):
     if active_tab != "tab-obshist":
         raise PreventUpdate
 
@@ -11318,6 +11348,20 @@ def update_obshist(classes, filters, h_range, nopp_range, nobs_range,
     h_lo, h_hi = h_range
     if h_lo > 0 or h_hi < 32:
         filt = filt[filt["h"].between(h_lo, h_hi) | filt["h"].isna()]
+    arc_lo, arc_hi = arc_range
+    if arc_lo > 0 or arc_hi < 50000:
+        # "100y+" upper-end: unbounded above when the user keeps the
+        # slider at max.  Prefer the matview's arc_days_obs (always
+        # present); fall back to MPC's arc_length_total only if the
+        # matview column didn't land in this build.
+        arc_col = ("arc_days_obs" if "arc_days_obs" in filt.columns
+                   else "arc_length_total")
+        if arc_hi >= 50000:
+            mask = filt[arc_col].ge(arc_lo) | filt[arc_col].isna()
+        else:
+            mask = (filt[arc_col].between(arc_lo, arc_hi)
+                    | filt[arc_col].isna())
+        filt = filt[mask]
     nopp_lo, nopp_hi = nopp_range
     if nopp_lo > 0 or nopp_hi < 30:
         # Treat the upper-end mark as "30 or more".  NaN nopp passes the
@@ -11535,11 +11579,20 @@ def _obshist_details_for(*, permid=None, provid=None):
     a = row.get("a")
     e = row.get("e")
     Q = a * (1 + e) if pd.notna(a) and pd.notna(e) and e < 1 else None
-    # Prefer obs_sbn-derived nobs_obs (always present) over MPC's
-    # nobs_total which is NULL for ~50% of mpc_orbits rows.
+    # Prefer obs_sbn-derived nobs_obs / arc_days_obs (always present)
+    # over MPC's nobs_total / arc_length_total which are NULL for
+    # ~50% of mpc_orbits rows.
     nobs_val = row.get("nobs_obs")
     if not pd.notna(nobs_val):
         nobs_val = row.get("nobs_total")
+    arc_val = row.get("arc_days_obs")
+    if not pd.notna(arc_val):
+        arc_val = row.get("arc_length_total")
+    disc_by = row.get("disc_by")
+    if pd.notna(disc_by) and str(disc_by).strip() and str(disc_by) != "nan":
+        disc_by_display = str(disc_by).strip()
+    else:
+        disc_by_display = "—"
     items = [
         ("Class", row.get("ext_name") or "—"),
         ("H",    _f(row.get("h"), "%.2f")),
@@ -11553,6 +11606,8 @@ def _obshist_details_for(*, permid=None, provid=None):
         ("Nopp", _f(row.get("nopp"), "%d")
                  if pd.notna(row.get("nopp")) else "—"),
         ("n_obs", _f(nobs_val, "%d") if pd.notna(nobs_val) else "—"),
+        ("arc",  (_f(arc_val, "%d d") if pd.notna(arc_val) else "—")),
+        ("disc by", disc_by_display),
     ]
     chips = []
     for label, value in items:
@@ -11689,6 +11744,7 @@ def _resolve_obshist_designation(text):
     Output("obshist-classes", "value", allow_duplicate=True),
     Output("obshist-filters", "value", allow_duplicate=True),
     Output("obshist-h-range", "value", allow_duplicate=True),
+    Output("obshist-arc-range", "value", allow_duplicate=True),
     Output("obshist-nopp-range", "value", allow_duplicate=True),
     Output("obshist-nobs-range", "value", allow_duplicate=True),
     Output("obshist-pending-target", "data"),
@@ -11705,10 +11761,10 @@ def _resolve_obshist_designation(text):
 def resolve_obshist_designation_input(_n_submit, value):
     """Designation entry submit → broaden filters to the object's class."""
     if not value or not value.strip():
-        return (no_update,) * 5 + (None, no_update)
+        return (no_update,) * 6 + (None, no_update)
     result = _resolve_obshist_designation(value.strip())
     if result is None:
-        return ((no_update,) * 5
+        return ((no_update,) * 6
                 + (None, f"Not found: '{value.strip()}'"))
     permid, provid, iau_name, ext_name = result
     label = iau_name or provid or permid or value.strip()
@@ -11718,7 +11774,7 @@ def resolve_obshist_designation_input(_n_submit, value):
     msg = (f"Resolved: {label}"
            + (f" — class {ext_name}" if ext_name else ""))
     return ([ext_name] if ext_name else no_update,
-            [], [0, 32], [0, 30], [0, 500], target, msg)
+            [], [0, 32], [0, 50000], [0, 30], [0, 500], target, msg)
 
 
 @app.callback(
