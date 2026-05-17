@@ -845,8 +845,8 @@ def build_finding_figure(
         ax_x, ax_y = np.pi, np.pi / 2.0
     else:
         ax_x = ax_y = 1.0
-    cardinal_x = [0.0, 0.0, -ax_x * 0.97, ax_x * 0.97]
-    cardinal_y = [ax_y * 0.95, -ax_y * 0.95, 0.0, 0.0]
+    cardinal_x = [0.0, 0.0, -ax_x * 0.98, ax_x * 0.98]
+    cardinal_y = [ax_y * 0.97, -ax_y * 0.97, 0.0, 0.0]
     cardinal_t = ["N", "S", "E", "W"]
     fig.add_trace(go.Scatter(
         x=cardinal_x, y=cardinal_y,
