@@ -6031,6 +6031,83 @@ app.layout = html.Div(
                                 cell_selectable=False,
                                 selected_rows=[],
                             ),
+                            # ── Finding chart ──────────────────────────
+                            # Sky-plot of the displayed object's observed
+                            # trail, projected into the chosen sky
+                            # projection.  Bright-star + IAU constellation
+                            # overlays toggleable; optional Chebyshev
+                            # smoothing of each contiguous arc.  Phase 1
+                            # is static — time-order is conveyed by the
+                            # viridis color ramp on the trail markers.
+                            # Animation (play/pause/step fwd/back) is
+                            # planned as a follow-up.
+                            html.Hr(style={"marginTop": "28px",
+                                           "marginBottom": "12px",
+                                           "borderColor":
+                                               "var(--hr-color, #ccc)"}),
+                            html.Div(
+                                style={"display": "flex",
+                                       "alignItems": "center",
+                                       "gap": "12px",
+                                       "flexWrap": "wrap",
+                                       "marginBottom": "10px"},
+                                children=[
+                                    html.H3("Finding chart",
+                                            style={"margin": 0,
+                                                   "fontWeight": "600",
+                                                   "fontSize": "16px"}),
+                                    html.Div(style={"flex": "1"}),
+                                    html.Label("Projection",
+                                               style={"fontSize": "12px",
+                                                      "color":
+                                                      "var(--subtext-color,"
+                                                      " #888)"}),
+                                    dcc.RadioItems(
+                                        id="fc-projection",
+                                        options=[
+                                            {"label": "Hammer",
+                                             "value": "hammer"},
+                                            {"label": "Aitoff",
+                                             "value": "aitoff"},
+                                            {"label": "Mollweide",
+                                             "value": "mollweide"},
+                                            {"label": "Rectangular",
+                                             "value": "rectangular"},
+                                        ],
+                                        value="hammer",
+                                        inline=True,
+                                        labelStyle={"marginRight": "10px",
+                                                    "fontSize": "12px"},
+                                    ),
+                                    dcc.Checklist(
+                                        id="fc-overlays",
+                                        options=[
+                                            {"label": " Stars",
+                                             "value": "stars"},
+                                            {"label": " Constellations",
+                                             "value": "constellations"},
+                                            {"label": " Smoothed trail",
+                                             "value": "spline"},
+                                        ],
+                                        value=["stars", "constellations"],
+                                        inline=True,
+                                        labelStyle={"marginRight": "10px",
+                                                    "fontSize": "12px"},
+                                    ),
+                                ],
+                            ),
+                            dcc.Graph(
+                                id="fc-plot",
+                                figure=go.Figure(),
+                                config={**GRAPH_CONFIG, "scrollZoom": True},
+                                style={"height": "600px"},
+                            ),
+                            html.Div(
+                                id="fc-status",
+                                className="subtext",
+                                style={"fontSize": "11px",
+                                       "marginTop": "4px",
+                                       "minHeight": "14px"}),
                         ]),
                     ],
                 ),
@@ -12114,6 +12191,72 @@ def sync_obshist_designation_to_plot(state):
         return no_update
     permid, provid, name = state["key"]
     return name or provid or permid or ""
+
+
+# Finding chart — sky-plot of the displayed object's observed trail in
+# the chosen projection (Hammer / Aitoff / Mollweide / Rectangular),
+# optionally over Hipparcos bright-stars + IAU constellation boundaries.
+# Shares the `_OBSHIST_OBS_CACHE` memo with the V-vs-time plot above,
+# so a per-object DB fetch happens at most once.  Phase 1 is static —
+# the viridis color ramp on the trail markers conveys time order.
+@app.callback(
+    Output("fc-plot", "figure"),
+    Output("fc-status", "children"),
+    Input("obshist-plot-state", "data"),
+    Input("fc-projection", "value"),
+    Input("fc-overlays", "value"),
+    Input("theme-toggle", "value"),
+    State("tabs", "value"),
+    prevent_initial_call=False,
+)
+def update_finding_chart(plot_state, projection, overlays,
+                         theme_name, active_tab):
+    from lib.finding_chart import build_finding_figure
+    t = theme(theme_name)
+    theme_dict = {
+        "fg": t["text"], "plot": t["plot"],
+        "grid": "rgba(140,140,140,0.25)" if theme_name == "dark"
+                else "rgba(80,80,80,0.18)",
+    }
+    overlays = overlays or []
+    show_stars = "stars" in overlays
+    show_constellations = "constellations" in overlays
+    show_spline = "spline" in overlays
+
+    # Empty figure when no object loaded yet (initial page render).
+    if not plot_state or not plot_state.get("key"):
+        return (build_finding_figure(
+            pd.DataFrame(columns=["obstime", "ra", "dec"]),
+            projection=projection or "hammer",
+            show_stars=show_stars,
+            show_constellations=show_constellations,
+            show_spline=False, theme=theme_dict),
+            "Select an object to populate the finding chart.")
+
+    permid, provid, name = plot_state["key"]
+    try:
+        df = _fetch_obshist_obs(permid=permid, provid=provid)
+    except Exception as e:
+        return (go.Figure(),
+                f"Finding chart: fetch failed — {e}")
+    if df is None or df.empty:
+        return (go.Figure(),
+                "Finding chart: no observations for this object.")
+
+    label = name or provid or (f"permid {permid}" if permid else "?")
+    fig = build_finding_figure(
+        df, projection=projection or "hammer",
+        show_stars=show_stars,
+        show_constellations=show_constellations,
+        show_spline=show_spline,
+        theme=theme_dict, label=label)
+    n = len(df)
+    ra_span = float(df["ra"].max() - df["ra"].min())
+    dec_span = float(df["dec"].max() - df["dec"].min())
+    status = (f"{n:,} observations · RA span {ra_span:.2f}° · "
+              f"Dec span {dec_span:.2f}° · "
+              "trail breaks at gaps > 60 days · pan / scroll-zoom enabled.")
+    return fig, status
 
 
 # Clientside controls for the observation-history plot.  These used

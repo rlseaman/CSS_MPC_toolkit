@@ -2,6 +2,10 @@
 *.csv
 *.parquet
 
+# Vendored reference data for the finding chart (BSC5 + IAU boundaries,
+# small static catalogs that ship with the dashboard).
+!data/finding_chart/*.csv
+
 # Downloaded MPC catalog files
 sandbox/*.txt
 
