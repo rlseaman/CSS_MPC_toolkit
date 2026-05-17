@@ -11330,14 +11330,16 @@ def download_boxscore(n_clicks, grouping, filters, h_range):
     Input("obshist-nopp-range", "value"),
     Input("obshist-nobs-range", "value"),
     Input("tabs", "value"),
-    # Both States, not Inputs.  We want filter-driven refilters to
-    # honour the pin but not refire the table when the pin source
-    # changes (the plot callback rewriting plot-state would
-    # otherwise refilter on every click).  pending_target is the
-    # bridge during a resolver flow (set before the plot loads);
-    # plot-state takes over once the plot is up and persists across
-    # filter changes for as long as that object is displayed.
-    State("obshist-pending-target", "data"),
+    # pending_target is an Input — not just a State — so that a
+    # newly-resolved designation forces a refilter even when the
+    # resolver's class/slider values happen to equal the current
+    # filter state.  (Typing "Haumea" while already on TNO with
+    # default filters used to leave the resolved row unselected
+    # because none of the other inputs changed value.)
+    Input("obshist-pending-target", "data"),
+    # plot-state stays State: filter-driven refilters honour the
+    # pin, but the plot callback rewriting plot-state mustn't
+    # itself refire this callback.
     State("obshist-plot-state", "data"),
 )
 def update_obshist(classes, filters, h_range, arc_range, nopp_range,
