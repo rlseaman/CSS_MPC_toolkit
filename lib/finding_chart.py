@@ -348,6 +348,9 @@ def build_finding_figure(
     theme: dict | None = None,
     label: str = "",
     predictions_df: pd.DataFrame | None = None,
+    show_prediction_labels: bool = True,
+    prediction_v_limit: float = 23.0,
+    prediction_elong_min: float = 90.0,
 ) -> go.Figure:
     """Build the finding-chart Plotly figure.
 
@@ -453,20 +456,18 @@ def build_finding_figure(
         ))
 
     # ── Predicted positions (Horizons ephemeris) ──────────────────────
-    # Continuous orange polyline through every sampled day; the
-    # markers split into two traces — full-orange circles where the
-    # solar elongation is ≥ 90° (object visible against the night
-    # sky), grayed-out circles below that threshold (too near the
-    # sun to observe).  Distinct from the observed viridis dots in
-    # both shape (line) and color (warm vs. cool).
+    # No connecting line — it hid the gray markers underneath, and
+    # the day-by-day sampling is dense enough that the points read
+    # as a track on their own.  Markers split into two traces:
+    # full-orange open circles where the date is "observable"
+    # (solar elongation ≥ `prediction_elong_min` AND predicted V
+    # brighter than `prediction_v_limit`), grayed-out circles
+    # everywhere else.  Either threshold failing is enough to gray
+    # the marker — both visibility constraints have to be met to
+    # earn the orange highlight.
     if predictions_df is not None and not predictions_df.empty:
         pd_sorted = predictions_df.sort_values("obstime").reset_index(
             drop=True)
-        px, py, _pt = trail_with_breaks(
-            pd_sorted, projection,
-            center_ra_deg=center_ra_deg,
-            gap_days=30.0,
-        )
         v_pred = (pd_sorted["v_pred"].to_numpy()
                   if "v_pred" in pd_sorted.columns
                   else np.full(len(pd_sorted), np.nan))
@@ -474,22 +475,16 @@ def build_finding_figure(
                  if "solar_elong" in pd_sorted.columns
                  else np.full(len(pd_sorted), np.nan))
 
-        # The connecting line spans the whole track in orange.
-        fig.add_trace(go.Scatter(
-            x=px, y=py, mode="lines",
-            line=dict(color="rgba(255,165,0,0.95)",
-                      width=2.0, dash="solid"),
-            hoverinfo="skip", showlegend=False,
-        ))
-
         mxp, myp = project(pd_sorted["ra"].to_numpy(),
                            pd_sorted["dec"].to_numpy(),
                            projection, center_ra_deg=center_ra_deg)
 
-        # Split by solar elongation.  NaN elongations (or older cache
-        # files without the column) default to "observable" so the
-        # chart degrades gracefully.
-        observable = (np.isnan(elong)) | (elong >= 90.0)
+        # Combined observability mask.  NaN values pass through (we
+        # don't have info to disqualify the date) so older cache files
+        # without solar_elong / v_pred degrade gracefully.
+        elong_ok = np.isnan(elong) | (elong >= prediction_elong_min)
+        vmag_ok = np.isnan(v_pred) | (v_pred <= prediction_v_limit)
+        observable = elong_ok & vmag_ok
         date_strs = pd_sorted["obstime"].astype(str).to_numpy()
 
         def _customdata(mask):
@@ -499,17 +494,16 @@ def build_finding_figure(
                 np.where(np.isnan(elong[mask]), -1.0, elong[mask]),
             )), dtype=object)
 
-        obs_mask = observable
-        if obs_mask.any():
+        if observable.any():
             fig.add_trace(go.Scatter(
-                x=mxp[obs_mask], y=myp[obs_mask], mode="markers",
+                x=mxp[observable], y=myp[observable], mode="markers",
                 marker=dict(
                     color="rgba(255,165,0,0.95)", size=5,
                     symbol="circle-open",
                     line=dict(color="rgba(255,165,0,0.95)",
                               width=1.2),
                 ),
-                customdata=_customdata(obs_mask),
+                customdata=_customdata(observable),
                 hovertemplate=(
                     "Predicted %{customdata[0]}<br>"
                     "V ≈ %{customdata[1]:.1f} · "
@@ -529,35 +523,38 @@ def build_finding_figure(
                 ),
                 customdata=_customdata(low_mask),
                 hovertemplate=(
-                    "Predicted %{customdata[0]} (S-O-T < 90°)<br>"
+                    "Predicted %{customdata[0]} "
+                    "(below threshold)<br>"
                     "V ≈ %{customdata[1]:.1f} · "
                     "S-O-T %{customdata[2]:.1f}°"
                     "<extra></extra>"),
                 showlegend=False,
             ))
 
-        # ── Endpoint date labels ──────────────────────────────────
-        # Anchor the "today" and "today + 365 d" annotations at the
-        # first and last predicted positions.  Offset upward so the
-        # text doesn't sit on the marker.
-        x0, y0 = float(mxp[0]), float(myp[0])
-        xN, yN = float(mxp[-1]), float(myp[-1])
-        t0_str = pd.Timestamp(pd_sorted["obstime"].iloc[0]
-                              ).strftime("%Y-%m-%d")
-        tN_str = pd.Timestamp(pd_sorted["obstime"].iloc[-1]
-                              ).strftime("%Y-%m-%d")
-        fig.add_annotation(
-            x=x0, y=y0, text=t0_str,
-            showarrow=True, arrowhead=2, arrowcolor=fg,
-            arrowwidth=1.0, ax=0, ay=-26,
-            font=dict(color="rgba(255,200,120,1)", size=11),
-            bgcolor="rgba(0,0,0,0)", borderpad=2)
-        fig.add_annotation(
-            x=xN, y=yN, text=tN_str,
-            showarrow=True, arrowhead=2, arrowcolor=fg,
-            arrowwidth=1.0, ax=0, ay=-26,
-            font=dict(color="rgba(255,200,120,1)", size=11),
-            bgcolor="rgba(0,0,0,0)", borderpad=2)
+        # ── Endpoint date labels (opt-in) ─────────────────────────
+        # Anchor "today" and "today + 365 d" at the first and last
+        # predicted positions.  Offset upward so the text doesn't
+        # sit on the marker.  User-toggleable so the labels can be
+        # cleared from a busy chart.
+        if show_prediction_labels:
+            x0, y0 = float(mxp[0]), float(myp[0])
+            xN, yN = float(mxp[-1]), float(myp[-1])
+            t0_str = pd.Timestamp(pd_sorted["obstime"].iloc[0]
+                                  ).strftime("%Y-%m-%d")
+            tN_str = pd.Timestamp(pd_sorted["obstime"].iloc[-1]
+                                  ).strftime("%Y-%m-%d")
+            fig.add_annotation(
+                x=x0, y=y0, text=t0_str,
+                showarrow=True, arrowhead=2, arrowcolor=fg,
+                arrowwidth=1.0, ax=0, ay=-26,
+                font=dict(color="rgba(255,200,120,1)", size=11),
+                bgcolor="rgba(0,0,0,0)", borderpad=2)
+            fig.add_annotation(
+                x=xN, y=yN, text=tN_str,
+                showarrow=True, arrowhead=2, arrowcolor=fg,
+                arrowwidth=1.0, ax=0, ay=-26,
+                font=dict(color="rgba(255,200,120,1)", size=11),
+                bgcolor="rgba(0,0,0,0)", borderpad=2)
 
     # ── Layout ────────────────────────────────────────────────────────
     title = (f"Finding chart — {label}" if label else "Finding chart") + \

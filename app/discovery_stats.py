@@ -6112,12 +6112,50 @@ app.layout = html.Div(
                                              "value": "grid"},
                                             {"label": " Predictions",
                                              "value": "predictions"},
+                                            {"label": " Prediction labels",
+                                             "value": "prediction_labels"},
                                         ],
-                                        value=["stars", "constellations"],
+                                        value=["stars", "constellations",
+                                               "prediction_labels"],
                                         inline=True,
                                         labelStyle={"marginRight": "10px",
                                                     "fontSize": "12px"},
                                     ),
+                                ],
+                            ),
+                            # V-mag limit slider for the Predictions
+                            # overlay.  Dates fainter than this value
+                            # (per Horizons' APmag estimate) gray out
+                            # alongside dates with solar elongation
+                            # < 90°.  Active only when Predictions is
+                            # enabled; the slider stays mounted so its
+                            # value persists across toggle cycles.
+                            html.Div(
+                                style={"display": "flex",
+                                       "alignItems": "center",
+                                       "gap": "10px",
+                                       "marginBottom": "8px",
+                                       "marginTop": "-4px"},
+                                children=[
+                                    html.Label(
+                                        "V-mag limit (predictions)",
+                                        style={"fontSize": "12px",
+                                               "color":
+                                               "var(--subtext-color,"
+                                               " #888)",
+                                               "minWidth": "170px"}),
+                                    html.Div(
+                                        dcc.Slider(
+                                            id="fc-vmag-limit",
+                                            min=14, max=28, step=0.5,
+                                            value=23,
+                                            marks={v: str(v) for v in
+                                                   range(14, 29, 2)},
+                                            tooltip={
+                                                "always_visible": False,
+                                                "placement": "bottom"},
+                                        ),
+                                        style={"flex": "1"}),
                                 ],
                             ),
                             dcc.Loading(
@@ -12302,11 +12340,12 @@ def sync_obshist_designation_to_plot(state):
     Input("obshist-plot-state", "data"),
     Input("fc-projection", "value"),
     Input("fc-overlays", "value"),
+    Input("fc-vmag-limit", "value"),
     Input("theme-toggle", "value"),
     State("tabs", "value"),
     prevent_initial_call=False,
 )
-def update_finding_chart(plot_state, projection, overlays,
+def update_finding_chart(plot_state, projection, overlays, vmag_limit,
                          theme_name, active_tab):
     from lib.finding_chart import build_finding_figure
     t = theme(theme_name)
@@ -12331,6 +12370,8 @@ def update_finding_chart(plot_state, projection, overlays,
     show_constellations = "constellations" in overlays
     show_grid = "grid" in overlays
     show_predictions = "predictions" in overlays
+    show_prediction_labels = "prediction_labels" in overlays
+    v_limit = float(vmag_limit) if vmag_limit is not None else 23.0
 
     # Empty figure when no object loaded yet (initial page render).
     if not plot_state or not plot_state.get("key"):
@@ -12387,7 +12428,9 @@ def update_finding_chart(plot_state, projection, overlays,
         show_constellations=show_constellations,
         show_grid=show_grid,
         theme=theme_dict, label=label,
-        predictions_df=predictions)
+        predictions_df=predictions,
+        show_prediction_labels=show_prediction_labels,
+        prediction_v_limit=v_limit)
     n = len(df)
     ra_span = float(df["ra"].max() - df["ra"].min())
     dec_span = float(df["dec"].max() - df["dec"].min())
