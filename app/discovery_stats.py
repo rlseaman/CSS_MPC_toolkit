@@ -11657,18 +11657,29 @@ def reorder_obshist_sites_on_range(relayout_data, plot_state,
 
     # Distinguish range-window events from other relayout chatter
     # (V slider, shading toggle, etc., all of which target other axes
-    # or attributes).
+    # or attributes).  Be permissive about the axis name — subplots
+    # with shared_xaxes can fire on xaxis OR xaxis2 depending on
+    # which axis the rangeslider is anchored to.
     xrange = None
     autorange = False
-    if "xaxis.range" in relayout_data:
-        xrange = relayout_data["xaxis.range"]
-    elif ("xaxis.range[0]" in relayout_data
-          and "xaxis.range[1]" in relayout_data):
-        xrange = [relayout_data["xaxis.range[0]"],
-                  relayout_data["xaxis.range[1]"]]
-    elif relayout_data.get("xaxis.autorange") is True:
-        autorange = True
-    else:
+    for key, val in relayout_data.items():
+        if not key.startswith("xaxis"):
+            continue
+        if key.endswith(".range") and isinstance(val, list) and len(val) == 2:
+            xrange = val
+            break
+        if key.endswith(".range[0]"):
+            base = key[: -len(".range[0]")]
+            x1_key = base + ".range[1]"
+            if x1_key in relayout_data:
+                xrange = [val, relayout_data[x1_key]]
+                break
+        if key.endswith(".autorange") and val is True:
+            autorange = True
+            break
+    print(f"[obshist] relayoutData={relayout_data}  "
+          f"-> xrange={xrange}, autorange={autorange}", flush=True)
+    if xrange is None and not autorange:
         raise PreventUpdate
 
     permid, provid, name = plot_state["key"]
