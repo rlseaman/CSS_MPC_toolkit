@@ -6214,14 +6214,10 @@ app.layout = html.Div(
                                              "value": "ecliptic"},
                                             {"label": " Galactic plane",
                                              "value": "galactic"},
-                                            {"label": " N. ecliptic pole",
-                                             "value": "nep"},
-                                            {"label": " S. ecliptic pole",
-                                             "value": "sep"},
-                                            {"label": " N. galactic pole",
-                                             "value": "ngp"},
-                                            {"label": " S. galactic pole",
-                                             "value": "sgp"},
+                                            {"label": " Ecliptic poles",
+                                             "value": "ecliptic_poles"},
+                                            {"label": " Galactic poles",
+                                             "value": "galactic_poles"},
                                             {"label": " Predictions",
                                              "value": "predictions"},
                                             {"label": " Prediction labels",
@@ -12571,10 +12567,15 @@ def update_finding_chart(plot_state, projection, overlays, vmag_value,
     show_grid = "grid" in overlays
     show_ecliptic = "ecliptic" in overlays
     show_galactic = "galactic" in overlays
-    show_ngp = "ngp" in overlays
-    show_sgp = "sgp" in overlays
-    show_nep = "nep" in overlays
-    show_sep = "sep" in overlays
+    # One toggle controls both poles in each pair so the chart never
+    # shows just one hemisphere's pole — they're symmetric reference
+    # points and you almost always want them together.
+    show_galactic_poles = "galactic_poles" in overlays
+    show_ecliptic_poles = "ecliptic_poles" in overlays
+    show_ngp = show_galactic_poles
+    show_sgp = show_galactic_poles
+    show_nep = show_ecliptic_poles
+    show_sep = show_ecliptic_poles
     show_predictions = "predictions" in overlays
     show_prediction_labels = "prediction_labels" in overlays
     hide_gray_predictions = "hide_gray" in overlays

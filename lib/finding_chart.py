@@ -254,6 +254,39 @@ _GAL_TO_ICRS = np.array([
 ])
 _ECLIPTIC_OBLIQUITY_DEG = 23.43929111  # J2000
 
+
+def _ra_hms_str(ra_deg: float) -> str:
+    """Format RA in degrees as `HHh MMm SS.Ss` sexagesimal."""
+    h_total = (float(ra_deg) % 360.0) / 15.0
+    h = int(h_total)
+    m_total = (h_total - h) * 60.0
+    m = int(m_total)
+    s = (m_total - m) * 60.0
+    if s >= 59.95:
+        s = 0.0
+        m += 1
+        if m >= 60:
+            m = 0
+            h = (h + 1) % 24
+    return f"{h:02d}h {m:02d}m {s:04.1f}s"
+
+
+def _dec_dms_str(dec_deg: float) -> str:
+    """Format Dec in degrees as `±DD° MM' SS.S\"` sexagesimal."""
+    d_abs = abs(float(dec_deg))
+    sign = "-" if dec_deg < 0 else "+"
+    d = int(d_abs)
+    m_total = (d_abs - d) * 60.0
+    m = int(m_total)
+    s = (m_total - m) * 60.0
+    if s >= 59.95:
+        s = 0.0
+        m += 1
+        if m >= 60:
+            m = 0
+            d += 1
+    return f"{sign}{d:02d}° {m:02d}' {s:04.1f}\""
+
 # Fixed celestial reference points (J2000, ICRS).  Cardinal-direction
 # badges and the four pole markers depend on these.
 _NGP_RA_DEG = 192.85948
@@ -534,8 +567,8 @@ def build_finding_figure(
                          projection, center_ra_deg=center_ra_deg)
         fig.add_trace(go.Scatter(
             x=xp, y=yp, mode="markers",
-            marker=dict(symbol="cross", color=color, size=14,
-                        line=dict(color=color, width=1.5)),
+            marker=dict(symbol="cross", color=color, size=9,
+                        line=dict(color=color, width=0.8)),
             hovertext=[label_p], hoverinfo="text",
             showlegend=False,
         ))
@@ -581,6 +614,15 @@ def build_finding_figure(
              / (366.0 if pd.Timestamp(v).is_leap_year else 365.0))
             for v in d["obstime"]
         ], dtype=float)
+        # Pre-format RA/Dec sexagesimal so hover reads naturally.  Pass
+        # alongside the timestamp via an object-dtype customdata.
+        ra_arr = d["ra"].to_numpy()
+        dec_arr = d["dec"].to_numpy()
+        custom = np.array(list(zip(
+            d["obstime"].astype(str).to_numpy(),
+            [_ra_hms_str(r) for r in ra_arr],
+            [_dec_dms_str(c) for c in dec_arr],
+        )), dtype=object)
         fig.add_trace(go.Scatter(
             x=mx, y=my, mode="markers",
             marker=dict(
@@ -591,9 +633,10 @@ def build_finding_figure(
                     tickformat="d",
                 ),
             ),
-            customdata=d["obstime"].to_numpy(),
-            hovertemplate=("%{customdata|%Y-%m-%d %H:%M}<br>"
-                           "x %{x:.3f} · y %{y:.3f}<extra></extra>"),
+            customdata=custom,
+            hovertemplate=("%{customdata[0]}<br>"
+                           "RA %{customdata[1]}<br>"
+                           "Dec %{customdata[2]}<extra></extra>"),
             showlegend=False,
         ))
 
@@ -641,11 +684,22 @@ def build_finding_figure(
                       .dt.total_seconds().to_numpy() / 86400.0)
         year_offset = (delta_days // 365.25).astype(int)
 
+        # Pre-format RA/Dec for every predicted date so the hover
+        # template can pull a sexagesimal string per point.
+        ra_pred = pd_sorted["ra"].to_numpy()
+        dec_pred = pd_sorted["dec"].to_numpy()
+        ra_str_all = np.array([_ra_hms_str(r) for r in ra_pred],
+                              dtype=object)
+        dec_str_all = np.array([_dec_dms_str(c) for c in dec_pred],
+                               dtype=object)
+
         def _customdata(mask):
             return np.array(list(zip(
                 date_strs[mask],
                 np.where(np.isnan(v_pred[mask]), -99.0, v_pred[mask]),
                 np.where(np.isnan(elong[mask]), -1.0, elong[mask]),
+                ra_str_all[mask],
+                dec_str_all[mask],
             )), dtype=object)
 
         # Year-0 observable: orange (the existing scheme).
@@ -662,6 +716,8 @@ def build_finding_figure(
                 customdata=_customdata(y0_obs),
                 hovertemplate=(
                     "Predicted %{customdata[0]}<br>"
+                    "RA %{customdata[3]}<br>"
+                    "Dec %{customdata[4]}<br>"
                     "V ≈ %{customdata[1]:.1f} · "
                     "S-O-T %{customdata[2]:.1f}°"
                     "<extra></extra>"),
@@ -695,10 +751,14 @@ def build_finding_figure(
                     np.where(np.isnan(elong[yN_obs]),
                              -1.0, elong[yN_obs]),
                     yvals.astype(int),
+                    ra_str_all[yN_obs],
+                    dec_str_all[yN_obs],
                 )), dtype=object),
                 hovertemplate=(
                     "Predicted %{customdata[0]} "
                     "(Year %{customdata[3]})<br>"
+                    "RA %{customdata[4]}<br>"
+                    "Dec %{customdata[5]}<br>"
                     "V ≈ %{customdata[1]:.1f} · "
                     "S-O-T %{customdata[2]:.1f}°"
                     "<extra></extra>"),
@@ -725,10 +785,14 @@ def build_finding_figure(
                     np.where(np.isnan(elong[low_mask]),
                              -1.0, elong[low_mask]),
                     year_offset[low_mask].astype(int),
+                    ra_str_all[low_mask],
+                    dec_str_all[low_mask],
                 )), dtype=object),
                 hovertemplate=(
                     "Predicted %{customdata[0]} "
                     "(Year %{customdata[3]}, below threshold)<br>"
+                    "RA %{customdata[4]}<br>"
+                    "Dec %{customdata[5]}<br>"
                     "V ≈ %{customdata[1]:.1f} · "
                     "S-O-T %{customdata[2]:.1f}°"
                     "<extra></extra>"),
@@ -781,8 +845,8 @@ def build_finding_figure(
         ax_x, ax_y = np.pi, np.pi / 2.0
     else:
         ax_x = ax_y = 1.0
-    cardinal_x = [0.0, 0.0, -ax_x * 0.99, ax_x * 0.99]
-    cardinal_y = [ax_y * 0.98, -ax_y * 0.98, 0.0, 0.0]
+    cardinal_x = [0.0, 0.0, -ax_x * 0.93, ax_x * 0.93]
+    cardinal_y = [ax_y * 0.90, -ax_y * 0.90, 0.0, 0.0]
     cardinal_t = ["N", "S", "E", "W"]
     fig.add_trace(go.Scatter(
         x=cardinal_x, y=cardinal_y,
