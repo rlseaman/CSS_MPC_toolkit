@@ -11528,11 +11528,23 @@ _OBSHIST_OBS_CACHE: dict = {}
 
 
 def _fetch_obshist_obs(*, permid=None, provid=None):
+    # fetch_obs requires *exactly one* of permid/provid — passing
+    # both raises ValueError.  Numbered objects (like Haumea) have
+    # both, so prefer permid and ignore provid in that case.  Cache
+    # keyed on the chosen identifier so a later by-provid call for
+    # the same numbered object doesn't double-cache.
     from lib.observation_history import fetch_obs as _fetch
-    key = (permid, provid)
-    if key not in _OBSHIST_OBS_CACHE:
-        _OBSHIST_OBS_CACHE[key] = _fetch(permid=permid, provid=provid)
-    return _OBSHIST_OBS_CACHE[key]
+    if permid:
+        key = ("permid", permid)
+        if key not in _OBSHIST_OBS_CACHE:
+            _OBSHIST_OBS_CACHE[key] = _fetch(permid=permid)
+        return _OBSHIST_OBS_CACHE[key]
+    if provid:
+        key = ("provid", provid)
+        if key not in _OBSHIST_OBS_CACHE:
+            _OBSHIST_OBS_CACHE[key] = _fetch(provid=provid)
+        return _OBSHIST_OBS_CACHE[key]
+    raise ValueError("supply permid or provid")
 
 
 _OBSHIST_DEFAULT_PERMID = "134340"  # Pluto — first thing rendered when
