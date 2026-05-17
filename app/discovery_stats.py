@@ -11356,6 +11356,10 @@ def update_obshist(classes, filters, h_range, arc_range, nopp_range,
     # plot-state-fallback pin would yank the table away from the
     # newly-resolved row before the plot has loaded it).  Skip.
     triggered = ctx.triggered_id
+    print(f"[obshist] UPDATE_OBSHIST triggered_id={triggered!r} "
+          f"pending_target={pending_target} "
+          f"plot_state_key={(plot_state or {}).get('key')}",
+          flush=True)
     if triggered == "obshist-pending-target" and not pending_target:
         raise PreventUpdate
 
@@ -11565,6 +11569,9 @@ def update_obshist_plot(selected_rows, theme_name, active_tab,
 
     state = plot_state or {"key": None}
     triggered = ctx.triggered_id
+    print(f"[obshist] PLOT_CB triggered={triggered!r} "
+          f"selected_rows={selected_rows} state_key={state.get('key')}",
+          flush=True)
 
     permid = provid = name = None
     if selected_rows and derived_data:
@@ -11574,6 +11581,8 @@ def update_obshist_plot(selected_rows, theme_name, active_tab,
             permid = (row.get("permid") or "").strip() or None
             provid = (row.get("provid") or "").strip() or None
             name = row.get("iau_name") or None
+    print(f"[obshist] PLOT_CB extracted permid={permid!r} "
+          f"provid={provid!r} name={name!r}", flush=True)
 
     if permid or provid:
         # Active selection — fetch this object.
@@ -11971,9 +11980,11 @@ def _resolve_obshist_designation(text):
 )
 def resolve_obshist_designation_input(_n_submit, value):
     """Designation entry submit → broaden filters to the object's class."""
+    print(f"[obshist] RESOLVER fired with value={value!r}", flush=True)
     if not value or not value.strip():
         return (no_update,) * 6 + (None, no_update)
     result = _resolve_obshist_designation(value.strip())
+    print(f"[obshist] RESOLVER resolved {value!r} -> {result}", flush=True)
     if result is None:
         return ((no_update,) * 6
                 + (None, f"Not found: '{value.strip()}'"))
@@ -11999,6 +12010,9 @@ def resolve_obshist_designation_input(_n_submit, value):
     prevent_initial_call=True,
 )
 def select_obshist_pending(data, target, plot_state, page_size):
+    print(f"[obshist] SELECT_PENDING fired data_len={len(data) if data else 0} "
+          f"target={target} plot_state_key={(plot_state or {}).get('key')}",
+          flush=True)
     """When `update_obshist` rewrites the table, snap to the displayed row.
 
     Source preference:
