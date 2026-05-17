@@ -459,6 +459,7 @@ THEMES = {
         table_font="#dddddd",
         model_outline="white",
         hr_color="#444444",
+        row_hover="#2a2a2a",
     ),
     "light": dict(
         template="plotly_white",
@@ -475,6 +476,7 @@ THEMES = {
         table_font="#222222",
         model_outline="#333333",
         hr_color="#cccccc",
+        row_hover="#eaeaea",
     ),
 }
 
@@ -3594,6 +3596,7 @@ app.layout = html.Div(
         "--hr-color": "#444444",
         "--paper-bg": "#1e1e1e",
         "--tab-border": "#444444",
+        "--row-hover": "#2a2a2a",
     },
     children=[
         # ── Maintenance banner ────────────────────────────────────────
@@ -7212,6 +7215,7 @@ def update_theme(theme_name):
         "--hr-color": t["hr_color"],
         "--paper-bg": t["paper"],
         "--tab-border": t["hr_color"],
+        "--row-hover": t["row_hover"],
     }
 
 

@@ -379,3 +379,17 @@
 #page-container a:hover {
     text-decoration: underline;
 }
+
+/* ── dash_table row hover ── */
+/* Default dash-table hover paints a light-grey background that, in
+   dark mode, sits under the inherited light text — light-on-light
+   and illegible.  Repaint with a theme-aware var (set by
+   update_theme on #page-container) and keep color: inherit so the
+   page's text color carries through.  Covers both the row :hover
+   path and the JS-applied .cell--hover class. */
+#page-container .dash-spreadsheet-container tr:hover td.dash-cell,
+#page-container .dash-spreadsheet-container td.dash-cell.cell--hover,
+#page-container .dash-spreadsheet-container td.cell--hover {
+    background-color: var(--row-hover, #f0f0f0) !important;
+    color: inherit !important;
+}
