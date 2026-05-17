@@ -6110,6 +6110,10 @@ app.layout = html.Div(
                                              "value": "constellations"},
                                             {"label": " Grid",
                                              "value": "grid"},
+                                            {"label": " Ecliptic",
+                                             "value": "ecliptic"},
+                                            {"label": " Galactic plane",
+                                             "value": "galactic"},
                                             {"label": " Predictions",
                                              "value": "predictions"},
                                             {"label": " Prediction labels",
@@ -6123,13 +6127,14 @@ app.layout = html.Div(
                                     ),
                                 ],
                             ),
-                            # V-mag limit slider for the Predictions
-                            # overlay.  Dates fainter than this value
-                            # (per Horizons' APmag estimate) gray out
-                            # alongside dates with solar elongation
-                            # < 90°.  Active only when Predictions is
-                            # enabled; the slider stays mounted so its
-                            # value persists across toggle cycles.
+                            # V-mag range slider for the Predictions
+                            # overlay.  Bracket the V magnitudes that
+                            # count as "observable" on both ends —
+                            # too faint AND too bright (e.g.
+                            # saturation regime) both gray a date out.
+                            # min/max are reset to the predicted
+                            # span whenever a new object is loaded
+                            # or Predictions toggles from off→on.
                             html.Div(
                                 style={"display": "flex",
                                        "alignItems": "center",
@@ -6138,26 +6143,28 @@ app.layout = html.Div(
                                        "marginTop": "-4px"},
                                 children=[
                                     html.Label(
-                                        "V-mag limit (predictions)",
+                                        "V-mag range (predictions)",
                                         style={"fontSize": "12px",
                                                "color":
                                                "var(--subtext-color,"
                                                " #888)",
                                                "minWidth": "170px"}),
                                     html.Div(
-                                        dcc.Slider(
+                                        dcc.RangeSlider(
                                             id="fc-vmag-limit",
-                                            min=14, max=28, step=0.5,
-                                            value=23,
-                                            marks={v: str(v) for v in
-                                                   range(14, 29, 2)},
+                                            min=14, max=28, step=0.05,
+                                            value=[14, 28],
+                                            marks={14: "14",
+                                                   28: "28"},
                                             tooltip={
                                                 "always_visible": False,
                                                 "placement": "bottom"},
+                                            allowCross=False,
                                         ),
                                         style={"flex": "1"}),
                                 ],
                             ),
+                            dcc.Store(id="fc-slider-state"),
                             dcc.Loading(
                                 id="fc-loading",
                                 type="default",
@@ -12347,16 +12354,22 @@ def sync_obshist_designation_to_plot(state):
 @app.callback(
     Output("fc-plot", "figure"),
     Output("fc-status", "children"),
+    Output("fc-vmag-limit", "min"),
+    Output("fc-vmag-limit", "max"),
+    Output("fc-vmag-limit", "marks"),
+    Output("fc-vmag-limit", "value"),
+    Output("fc-slider-state", "data"),
     Input("obshist-plot-state", "data"),
     Input("fc-projection", "value"),
     Input("fc-overlays", "value"),
     Input("fc-vmag-limit", "value"),
     Input("theme-toggle", "value"),
     State("tabs", "value"),
+    State("fc-slider-state", "data"),
     prevent_initial_call=False,
 )
-def update_finding_chart(plot_state, projection, overlays, vmag_limit,
-                         theme_name, active_tab):
+def update_finding_chart(plot_state, projection, overlays, vmag_value,
+                         theme_name, active_tab, slider_state):
     from lib.finding_chart import build_finding_figure
     t = theme(theme_name)
     if theme_name == "dark":
@@ -12379,9 +12392,17 @@ def update_finding_chart(plot_state, projection, overlays, vmag_limit,
     show_stars = "stars" in overlays
     show_constellations = "constellations" in overlays
     show_grid = "grid" in overlays
+    show_ecliptic = "ecliptic" in overlays
+    show_galactic = "galactic" in overlays
     show_predictions = "predictions" in overlays
     show_prediction_labels = "prediction_labels" in overlays
-    v_limit = float(vmag_limit) if vmag_limit is not None else 23.0
+    # Slider value comes through as a 2-element list from RangeSlider.
+    if isinstance(vmag_value, (list, tuple)) and len(vmag_value) == 2:
+        v_lo, v_hi = float(vmag_value[0]), float(vmag_value[1])
+    else:
+        # Defensive fallback if the slider hasn't initialized yet.
+        v_lo, v_hi = 14.0, 28.0
+    v_range = (v_lo, v_hi)
 
     # Empty figure when no object loaded yet (initial page render).
     if not plot_state or not plot_state.get("key"):
@@ -12390,18 +12411,24 @@ def update_finding_chart(plot_state, projection, overlays, vmag_limit,
             projection=projection or "hammer",
             show_stars=show_stars,
             show_constellations=show_constellations,
-            show_grid=show_grid, theme=theme_dict),
-            "Select an object to populate the finding chart.")
+            show_grid=show_grid,
+            show_ecliptic=show_ecliptic,
+            show_galactic=show_galactic,
+            theme=theme_dict),
+            "Select an object to populate the finding chart.",
+            no_update, no_update, no_update, no_update, no_update)
 
     permid, provid, name = plot_state["key"]
     try:
         df = _fetch_obshist_obs(permid=permid, provid=provid)
     except Exception as e:
         return (go.Figure(),
-                f"Finding chart: fetch failed — {e}")
+                f"Finding chart: fetch failed — {e}",
+                no_update, no_update, no_update, no_update, no_update)
     if df is None or df.empty:
         return (go.Figure(),
-                "Finding chart: no observations for this object.")
+                "Finding chart: no observations for this object.",
+                no_update, no_update, no_update, no_update, no_update)
 
     label = name or provid or (f"permid {permid}" if permid else "?")
 
@@ -12432,15 +12459,45 @@ def update_finding_chart(plot_state, projection, overlays, vmag_limit,
         except Exception as e:
             prediction_note = f" · predictions unavailable ({type(e).__name__})"
 
+    # Slider min/max should track the object's predicted V range so
+    # the user can pull either handle to filter dates.  Reset whenever
+    # the (object, predictions-on) tuple changes — but not on every
+    # callback fire (otherwise the user's drag-narrowed range would
+    # snap back on every projection switch or overlay toggle).
+    object_key = plot_state.get("key") if plot_state else None
+    reset_key = [object_key, bool(show_predictions)]
+    new_min = no_update
+    new_max = no_update
+    new_marks = no_update
+    new_value = no_update
+    new_state = no_update
+    if reset_key != slider_state:
+        new_state = reset_key
+        if show_predictions and predictions is not None \
+                and not predictions.empty:
+            v = predictions["v_pred"].dropna().to_numpy()
+            if len(v):
+                lo = float(np.floor(v.min() * 10.0) / 10.0)
+                hi = float(np.ceil(v.max() * 10.0) / 10.0)
+                if hi - lo < 0.2:
+                    hi = lo + 0.2
+                new_min = lo
+                new_max = hi
+                new_marks = {lo: f"{lo:.1f}", hi: f"{hi:.1f}"}
+                new_value = [lo, hi]
+                v_range = (lo, hi)
+
     fig = build_finding_figure(
         df, projection=projection or "hammer",
         show_stars=show_stars,
         show_constellations=show_constellations,
         show_grid=show_grid,
+        show_ecliptic=show_ecliptic,
+        show_galactic=show_galactic,
         theme=theme_dict, label=label,
         predictions_df=predictions,
         show_prediction_labels=show_prediction_labels,
-        prediction_v_limit=v_limit)
+        prediction_v_limit=v_range)
     n = len(df)
     ra_span = float(df["ra"].max() - df["ra"].min())
     dec_span = float(df["dec"].max() - df["dec"].min())
@@ -12448,7 +12505,7 @@ def update_finding_chart(plot_state, projection, overlays, vmag_limit,
               f"Dec span {dec_span:.2f}° · "
               "drag to zoom (modebar Pan to drag-pan, "
               "double-click resets)" + prediction_note + ".")
-    return fig, status
+    return fig, status, new_min, new_max, new_marks, new_value, new_state
 
 
 # Clientside controls for the observation-history plot.  These used

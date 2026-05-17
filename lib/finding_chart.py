@@ -233,6 +233,66 @@ def spline_overlay(df: pd.DataFrame, kind: str,
 # draw a long line across the meridian).
 # ---------------------------------------------------------------------------
 
+# ICRS ↔ galactic rotation, J2000 (transposed from the standard ICRS-to-
+# galactic matrix; here we go galactic → ICRS for the galactic-plane
+# reference curve).  Numerical values match astropy 5.x for the
+# fk5/icrs alignment within ~milliarcsec, which is way beyond what a
+# finding-chart overlay needs.
+_GAL_TO_ICRS = np.array([
+    [-0.054875539, +0.494109454, -0.867666136],
+    [-0.873437105, -0.444829594, -0.198076390],
+    [-0.483834992, +0.746982249, +0.455983776],
+])
+_ECLIPTIC_OBLIQUITY_DEG = 23.43929111  # J2000
+
+
+def _project_polyline(ra_deg: np.ndarray, dec_deg: np.ndarray,
+                      kind: str, center_ra_deg: float
+                      ) -> tuple[np.ndarray, np.ndarray]:
+    """Project a closed/open ra/dec polyline with wrap-break at the
+    centered-longitude meridian.  Returns NaN-separated (x, y)."""
+    lon = _center_lon(ra_deg, center_ra_deg)
+    x, y = project(ra_deg, dec_deg, kind, center_ra_deg=center_ra_deg)
+    breaks = np.where(np.abs(np.diff(lon)) > 180.0)[0]
+    if len(breaks) == 0:
+        return x, y
+    xs, ys = [], []
+    last = 0
+    for b in breaks:
+        xs.extend(x[last:b + 1].tolist() + [np.nan])
+        ys.extend(y[last:b + 1].tolist() + [np.nan])
+        last = b + 1
+    xs.extend(x[last:].tolist())
+    ys.extend(y[last:].tolist())
+    return np.array(xs), np.array(ys)
+
+
+def galactic_plane_segments(kind: str, center_ra_deg: float = 180.0,
+                            n_samples: int = 720
+                            ) -> tuple[np.ndarray, np.ndarray]:
+    """Project the galactic equator (b=0) into the given projection."""
+    l = np.deg2rad(np.linspace(0.0, 360.0, n_samples, endpoint=True))
+    cb = np.cos(0.0)
+    vec_gal = np.stack([cb * np.cos(l), cb * np.sin(l),
+                        np.zeros_like(l)])
+    eq = _GAL_TO_ICRS @ vec_gal
+    ra = np.rad2deg(np.arctan2(eq[1], eq[0])) % 360.0
+    dec = np.rad2deg(np.arcsin(np.clip(eq[2], -1.0, 1.0)))
+    return _project_polyline(ra, dec, kind, center_ra_deg)
+
+
+def ecliptic_plane_segments(kind: str, center_ra_deg: float = 180.0,
+                            n_samples: int = 720
+                            ) -> tuple[np.ndarray, np.ndarray]:
+    """Project the ecliptic (β=0) into the given projection."""
+    eps = np.deg2rad(_ECLIPTIC_OBLIQUITY_DEG)
+    lam = np.deg2rad(np.linspace(0.0, 360.0, n_samples, endpoint=True))
+    ra = np.rad2deg(np.arctan2(np.sin(lam) * np.cos(eps),
+                               np.cos(lam))) % 360.0
+    dec = np.rad2deg(np.arcsin(np.sin(eps) * np.sin(lam)))
+    return _project_polyline(ra, dec, kind, center_ra_deg)
+
+
 def projection_boundary(kind: str
                         ) -> tuple[np.ndarray, np.ndarray]:
     """Closed outline of the projection's whole-sky region.
@@ -349,8 +409,10 @@ def build_finding_figure(
     label: str = "",
     predictions_df: pd.DataFrame | None = None,
     show_prediction_labels: bool = True,
-    prediction_v_limit: float = 23.0,
+    prediction_v_limit: float | tuple[float, float] = 23.0,
     prediction_elong_min: float = 90.0,
+    show_ecliptic: bool = False,
+    show_galactic: bool = False,
 ) -> go.Figure:
     """Build the finding-chart Plotly figure.
 
@@ -395,6 +457,26 @@ def build_finding_figure(
         fig.add_trace(go.Scatter(
             x=gx, y=gy, mode="lines",
             line=dict(color=grid_color, width=0.8, dash="dot"),
+            hoverinfo="skip", showlegend=False,
+        ))
+
+    # ── Ecliptic ──────────────────────────────────────────────────────
+    if show_ecliptic:
+        ex, ey = ecliptic_plane_segments(projection, center_ra_deg)
+        fig.add_trace(go.Scatter(
+            x=ex, y=ey, mode="lines",
+            line=dict(color="rgba(255,200,120,0.55)",
+                      width=1.0, dash="dash"),
+            hoverinfo="skip", showlegend=False,
+        ))
+
+    # ── Galactic plane ────────────────────────────────────────────────
+    if show_galactic:
+        gx2, gy2 = galactic_plane_segments(projection, center_ra_deg)
+        fig.add_trace(go.Scatter(
+            x=gx2, y=gy2, mode="lines",
+            line=dict(color="rgba(180,140,255,0.55)",
+                      width=1.0, dash="dashdot"),
             hoverinfo="skip", showlegend=False,
         ))
 
@@ -481,9 +563,18 @@ def build_finding_figure(
 
         # Combined observability mask.  NaN values pass through (we
         # don't have info to disqualify the date) so older cache files
-        # without solar_elong / v_pred degrade gracefully.
+        # without solar_elong / v_pred degrade gracefully.  V-limit
+        # accepts either a single float (upper bound only) or a
+        # (low, high) tuple — useful when the slider exposes both
+        # ends.
+        if isinstance(prediction_v_limit, (tuple, list)):
+            v_lo, v_hi = float(prediction_v_limit[0]), float(
+                prediction_v_limit[1])
+        else:
+            v_lo, v_hi = -np.inf, float(prediction_v_limit)
         elong_ok = np.isnan(elong) | (elong >= prediction_elong_min)
-        vmag_ok = np.isnan(v_pred) | (v_pred <= prediction_v_limit)
+        vmag_ok = (np.isnan(v_pred)
+                   | ((v_pred >= v_lo) & (v_pred <= v_hi)))
         observable = elong_ok & vmag_ok
         date_strs = pd_sorted["obstime"].astype(str).to_numpy()
 
@@ -532,16 +623,22 @@ def build_finding_figure(
             ))
 
         # ── Endpoint date labels (opt-in) ─────────────────────────
-        # Anchor "today" and "today + 365 d" at the first and last
-        # predicted positions.  Offset upward so the text doesn't
-        # sit on the marker.  User-toggleable so the labels can be
-        # cleared from a busy chart.
-        if show_prediction_labels:
-            x0, y0 = float(mxp[0]), float(myp[0])
-            xN, yN = float(mxp[-1]), float(myp[-1])
-            t0_str = pd.Timestamp(pd_sorted["obstime"].iloc[0]
+        # Anchor labels at the start and end of the currently
+        # *observable* extent rather than the absolute beginning and
+        # end of the prediction window — the user wants to see when
+        # the visible window starts and ends, not when Horizons
+        # started computing.  If the observable mask is empty (object
+        # never crosses the filter thresholds in the window), draw
+        # nothing.  Offset upward so the text doesn't sit on the
+        # marker.
+        if show_prediction_labels and observable.any():
+            obs_idx = np.where(observable)[0]
+            i0, iN = int(obs_idx[0]), int(obs_idx[-1])
+            x0, y0 = float(mxp[i0]), float(myp[i0])
+            xN, yN = float(mxp[iN]), float(myp[iN])
+            t0_str = pd.Timestamp(pd_sorted["obstime"].iloc[i0]
                                   ).strftime("%Y-%m-%d")
-            tN_str = pd.Timestamp(pd_sorted["obstime"].iloc[-1]
+            tN_str = pd.Timestamp(pd_sorted["obstime"].iloc[iN]
                                   ).strftime("%Y-%m-%d")
             fig.add_annotation(
                 x=x0, y=y0, text=t0_str,
@@ -549,12 +646,16 @@ def build_finding_figure(
                 arrowwidth=1.0, ax=0, ay=-26,
                 font=dict(color="rgba(255,200,120,1)", size=11),
                 bgcolor="rgba(0,0,0,0)", borderpad=2)
-            fig.add_annotation(
-                x=xN, y=yN, text=tN_str,
-                showarrow=True, arrowhead=2, arrowcolor=fg,
-                arrowwidth=1.0, ax=0, ay=-26,
-                font=dict(color="rgba(255,200,120,1)", size=11),
-                bgcolor="rgba(0,0,0,0)", borderpad=2)
+            # Only emit a second label if the observable run spans
+            # more than one date — otherwise the two labels would
+            # overlap.
+            if iN != i0:
+                fig.add_annotation(
+                    x=xN, y=yN, text=tN_str,
+                    showarrow=True, arrowhead=2, arrowcolor=fg,
+                    arrowwidth=1.0, ax=0, ay=-26,
+                    font=dict(color="rgba(255,200,120,1)", size=11),
+                    bgcolor="rgba(0,0,0,0)", borderpad=2)
 
     # ── Layout ────────────────────────────────────────────────────────
     title = (f"Finding chart — {label}" if label else "Finding chart") + \
