@@ -11761,6 +11761,13 @@ def reorder_obshist_sites_on_range(relayout_data, plot_state,
     fig = build_history_figure(
         df_win, name=label, height=900, theme=theme_dict,
         with_controls=False)
+    if autorange:
+        # On Reset Axes, dcc.Graph's Plotly.react diff would otherwise
+        # carry the previous figure's windowed xaxis range across into
+        # the new figure (Plotly.react keeps layout props that the new
+        # figure doesn't explicitly set).  Pin autorange on both
+        # xaxes so the rebuilt figure starts at the full extent.
+        fig.update_xaxes(autorange=True)
     print(f"[obshist] returning rebuilt figure for {label}", flush=True)
     if autorange or len(df_win) == len(df):
         status = (f"Plotted {len(df_win):,} obs for {label} "
@@ -12128,15 +12135,20 @@ app.clientside_callback(
         var gd = c ? c.querySelector('.js-plotly-plot') : null;
         if (!gd || !gd._fullLayout) { return null; }
         var has_v = gd._fullLayout.yaxis2 !== undefined;
+        // Reset both xaxis AND xaxis2 — make_subplots with
+        // shared_xaxes puts the rangeslider on xaxis2, so targeting
+        // only xaxis was leaving the windowed range in place.
         if (has_v) {
             Plotly.relayout(gd, {
                 'xaxis.autorange': true,
+                'xaxis2.autorange': true,
                 'yaxis.autorange': 'reversed',
                 'yaxis2.autorange': true
             });
         } else {
             Plotly.relayout(gd, {
                 'xaxis.autorange': true,
+                'xaxis2.autorange': true,
                 'yaxis.autorange': true
             });
         }
