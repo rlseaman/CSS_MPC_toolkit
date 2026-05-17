@@ -12414,7 +12414,8 @@ def update_finding_chart(plot_state, projection, overlays, vmag_value,
             show_grid=show_grid,
             show_ecliptic=show_ecliptic,
             show_galactic=show_galactic,
-            theme=theme_dict),
+            theme=theme_dict,
+            uirevision=f"empty|{projection or 'hammer'}"),
             "Select an object to populate the finding chart.",
             no_update, no_update, no_update, no_update, no_update)
 
@@ -12487,6 +12488,12 @@ def update_finding_chart(plot_state, projection, overlays, vmag_value,
                 new_value = [lo, hi]
                 v_range = (lo, hi)
 
+    # Stable tag for plotly's `uirevision`.  Built from the inputs
+    # whose change actually requires a viewport reset (object identity
+    # and projection); overlay toggles, slider drags, and theme
+    # changes share the same tag so plotly preserves the zoom/pan
+    # state.
+    uir = f"{permid}|{provid}|{projection or 'hammer'}"
     fig = build_finding_figure(
         df, projection=projection or "hammer",
         show_stars=show_stars,
@@ -12497,7 +12504,8 @@ def update_finding_chart(plot_state, projection, overlays, vmag_value,
         theme=theme_dict, label=label,
         predictions_df=predictions,
         show_prediction_labels=show_prediction_labels,
-        prediction_v_limit=v_range)
+        prediction_v_limit=v_range,
+        uirevision=uir)
     n = len(df)
     ra_span = float(df["ra"].max() - df["ra"].min())
     dec_span = float(df["dec"].max() - df["dec"].min())

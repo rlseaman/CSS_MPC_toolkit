@@ -413,6 +413,7 @@ def build_finding_figure(
     prediction_elong_min: float = 90.0,
     show_ecliptic: bool = False,
     show_galactic: bool = False,
+    uirevision: str | None = None,
 ) -> go.Figure:
     """Build the finding-chart Plotly figure.
 
@@ -671,6 +672,13 @@ def build_finding_figure(
         # button toggles to drag-pan when the user prefers that.
         # Double-click resets to the projection's natural extent.
         dragmode="zoom",
+        # `uirevision` preserves the user's zoom/pan state when the
+        # figure is rebuilt with the same revision tag.  Caller sets
+        # this from (object, projection) so control toggles (overlays,
+        # V-mag slider, label visibility) don't snap the viewport
+        # back to whole-sky — only switching object or projection
+        # does.
+        uirevision=uirevision or "default",
     )
     # Equal aspect in data space keeps the projection true.  The XY
     # cartesian grid is meaningless for a sky projection, so it's
