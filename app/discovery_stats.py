@@ -6165,9 +6165,19 @@ app.layout = html.Div(
                                     dcc.Graph(
                                         id="fc-plot",
                                         figure=go.Figure(),
+                                        # scrollZoom OFF so trackpad
+                                        # scrolls actually scroll the
+                                        # page; users zoom by drawing
+                                        # a rectangle (default
+                                        # dragmode='zoom' on the
+                                        # figure) and pan via the
+                                        # modebar's pan toggle.  The
+                                        # default double-click resets
+                                        # the view.
                                         config={**GRAPH_CONFIG,
-                                                "scrollZoom": True,
-                                                "responsive": True},
+                                                "scrollZoom": False,
+                                                "responsive": True,
+                                                "doubleClick": "reset"},
                                         style={"width": "100%",
                                                "aspectRatio": "2 / 1",
                                                "border": "1px solid "
@@ -12436,7 +12446,8 @@ def update_finding_chart(plot_state, projection, overlays, vmag_limit,
     dec_span = float(df["dec"].max() - df["dec"].min())
     status = (f"{n:,} observations · RA span {ra_span:.2f}° · "
               f"Dec span {dec_span:.2f}° · "
-              "pan / scroll-zoom enabled" + prediction_note + ".")
+              "drag to zoom (modebar Pan to drag-pan, "
+              "double-click resets)" + prediction_note + ".")
     return fig, status
 
 

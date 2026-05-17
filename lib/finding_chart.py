@@ -566,7 +566,10 @@ def build_finding_figure(
         paper_bgcolor=bg, plot_bgcolor=bg,
         font=dict(color=fg),
         showlegend=False,
-        dragmode="pan",
+        # Drag draws a zoom rectangle by default; the modebar's Pan
+        # button toggles to drag-pan when the user prefers that.
+        # Double-click resets to the projection's natural extent.
+        dragmode="zoom",
     )
     # Equal aspect in data space keeps the projection true.  The XY
     # cartesian grid is meaningless for a sky projection, so it's
