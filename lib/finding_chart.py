@@ -233,6 +233,29 @@ def spline_overlay(df: pd.DataFrame, kind: str,
 # draw a long line across the meridian).
 # ---------------------------------------------------------------------------
 
+def projection_boundary(kind: str
+                        ) -> tuple[np.ndarray, np.ndarray]:
+    """Closed outline of the projection's whole-sky region.
+
+    Hammer and Mollweide both project to an ellipse with semi-axes
+    (2√2, √2); Aitoff projects to (π, π/2).  Rectangular is the
+    [-180, +180]×[-90, +90] rectangle.
+    """
+    if kind == "rectangular":
+        x = np.array([-180.0, 180.0, 180.0, -180.0, -180.0])
+        y = np.array([-90.0, -90.0, 90.0, 90.0, -90.0])
+        return x, y
+
+    if kind in ("hammer", "mollweide"):
+        a, b = 2.0 * np.sqrt(2.0), np.sqrt(2.0)
+    elif kind == "aitoff":
+        a, b = np.pi, np.pi / 2.0
+    else:
+        raise ValueError(f"Unknown projection: {kind!r}")
+    t = np.linspace(0.0, 2.0 * np.pi, 361)
+    return a * np.cos(t), b * np.sin(t)
+
+
 def graticule_segments(kind: str, center_ra_deg: float = 180.0,
                        ra_step_deg: float = 30.0,
                        dec_step_deg: float = 15.0,
@@ -324,6 +347,7 @@ def build_finding_figure(
     star_mag_limit: float = 6.0,
     theme: dict | None = None,
     label: str = "",
+    predictions_df: pd.DataFrame | None = None,
 ) -> go.Figure:
     """Build the finding-chart Plotly figure.
 
@@ -332,23 +356,42 @@ def build_finding_figure(
     Observed positions are drawn as discrete markers — no connecting
     lines.  The cartesian XY axis grid is suppressed (it doesn't
     correspond to anything on the sky); enable `show_grid` to draw a
-    proper RA/Dec graticule instead.
+    proper RA/Dec graticule instead.  When `predictions_df` is
+    supplied (e.g. from `lib.horizons.fetch_predictions`), the
+    predicted track is overlaid as a distinct warm-colored polyline.
     """
     if projection not in PROJECTIONS:
         raise ValueError(f"projection must be one of {PROJECTIONS}")
 
     fg = (theme or {}).get("fg", "#e0e0e0")
     bg = (theme or {}).get("plot", "#1e1e1e")
+    # Theme-aware overlay colors.  Default to dark-mode values; caller
+    # supplies light-mode overrides via the `theme` dict.
+    grid_color = (theme or {}).get("grid", "rgba(180,180,210,0.45)")
+    boundary_color = (theme or {}).get(
+        "boundary", "rgba(200,200,220,0.85)")
+    constellation_color = (theme or {}).get(
+        "constellation", "rgba(120,140,200,0.45)")
+    star_color = (theme or {}).get("star", "rgba(230,230,230,0.90)")
 
     fig = go.Figure()
 
-    # ── Coordinate graticule (drawn first, behind everything) ─────────
+    # ── Whole-sky projection boundary ────────────────────────────────
+    # Drawn first (under) but at moderate weight so the oval / rectangle
+    # of the projection frames the chart.
+    bx, by = projection_boundary(projection)
+    fig.add_trace(go.Scatter(
+        x=bx, y=by, mode="lines",
+        line=dict(color=boundary_color, width=1.5),
+        hoverinfo="skip", showlegend=False,
+    ))
+
+    # ── Coordinate graticule (opt-in) ────────────────────────────────
     if show_grid:
         gx, gy = graticule_segments(projection, center_ra_deg)
         fig.add_trace(go.Scatter(
             x=gx, y=gy, mode="lines",
-            line=dict(color="rgba(140,140,140,0.30)",
-                      width=0.6, dash="dot"),
+            line=dict(color=grid_color, width=0.8, dash="dot"),
             hoverinfo="skip", showlegend=False,
         ))
 
@@ -357,7 +400,7 @@ def build_finding_figure(
         cx, cy = _project_constellation_segments(projection, center_ra_deg)
         fig.add_trace(go.Scatter(
             x=cx, y=cy, mode="lines",
-            line=dict(color="rgba(120,140,200,0.35)", width=0.7),
+            line=dict(color=constellation_color, width=0.7),
             hoverinfo="skip", showlegend=False,
         ))
 
@@ -371,7 +414,7 @@ def build_finding_figure(
         size = np.clip(6.0 - 0.7 * stars["vmag"].to_numpy(), 0.6, 6.0)
         fig.add_trace(go.Scatter(
             x=sx, y=sy, mode="markers",
-            marker=dict(color="rgba(220,220,220,0.85)",
+            marker=dict(color=star_color,
                         size=size, line=dict(width=0)),
             hovertemplate=("HIP %{customdata[0]:d} · V %{customdata[1]:.2f}"
                            "<extra></extra>"),
@@ -406,6 +449,58 @@ def build_finding_figure(
             customdata=d["obstime"].to_numpy(),
             hovertemplate=("%{customdata|%Y-%m-%d %H:%M}<br>"
                            "x %{x:.3f} · y %{y:.3f}<extra></extra>"),
+            showlegend=False,
+        ))
+
+    # ── Predicted positions (Horizons ephemeris) ──────────────────────
+    # Drawn as a continuous warm-colored polyline plus small hollow
+    # markers, breaking at projection wrap and at obvious data gaps.
+    # Distinguishes itself from the observed dots by both shape (line)
+    # and color (orange instead of viridis).
+    if predictions_df is not None and not predictions_df.empty:
+        pd_sorted = predictions_df.sort_values("obstime").reset_index(
+            drop=True)
+        px, py, _pt = trail_with_breaks(
+            pd_sorted, projection,
+            center_ra_deg=center_ra_deg,
+            gap_days=30.0,
+        )
+        # Hover with predicted V mag where available.
+        if "v_pred" in pd_sorted.columns:
+            v_pred = pd_sorted["v_pred"].to_numpy()
+        else:
+            v_pred = np.full(len(pd_sorted), np.nan)
+        # The trail_with_breaks output is NaN-broken; build matching
+        # customdata aligned to (x, y) by reusing the sort order.
+        # For hover purposes, only the non-NaN positions matter, so a
+        # simple per-trace customdata works at the cost of imperfect
+        # mapping at break boundaries — acceptable for tooltip text.
+        fig.add_trace(go.Scatter(
+            x=px, y=py, mode="lines",
+            line=dict(color="rgba(255,165,0,0.95)",
+                      width=2.0, dash="solid"),
+            hoverinfo="skip",
+            showlegend=False,
+        ))
+        mxp, myp = project(pd_sorted["ra"].to_numpy(),
+                           pd_sorted["dec"].to_numpy(),
+                           projection, center_ra_deg=center_ra_deg)
+        fig.add_trace(go.Scatter(
+            x=mxp, y=myp, mode="markers",
+            marker=dict(
+                color="rgba(255,165,0,0.95)",
+                size=4,
+                symbol="circle-open",
+                line=dict(color="rgba(255,165,0,0.95)", width=1.2),
+            ),
+            customdata=np.array(list(zip(
+                pd_sorted["obstime"].astype(str).to_numpy(),
+                v_pred,
+            )), dtype=object),
+            hovertemplate=(
+                "Predicted %{customdata[0]}<br>"
+                "V ≈ %{customdata[1]:.1f}"
+                "<extra></extra>"),
             showlegend=False,
         ))
 

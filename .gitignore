@@ -45,6 +45,7 @@ app/.apparition_cache*
 app/.boxscore_cache*
 app/.mpec_cache/
 app/.station_cache/
+app/.horizons_cache/
 
 # Downloaded / generated data files
 downloads/

@@ -6110,6 +6110,8 @@ app.layout = html.Div(
                                              "value": "constellations"},
                                             {"label": " Grid",
                                              "value": "grid"},
+                                            {"label": " Predictions",
+                                             "value": "predictions"},
                                         ],
                                         value=["stars", "constellations"],
                                         inline=True,
@@ -6118,17 +6120,24 @@ app.layout = html.Div(
                                     ),
                                 ],
                             ),
-                            dcc.Graph(
-                                id="fc-plot",
-                                figure=go.Figure(),
-                                config={**GRAPH_CONFIG, "scrollZoom": True,
-                                        "responsive": True},
-                                style={"width": "100%",
-                                       "aspectRatio": "2 / 1",
-                                       "border":
-                                           "1px solid var(--hr-color, #ccc)",
-                                       "borderRadius": "3px",
-                                       "boxSizing": "border-box"},
+                            dcc.Loading(
+                                id="fc-loading",
+                                type="default",
+                                children=[
+                                    dcc.Graph(
+                                        id="fc-plot",
+                                        figure=go.Figure(),
+                                        config={**GRAPH_CONFIG,
+                                                "scrollZoom": True,
+                                                "responsive": True},
+                                        style={"width": "100%",
+                                               "aspectRatio": "2 / 1",
+                                               "border": "1px solid "
+                                                   "var(--hr-color, #ccc)",
+                                               "borderRadius": "3px",
+                                               "boxSizing": "border-box"},
+                                    ),
+                                ],
                             ),
                             html.Div(
                                 id="fc-status",
@@ -12301,15 +12310,27 @@ def update_finding_chart(plot_state, projection, overlays,
                          theme_name, active_tab):
     from lib.finding_chart import build_finding_figure
     t = theme(theme_name)
-    theme_dict = {
-        "fg": t["text"], "plot": t["plot"],
-        "grid": "rgba(140,140,140,0.25)" if theme_name == "dark"
-                else "rgba(80,80,80,0.18)",
-    }
+    if theme_name == "dark":
+        theme_dict = {
+            "fg": t["text"], "plot": t["plot"],
+            "grid": "rgba(180,190,220,0.45)",
+            "boundary": "rgba(220,225,240,0.85)",
+            "constellation": "rgba(130,150,210,0.50)",
+            "star": "rgba(235,235,235,0.92)",
+        }
+    else:
+        theme_dict = {
+            "fg": t["text"], "plot": t["plot"],
+            "grid": "rgba(60,70,110,0.40)",
+            "boundary": "rgba(40,50,80,0.85)",
+            "constellation": "rgba(60,90,170,0.55)",
+            "star": "rgba(20,20,30,0.88)",
+        }
     overlays = overlays or []
     show_stars = "stars" in overlays
     show_constellations = "constellations" in overlays
     show_grid = "grid" in overlays
+    show_predictions = "predictions" in overlays
 
     # Empty figure when no object loaded yet (initial page render).
     if not plot_state or not plot_state.get("key"):
@@ -12332,18 +12353,47 @@ def update_finding_chart(plot_state, projection, overlays,
                 "Finding chart: no observations for this object.")
 
     label = name or provid or (f"permid {permid}" if permid else "?")
+
+    # Predicted-track fetch (forward-only — today through today+365 d,
+    # 1-day step, geocentric).  Disk-cached per object via
+    # lib.horizons.fetch_predictions; cache hits return in < 50 ms.
+    # Failure modes (Horizons down, designation not resolved) degrade
+    # quietly to the observed-only chart.
+    predictions = None
+    prediction_note = ""
+    if show_predictions:
+        from lib.horizons import fetch_predictions
+        try:
+            today = pd.Timestamp(pd.Timestamp.now("UTC").date())
+            predictions = fetch_predictions(
+                permid=permid or None,
+                provid=provid or None,
+                t_start=today,
+                t_stop=today + pd.Timedelta(days=365),
+                step="1 d",
+            )
+            if predictions is None or predictions.empty:
+                prediction_note = (" · predictions unavailable for "
+                                   "this designation")
+            else:
+                prediction_note = (f" · {len(predictions)} predicted "
+                                   "positions over next 365 d")
+        except Exception as e:
+            prediction_note = f" · predictions unavailable ({type(e).__name__})"
+
     fig = build_finding_figure(
         df, projection=projection or "hammer",
         show_stars=show_stars,
         show_constellations=show_constellations,
         show_grid=show_grid,
-        theme=theme_dict, label=label)
+        theme=theme_dict, label=label,
+        predictions_df=predictions)
     n = len(df)
     ra_span = float(df["ra"].max() - df["ra"].min())
     dec_span = float(df["dec"].max() - df["dec"].min())
     status = (f"{n:,} observations · RA span {ra_span:.2f}° · "
               f"Dec span {dec_span:.2f}° · "
-              "pan / scroll-zoom enabled.")
+              "pan / scroll-zoom enabled" + prediction_note + ".")
     return fig, status
 
 
