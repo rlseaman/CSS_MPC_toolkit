@@ -11500,6 +11500,23 @@ def update_obshist(classes, filters, h_range, arc_range, nopp_range,
     return display.to_dict("records"), status
 
 
+# In-process memo of the per-object obs_sbn fetch.  fetch_obs is
+# ~1 s on Gizmo for an average asteroid (and >10 s for Pluto's
+# 11K rows), so without this every range-slider rebuild would
+# stutter.  Keyed on (permid, provid); unbounded but each entry
+# is tens of MB at most and the dashboard tab is short-lived
+# session state.
+_OBSHIST_OBS_CACHE: dict = {}
+
+
+def _fetch_obshist_obs(*, permid=None, provid=None):
+    from lib.observation_history import fetch_obs as _fetch
+    key = (permid, provid)
+    if key not in _OBSHIST_OBS_CACHE:
+        _OBSHIST_OBS_CACHE[key] = _fetch(permid=permid, provid=provid)
+    return _OBSHIST_OBS_CACHE[key]
+
+
 _OBSHIST_DEFAULT_PERMID = "134340"  # Pluto — first thing rendered when
                                     # the user has not yet clicked a row.
 
@@ -11594,10 +11611,7 @@ def update_obshist_plot(selected_rows, theme_name, active_tab,
     vslider_reset = [5, 28]
 
     try:
-        if permid:
-            df = fetch_obs(permid=permid)
-        else:
-            df = fetch_obs(provid=provid)
+        df = _fetch_obshist_obs(permid=permid, provid=provid)
     except Exception as e:
         return (go.Figure(), f"Query failed for {label}: {e}",
                 no_update, details, vslider_hidden, vslider_reset)
@@ -11617,6 +11631,88 @@ def update_obshist_plot(selected_rows, theme_name, active_tab,
     return (fig, status, {"key": new_key}, details,
             vslider_visible if has_v else vslider_hidden,
             vslider_reset)
+
+
+# When the user drags the rangeslider or zooms the x-axis, re-rank
+# the site panel's top-10 against observations *in the visible
+# window*.  Implemented by rebuilding the figure with windowed obs;
+# the in-process memo above keeps the per-object DB fetch
+# one-shot, so the rebuild is ~50 ms.  Reset Axes (which fires
+# Plotly.relayout({xaxis.autorange: true})) restores the full
+# timeline by retriggering with the unfiltered df.
+@app.callback(
+    Output("obshist-plot", "figure", allow_duplicate=True),
+    Output("obshist-plot-status", "children", allow_duplicate=True),
+    Input("obshist-plot", "relayoutData"),
+    State("obshist-plot-state", "data"),
+    State("theme-toggle", "value"),
+    State("tabs", "value"),
+    prevent_initial_call=True,
+)
+def reorder_obshist_sites_on_range(relayout_data, plot_state,
+                                   theme_name, active_tab):
+    if (active_tab != "tab-obshist" or not relayout_data
+            or not plot_state or not plot_state.get("key")):
+        raise PreventUpdate
+
+    # Distinguish range-window events from other relayout chatter
+    # (V slider, shading toggle, etc., all of which target other axes
+    # or attributes).
+    xrange = None
+    autorange = False
+    if "xaxis.range" in relayout_data:
+        xrange = relayout_data["xaxis.range"]
+    elif ("xaxis.range[0]" in relayout_data
+          and "xaxis.range[1]" in relayout_data):
+        xrange = [relayout_data["xaxis.range[0]"],
+                  relayout_data["xaxis.range[1]"]]
+    elif relayout_data.get("xaxis.autorange") is True:
+        autorange = True
+    else:
+        raise PreventUpdate
+
+    permid, provid, name = plot_state["key"]
+    try:
+        df = _fetch_obshist_obs(permid=permid, provid=provid)
+    except Exception:
+        raise PreventUpdate
+    if df is None or df.empty:
+        raise PreventUpdate
+
+    if autorange:
+        df_win = df
+    else:
+        start = pd.to_datetime(xrange[0])
+        end = pd.to_datetime(xrange[1])
+        df_win = df[(df["obstime"] >= start)
+                    & (df["obstime"] <= end)]
+    if df_win.empty:
+        raise PreventUpdate
+
+    label_bits = []
+    if name:
+        label_bits.append(name)
+    if provid:
+        label_bits.append(provid)
+    if permid:
+        label_bits.append(f"permid {permid}")
+    label = " — ".join(label_bits) if label_bits else "?"
+
+    from lib.observation_history import build_history_figure
+    theme_dict = theme(theme_name)
+    fig = build_history_figure(
+        df_win, name=label, height=900, theme=theme_dict,
+        with_controls=False)
+    if autorange or len(df_win) == len(df):
+        status = (f"Plotted {len(df_win):,} obs for {label} "
+                  f"({df_win['stn'].nunique()} stations, "
+                  f"{df_win['obstime'].min():%Y} – "
+                  f"{df_win['obstime'].max():%Y}).")
+    else:
+        status = (f"Windowed: {len(df_win):,} of {len(df):,} obs "
+                  f"({df_win['stn'].nunique()} stations in window). "
+                  "Reset axes to restore the full timeline.")
+    return fig, status
 
 
 def _obshist_details_for(*, permid=None, provid=None):
