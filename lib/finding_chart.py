@@ -845,8 +845,8 @@ def build_finding_figure(
         ax_x, ax_y = np.pi, np.pi / 2.0
     else:
         ax_x = ax_y = 1.0
-    cardinal_x = [0.0, 0.0, -ax_x * 0.93, ax_x * 0.93]
-    cardinal_y = [ax_y * 0.90, -ax_y * 0.90, 0.0, 0.0]
+    cardinal_x = [0.0, 0.0, -ax_x * 0.97, ax_x * 0.97]
+    cardinal_y = [ax_y * 0.95, -ax_y * 0.95, 0.0, 0.0]
     cardinal_t = ["N", "S", "E", "W"]
     fig.add_trace(go.Scatter(
         x=cardinal_x, y=cardinal_y,
@@ -882,15 +882,23 @@ def build_finding_figure(
     # Equal aspect in data space keeps the projection true.  The XY
     # cartesian grid is meaningless for a sky projection, so it's
     # suppressed; use `show_grid=True` for a real RA/Dec graticule.
+    # Lock axis ranges to a small padding around the whole-sky extent
+    # so toggling overlays / hiding traces doesn't cause Plotly's
+    # autoranger to refit (and visibly resize) the view.  The user's
+    # zoom-by-rectangle still works — uirevision preserves it across
+    # rebuilds.
+    pad = 1.05
     fig.update_xaxes(
         scaleanchor="y", scaleratio=1,
         showgrid=False, zeroline=False,
         showticklabels=False,
         title=None,
+        range=[-ax_x * pad, ax_x * pad],
     )
     fig.update_yaxes(
         showgrid=False, zeroline=False,
         showticklabels=False,
         title=None,
+        range=[-ax_y * pad, ax_y * pad],
     )
     return fig
