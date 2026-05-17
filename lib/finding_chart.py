@@ -254,6 +254,22 @@ _GAL_TO_ICRS = np.array([
 ])
 _ECLIPTIC_OBLIQUITY_DEG = 23.43929111  # J2000
 
+# Fixed celestial reference points (J2000, ICRS).  Cardinal-direction
+# badges and the four pole markers depend on these.
+_NGP_RA_DEG = 192.85948
+_NGP_DEC_DEG = +27.12825
+_SGP_RA_DEG = (192.85948 + 180.0) % 360.0
+_SGP_DEC_DEG = -27.12825
+_NEP_RA_DEG = 270.0
+_NEP_DEC_DEG = +90.0 - _ECLIPTIC_OBLIQUITY_DEG
+_SEP_RA_DEG = 90.0
+_SEP_DEC_DEG = -(90.0 - _ECLIPTIC_OBLIQUITY_DEG)
+
+# Plot colors for the ecliptic / galactic groups — keep consistent
+# between the plane line, the pole markers, and any future overlays.
+_ECLIPTIC_COLOR = "rgba(255,200,90,0.95)"
+_GALACTIC_COLOR = "rgba(190,140,255,0.95)"
+
 
 def _project_polyline(ra_deg: np.ndarray, dec_deg: np.ndarray,
                       kind: str, center_ra_deg: float
@@ -422,6 +438,10 @@ def build_finding_figure(
     prediction_elong_min: float = 90.0,
     show_ecliptic: bool = False,
     show_galactic: bool = False,
+    show_ngp: bool = False,
+    show_sgp: bool = False,
+    show_nep: bool = False,
+    show_sep: bool = False,
     colorscale: str = "Viridis",
     uirevision: str | None = None,
 ) -> go.Figure:
@@ -476,7 +496,7 @@ def build_finding_figure(
         ex, ey = ecliptic_plane_segments(projection, center_ra_deg)
         fig.add_trace(go.Scatter(
             x=ex, y=ey, mode="lines",
-            line=dict(color="rgba(255,200,90,0.90)",
+            line=dict(color=_ECLIPTIC_COLOR,
                       width=1.8, dash="dash"),
             hoverinfo="skip", showlegend=False,
         ))
@@ -486,9 +506,37 @@ def build_finding_figure(
         gx2, gy2 = galactic_plane_segments(projection, center_ra_deg)
         fig.add_trace(go.Scatter(
             x=gx2, y=gy2, mode="lines",
-            line=dict(color="rgba(190,140,255,0.90)",
+            line=dict(color=_GALACTIC_COLOR,
                       width=1.8, dash="dashdot"),
             hoverinfo="skip", showlegend=False,
+        ))
+
+    # ── Galactic / ecliptic poles (opt-in) ────────────────────────────
+    # Plus signs in the matching plane color.  Hover text identifies
+    # which pole each marker is so the chart explains itself even with
+    # no legend.
+    pole_specs: list[tuple[float, float, str, str]] = []
+    if show_ngp:
+        pole_specs.append((_NGP_RA_DEG, _NGP_DEC_DEG, _GALACTIC_COLOR,
+                           "N. galactic pole"))
+    if show_sgp:
+        pole_specs.append((_SGP_RA_DEG, _SGP_DEC_DEG, _GALACTIC_COLOR,
+                           "S. galactic pole"))
+    if show_nep:
+        pole_specs.append((_NEP_RA_DEG, _NEP_DEC_DEG, _ECLIPTIC_COLOR,
+                           "N. ecliptic pole"))
+    if show_sep:
+        pole_specs.append((_SEP_RA_DEG, _SEP_DEC_DEG, _ECLIPTIC_COLOR,
+                           "S. ecliptic pole"))
+    for ra_p, dec_p, color, label_p in pole_specs:
+        xp, yp = project(np.array([ra_p]), np.array([dec_p]),
+                         projection, center_ra_deg=center_ra_deg)
+        fig.add_trace(go.Scatter(
+            x=xp, y=yp, mode="markers",
+            marker=dict(symbol="cross", color=color, size=14,
+                        line=dict(color=color, width=1.5)),
+            hovertext=[label_p], hoverinfo="text",
+            showlegend=False,
         ))
 
     # ── Constellation lines ───────────────────────────────────────────
@@ -671,6 +719,34 @@ def build_finding_figure(
     # ── Layout ────────────────────────────────────────────────────────
     title = (f"Finding chart — {label}" if label else "Finding chart") + \
             f"  ({projection.title()})"
+    # ── Cardinal-direction badges (N / S / E / W) ─────────────────────
+    # Static labels at the projection's whole-sky extent.  East goes on
+    # the LEFT because _center_lon negates the longitude for the
+    # east-left convention.  Marker size is in pixels so the badges
+    # stay readable when the user zooms in.
+    if projection == "rectangular":
+        ax_x, ax_y = 180.0, 90.0
+    elif projection in ("hammer", "mollweide"):
+        ax_x, ax_y = 2.0 * np.sqrt(2.0), np.sqrt(2.0)
+    elif projection == "aitoff":
+        ax_x, ax_y = np.pi, np.pi / 2.0
+    else:
+        ax_x = ax_y = 1.0
+    cardinal_x = [0.0, 0.0, -ax_x * 0.96, ax_x * 0.96]
+    cardinal_y = [ax_y * 0.92, -ax_y * 0.92, 0.0, 0.0]
+    cardinal_t = ["N", "S", "E", "W"]
+    fig.add_trace(go.Scatter(
+        x=cardinal_x, y=cardinal_y,
+        mode="markers+text",
+        text=cardinal_t,
+        textfont=dict(color=fg, size=11),
+        textposition="middle center",
+        marker=dict(size=20,
+                    color=bg,
+                    line=dict(color=fg, width=1)),
+        hoverinfo="skip", showlegend=False,
+    ))
+
     fig.update_layout(
         title=dict(text=title, font=dict(color=fg, size=14), x=0.02),
         autosize=True,

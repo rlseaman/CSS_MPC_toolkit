@@ -6131,27 +6131,29 @@ app.layout = html.Div(
                                         style={"width": "150px",
                                                 "fontSize": "12px"},
                                     ),
-                                    html.Label("Center RA (°)",
+                                    html.Label("Center RA (h)",
                                                style={"fontSize": "12px",
                                                       "color":
                                                       "var(--subtext-color,"
                                                       " #888)"}),
-                                    # Up/down spinner.  Default 180°
-                                    # (12h-shifted) puts RA=0/24h at
-                                    # the edges of a whole-sky view.
-                                    # Step 7.5° = half an hour of RA so
-                                    # the user can nudge the view to
-                                    # frame a particular apparition or
-                                    # the predicted track.  Value wraps
-                                    # mod 360 in the callback so the
-                                    # spinner can be driven past either
-                                    # edge.
+                                    # Up/down spinner in hours of RA.
+                                    # Default 0 h; step 0.25 h = 15
+                                    # minutes of RA so the user can
+                                    # nudge the view to frame a
+                                    # particular apparition or the
+                                    # predicted track.  Range −12 to
+                                    # +12 hours covers a full
+                                    # wrap-around in either direction.
+                                    # Double-click resets to 0 h
+                                    # (assets/finding_chart.js).
                                     dcc.Input(
                                         id="fc-center-ra",
                                         type="number",
-                                        min=-360, max=720, step=7.5,
-                                        value=180,
+                                        min=-12, max=12, step=0.25,
+                                        value=0,
                                         debounce=True,
+                                        title="Hours of RA · "
+                                              "double-click to reset",
                                         style={"width": "90px",
                                                "fontSize": "12px",
                                                "padding": "3px 6px"},
@@ -6178,12 +6180,20 @@ app.layout = html.Div(
                                              "value": "ecliptic"},
                                             {"label": " Galactic plane",
                                              "value": "galactic"},
+                                            {"label": " N. ecliptic pole",
+                                             "value": "nep"},
+                                            {"label": " S. ecliptic pole",
+                                             "value": "sep"},
+                                            {"label": " N. galactic pole",
+                                             "value": "ngp"},
+                                            {"label": " S. galactic pole",
+                                             "value": "sgp"},
                                             {"label": " Predictions",
                                              "value": "predictions"},
                                             {"label": " Prediction labels",
                                              "value": "prediction_labels"},
                                         ],
-                                        value=["stars", "constellations",
+                                        value=["grid", "ecliptic", "galactic",
                                                "prediction_labels"],
                                         inline=True,
                                         labelStyle={"marginRight": "10px",
@@ -6191,76 +6201,88 @@ app.layout = html.Div(
                                     ),
                                 ],
                             ),
-                            # V-mag range slider for the Predictions
-                            # overlay.  Bracket the V magnitudes that
-                            # count as "observable" on both ends —
-                            # too faint AND too bright (e.g.
-                            # saturation regime) both gray a date out.
-                            # min/max are reset to the predicted
-                            # span whenever a new object is loaded
-                            # or Predictions toggles from off→on.
+                            # V-mag range + Min solar elongation share
+                            # a single row.  V-mag brackets the
+                            # "observable" predicted dates on both
+                            # ends; min/max snap to the predicted span
+                            # when a new object loads (or Predictions
+                            # toggles on).  Min elongation defaults to
+                            # 60° — conservative for medium-aperture
+                            # survey work; 0° accepts everything on
+                            # elongation, 90° is the strict cut.
                             html.Div(
                                 style={"display": "flex",
-                                       "alignItems": "center",
-                                       "gap": "10px",
-                                       "marginBottom": "8px",
-                                       "marginTop": "-4px"},
+                                       "gap": "30px",
+                                       "marginBottom": "10px",
+                                       "marginTop": "2px"},
                                 children=[
-                                    html.Label(
-                                        "V-mag range (predictions)",
-                                        style={"fontSize": "12px",
-                                               "color":
-                                               "var(--subtext-color,"
-                                               " #888)",
-                                               "minWidth": "170px"}),
                                     html.Div(
-                                        dcc.RangeSlider(
-                                            id="fc-vmag-limit",
-                                            min=14, max=28, step=0.05,
-                                            value=[14, 28],
-                                            marks={14: "14",
-                                                   28: "28"},
-                                            tooltip={
-                                                "always_visible": False,
-                                                "placement": "bottom"},
-                                            allowCross=False,
-                                        ),
-                                        style={"flex": "1"}),
-                                ],
-                            ),
-                            # Minimum solar-elongation threshold for
-                            # "observable" predicted dates.  Default
-                            # 60° is a conservative cutoff for
-                            # medium-aperture survey work; 0° lets
-                            # everything pass on elongation, 90° is
-                            # the strict "perpendicular-to-sun" cut.
-                            html.Div(
-                                style={"display": "flex",
-                                       "alignItems": "center",
-                                       "gap": "10px",
-                                       "marginBottom": "10px"},
-                                children=[
-                                    html.Label(
-                                        "Min solar elongation",
-                                        style={"fontSize": "12px",
-                                               "color":
-                                               "var(--subtext-color,"
-                                               " #888)",
-                                               "minWidth": "170px"}),
+                                        style={"display": "flex",
+                                               "alignItems": "center",
+                                               "gap": "10px",
+                                               "flex": "1"},
+                                        children=[
+                                            html.Label(
+                                                "V-mag range",
+                                                style={"fontSize": "12px",
+                                                       "color":
+                                                       "var(--subtext-"
+                                                       "color, #888)",
+                                                       "minWidth": "90px",
+                                                       "whiteSpace":
+                                                       "nowrap"}),
+                                            html.Div(
+                                                dcc.RangeSlider(
+                                                    id="fc-vmag-limit",
+                                                    min=14, max=28,
+                                                    step=0.05,
+                                                    value=[14, 28],
+                                                    marks={14: "14",
+                                                           28: "28"},
+                                                    tooltip={
+                                                        "always_visible":
+                                                            False,
+                                                        "placement":
+                                                            "bottom"},
+                                                    allowCross=False,
+                                                ),
+                                                style={"flex": "1"}),
+                                        ],
+                                    ),
                                     html.Div(
-                                        dcc.Slider(
-                                            id="fc-elong-min",
-                                            min=0, max=180, step=5,
-                                            value=60,
-                                            marks={v: f"{v}°"
-                                                   for v in
-                                                   (0, 30, 60, 90,
-                                                    120, 150, 180)},
-                                            tooltip={
-                                                "always_visible": False,
-                                                "placement": "bottom"},
-                                        ),
-                                        style={"flex": "1"}),
+                                        style={"display": "flex",
+                                               "alignItems": "center",
+                                               "gap": "10px",
+                                               "flex": "1"},
+                                        children=[
+                                            html.Label(
+                                                "Min elongation",
+                                                style={"fontSize": "12px",
+                                                       "color":
+                                                       "var(--subtext-"
+                                                       "color, #888)",
+                                                       "minWidth": "110px",
+                                                       "whiteSpace":
+                                                       "nowrap"}),
+                                            html.Div(
+                                                dcc.Slider(
+                                                    id="fc-elong-min",
+                                                    min=0, max=180,
+                                                    step=5,
+                                                    value=60,
+                                                    marks={v: f"{v}°"
+                                                           for v in
+                                                           (0, 60, 120,
+                                                            180)},
+                                                    tooltip={
+                                                        "always_visible":
+                                                            False,
+                                                        "placement":
+                                                            "bottom"},
+                                                ),
+                                                style={"flex": "1"}),
+                                        ],
+                                    ),
                                 ],
                             ),
                             dcc.Store(id="fc-slider-state"),
@@ -12501,6 +12523,10 @@ def update_finding_chart(plot_state, projection, overlays, vmag_value,
     show_grid = "grid" in overlays
     show_ecliptic = "ecliptic" in overlays
     show_galactic = "galactic" in overlays
+    show_ngp = "ngp" in overlays
+    show_sgp = "sgp" in overlays
+    show_nep = "nep" in overlays
+    show_sep = "sep" in overlays
     show_predictions = "predictions" in overlays
     show_prediction_labels = "prediction_labels" in overlays
     # Slider value comes through as a 2-element list from RangeSlider.
@@ -12512,13 +12538,14 @@ def update_finding_chart(plot_state, projection, overlays, vmag_value,
     v_range = (v_lo, v_hi)
     elong_floor = float(elong_min) if elong_min is not None else 60.0
     cmap = colormap or "Viridis"
-    # Wrap the center RA into [0, 360) so the spinner can be nudged
-    # past either edge without producing out-of-range projection input.
+    # The spinner exposes hours of RA; convert to degrees (× 15) and
+    # wrap into [0, 360) so spinning past ±12 h doesn't blow up the
+    # projection math.
     try:
-        center_ra_val = float(center_ra) if center_ra is not None else 180.0
+        center_ra_hours = float(center_ra) if center_ra is not None else 0.0
     except (TypeError, ValueError):
-        center_ra_val = 180.0
-    center_ra_val = center_ra_val % 360.0
+        center_ra_hours = 0.0
+    center_ra_val = (center_ra_hours * 15.0) % 360.0
 
     # Empty figure when no object loaded yet (initial page render).
     if not plot_state or not plot_state.get("key"):
@@ -12531,6 +12558,8 @@ def update_finding_chart(plot_state, projection, overlays, vmag_value,
             show_grid=show_grid,
             show_ecliptic=show_ecliptic,
             show_galactic=show_galactic,
+            show_ngp=show_ngp, show_sgp=show_sgp,
+            show_nep=show_nep, show_sep=show_sep,
             colorscale=cmap,
             theme=theme_dict,
             uirevision=(f"empty|{projection or 'hammer'}|"
@@ -12622,6 +12651,8 @@ def update_finding_chart(plot_state, projection, overlays, vmag_value,
         show_grid=show_grid,
         show_ecliptic=show_ecliptic,
         show_galactic=show_galactic,
+        show_ngp=show_ngp, show_sgp=show_sgp,
+        show_nep=show_nep, show_sep=show_sep,
         colorscale=cmap,
         theme=theme_dict, label=label,
         predictions_df=predictions,
