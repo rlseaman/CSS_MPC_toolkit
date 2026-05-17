@@ -11762,12 +11762,17 @@ def reorder_obshist_sites_on_range(relayout_data, plot_state,
         df_win, name=label, height=900, theme=theme_dict,
         with_controls=False)
     if autorange:
-        # On Reset Axes, dcc.Graph's Plotly.react diff would otherwise
-        # carry the previous figure's windowed xaxis range across into
-        # the new figure (Plotly.react keeps layout props that the new
-        # figure doesn't explicitly set).  Pin autorange on both
-        # xaxes so the rebuilt figure starts at the full extent.
-        fig.update_xaxes(autorange=True)
+        # On Reset Axes, dcc.Graph's Plotly.react diff carries the
+        # previous figure's windowed `xaxis2.range` across into the
+        # new figure — autorange=True alone wasn't enough to
+        # dislodge it.  Pin an explicit range on xaxis2 (the
+        # rangeslider's axis; xaxis follows via matches='x2') so
+        # Plotly.react has to apply the new range.
+        full_start = df["obstime"].min()
+        full_end = df["obstime"].max()
+        fig.update_xaxes(autorange=False,
+                         range=[full_start, full_end],
+                         row=2, col=1)
     print(f"[obshist] returning rebuilt figure for {label}", flush=True)
     if autorange or len(df_win) == len(df):
         status = (f"Plotted {len(df_win):,} obs for {label} "
