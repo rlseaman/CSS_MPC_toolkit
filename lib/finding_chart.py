@@ -443,6 +443,7 @@ def build_finding_figure(
     show_nep: bool = False,
     show_sep: bool = False,
     colorscale: str = "Viridis",
+    hide_gray_predictions: bool = False,
     uirevision: str | None = None,
 ) -> go.Figure:
     """Build the finding-chart Plotly figure.
@@ -597,15 +598,14 @@ def build_finding_figure(
         ))
 
     # ── Predicted positions (Horizons ephemeris) ──────────────────────
-    # No connecting line — it hid the gray markers underneath, and
-    # the day-by-day sampling is dense enough that the points read
-    # as a track on their own.  Markers split into two traces:
-    # full-orange open circles where the date is "observable"
-    # (solar elongation ≥ `prediction_elong_min` AND predicted V
-    # brighter than `prediction_v_limit`), grayed-out circles
-    # everywhere else.  Either threshold failing is enough to gray
-    # the marker — both visibility constraints have to be met to
-    # earn the orange highlight.
+    # Year 0 (next 12 months) renders in solid orange.  Years 1+ use a
+    # warm-to-cool gradient (Turbo) so each subsequent year is visibly
+    # distinct from the near-term track.  Non-observable dates
+    # (elong < min OR V outside the slider range) render in gray
+    # unless `hide_gray_predictions` is set, in which case they're
+    # skipped entirely.  Prediction labels mark the first and last
+    # observable date *within each year* — so multi-year forecasts get
+    # one pair of labels per year.
     if predictions_df is not None and not predictions_df.empty:
         pd_sorted = predictions_df.sort_values("obstime").reset_index(
             drop=True)
@@ -615,17 +615,14 @@ def build_finding_figure(
         elong = (pd_sorted["solar_elong"].to_numpy()
                  if "solar_elong" in pd_sorted.columns
                  else np.full(len(pd_sorted), np.nan))
-
         mxp, myp = project(pd_sorted["ra"].to_numpy(),
                            pd_sorted["dec"].to_numpy(),
                            projection, center_ra_deg=center_ra_deg)
 
-        # Combined observability mask.  NaN values pass through (we
-        # don't have info to disqualify the date) so older cache files
-        # without solar_elong / v_pred degrade gracefully.  V-limit
-        # accepts either a single float (upper bound only) or a
-        # (low, high) tuple — useful when the slider exposes both
-        # ends.
+        # Combined observability mask.  NaN values pass through so
+        # older cache files without solar_elong / v_pred degrade
+        # gracefully.  V-limit accepts either a single float (upper
+        # bound only) or a (low, high) tuple.
         if isinstance(prediction_v_limit, (tuple, list)):
             v_lo, v_hi = float(prediction_v_limit[0]), float(
                 prediction_v_limit[1])
@@ -637,6 +634,13 @@ def build_finding_figure(
         observable = elong_ok & vmag_ok
         date_strs = pd_sorted["obstime"].astype(str).to_numpy()
 
+        # Year offset: integer number of 365-day rolls past the
+        # window start.  Year 0 covers ~today through today + 365 d.
+        t_start = pd.Timestamp(pd_sorted["obstime"].iloc[0])
+        delta_days = ((pd_sorted["obstime"] - t_start)
+                      .dt.total_seconds().to_numpy() / 86400.0)
+        year_offset = (delta_days // 365.25).astype(int)
+
         def _customdata(mask):
             return np.array(list(zip(
                 date_strs[mask],
@@ -644,16 +648,18 @@ def build_finding_figure(
                 np.where(np.isnan(elong[mask]), -1.0, elong[mask]),
             )), dtype=object)
 
-        if observable.any():
+        # Year-0 observable: orange (the existing scheme).
+        y0_obs = (year_offset == 0) & observable
+        if y0_obs.any():
             fig.add_trace(go.Scatter(
-                x=mxp[observable], y=myp[observable], mode="markers",
+                x=mxp[y0_obs], y=myp[y0_obs], mode="markers",
                 marker=dict(
                     color="rgba(255,165,0,0.95)", size=5,
                     symbol="circle-open",
                     line=dict(color="rgba(255,165,0,0.95)",
                               width=1.2),
                 ),
-                customdata=_customdata(observable),
+                customdata=_customdata(y0_obs),
                 hovertemplate=(
                     "Predicted %{customdata[0]}<br>"
                     "V ≈ %{customdata[1]:.1f} · "
@@ -661,8 +667,49 @@ def build_finding_figure(
                     "<extra></extra>"),
                 showlegend=False,
             ))
+
+        # Years 1+ observable: Turbo gradient by year-offset so each
+        # subsequent year reads as a different color.  marker.color
+        # carries the year number; the colorbar is suppressed because
+        # the meaning is exposed in hover ("Year N").
+        yN_obs = (year_offset >= 1) & observable
+        if yN_obs.any():
+            yvals = year_offset[yN_obs].astype(float)
+            max_y = float(year_offset.max())
+            fig.add_trace(go.Scatter(
+                x=mxp[yN_obs], y=myp[yN_obs], mode="markers",
+                marker=dict(
+                    color=yvals,
+                    cmin=1.0,
+                    cmax=max(1.0, max_y),
+                    colorscale="Turbo",
+                    size=5,
+                    symbol="circle-open",
+                    line=dict(width=1.2),
+                    showscale=False,
+                ),
+                customdata=np.array(list(zip(
+                    date_strs[yN_obs],
+                    np.where(np.isnan(v_pred[yN_obs]),
+                             -99.0, v_pred[yN_obs]),
+                    np.where(np.isnan(elong[yN_obs]),
+                             -1.0, elong[yN_obs]),
+                    yvals.astype(int),
+                )), dtype=object),
+                hovertemplate=(
+                    "Predicted %{customdata[0]} "
+                    "(Year %{customdata[3]})<br>"
+                    "V ≈ %{customdata[1]:.1f} · "
+                    "S-O-T %{customdata[2]:.1f}°"
+                    "<extra></extra>"),
+                showlegend=False,
+            ))
+
+        # Non-observable dates → single gray trace (or skipped when
+        # the user has hidden them).  Single trace across all years
+        # keeps the chart cleaner; the year info is still in hover.
         low_mask = ~observable
-        if low_mask.any():
+        if low_mask.any() and not hide_gray_predictions:
             fig.add_trace(go.Scatter(
                 x=mxp[low_mask], y=myp[low_mask], mode="markers",
                 marker=dict(
@@ -671,59 +718,61 @@ def build_finding_figure(
                     line=dict(color="rgba(150,150,150,0.55)",
                               width=1.0),
                 ),
-                customdata=_customdata(low_mask),
+                customdata=np.array(list(zip(
+                    date_strs[low_mask],
+                    np.where(np.isnan(v_pred[low_mask]),
+                             -99.0, v_pred[low_mask]),
+                    np.where(np.isnan(elong[low_mask]),
+                             -1.0, elong[low_mask]),
+                    year_offset[low_mask].astype(int),
+                )), dtype=object),
                 hovertemplate=(
                     "Predicted %{customdata[0]} "
-                    "(below threshold)<br>"
+                    "(Year %{customdata[3]}, below threshold)<br>"
                     "V ≈ %{customdata[1]:.1f} · "
                     "S-O-T %{customdata[2]:.1f}°"
                     "<extra></extra>"),
                 showlegend=False,
             ))
 
-        # ── Endpoint date labels (opt-in) ─────────────────────────
-        # Anchor labels at the start and end of the currently
-        # *observable* extent rather than the absolute beginning and
-        # end of the prediction window — the user wants to see when
-        # the visible window starts and ends, not when Horizons
-        # started computing.  If the observable mask is empty (object
-        # never crosses the filter thresholds in the window), draw
-        # nothing.  Offset upward so the text doesn't sit on the
-        # marker.
-        if show_prediction_labels and observable.any():
-            obs_idx = np.where(observable)[0]
-            i0, iN = int(obs_idx[0]), int(obs_idx[-1])
-            x0, y0 = float(mxp[i0]), float(myp[i0])
-            xN, yN = float(mxp[iN]), float(myp[iN])
-            t0_str = pd.Timestamp(pd_sorted["obstime"].iloc[i0]
-                                  ).strftime("%Y-%m-%d")
-            tN_str = pd.Timestamp(pd_sorted["obstime"].iloc[iN]
-                                  ).strftime("%Y-%m-%d")
-            fig.add_annotation(
-                x=x0, y=y0, text=t0_str,
-                showarrow=True, arrowhead=2, arrowcolor=fg,
-                arrowwidth=1.0, ax=0, ay=-26,
-                font=dict(color="rgba(255,200,120,1)", size=11),
-                bgcolor="rgba(0,0,0,0)", borderpad=2)
-            # Only emit a second label if the observable run spans
-            # more than one date — otherwise the two labels would
-            # overlap.
-            if iN != i0:
+        # Per-year endpoint date labels (opt-in).  Each year of the
+        # window gets its own first / last observable date, so a
+        # multi-year forecast shows label pairs at every apparition.
+        if show_prediction_labels:
+            for y_val in sorted(set(year_offset[observable].tolist())):
+                y_mask = (year_offset == y_val) & observable
+                if not y_mask.any():
+                    continue
+                idx = np.where(y_mask)[0]
+                i0, iN = int(idx[0]), int(idx[-1])
+                t0_str = pd.Timestamp(pd_sorted["obstime"].iloc[i0]
+                                      ).strftime("%Y-%m-%d")
                 fig.add_annotation(
-                    x=xN, y=yN, text=tN_str,
-                    showarrow=True, arrowhead=2, arrowcolor=fg,
-                    arrowwidth=1.0, ax=0, ay=-26,
+                    x=float(mxp[i0]), y=float(myp[i0]),
+                    text=t0_str, showarrow=True, arrowhead=2,
+                    arrowcolor=fg, arrowwidth=1.0,
+                    ax=0, ay=-26,
                     font=dict(color="rgba(255,200,120,1)", size=11),
                     bgcolor="rgba(0,0,0,0)", borderpad=2)
+                if iN != i0:
+                    tN_str = pd.Timestamp(pd_sorted["obstime"].iloc[iN]
+                                          ).strftime("%Y-%m-%d")
+                    fig.add_annotation(
+                        x=float(mxp[iN]), y=float(myp[iN]),
+                        text=tN_str, showarrow=True, arrowhead=2,
+                        arrowcolor=fg, arrowwidth=1.0,
+                        ax=0, ay=-26,
+                        font=dict(color="rgba(255,200,120,1)", size=11),
+                        bgcolor="rgba(0,0,0,0)", borderpad=2)
 
     # ── Layout ────────────────────────────────────────────────────────
     title = (f"Finding chart — {label}" if label else "Finding chart") + \
             f"  ({projection.title()})"
     # ── Cardinal-direction badges (N / S / E / W) ─────────────────────
-    # Static labels at the projection's whole-sky extent.  East goes on
-    # the LEFT because _center_lon negates the longitude for the
-    # east-left convention.  Marker size is in pixels so the badges
-    # stay readable when the user zooms in.
+    # Static labels just inside the projection's whole-sky boundary.
+    # East goes on the LEFT because _center_lon negates the longitude
+    # for the east-left convention.  Marker size is in pixels so the
+    # badges stay readable when the user zooms in.
     if projection == "rectangular":
         ax_x, ax_y = 180.0, 90.0
     elif projection in ("hammer", "mollweide"):
@@ -732,16 +781,16 @@ def build_finding_figure(
         ax_x, ax_y = np.pi, np.pi / 2.0
     else:
         ax_x = ax_y = 1.0
-    cardinal_x = [0.0, 0.0, -ax_x * 0.96, ax_x * 0.96]
-    cardinal_y = [ax_y * 0.92, -ax_y * 0.92, 0.0, 0.0]
+    cardinal_x = [0.0, 0.0, -ax_x * 0.99, ax_x * 0.99]
+    cardinal_y = [ax_y * 0.98, -ax_y * 0.98, 0.0, 0.0]
     cardinal_t = ["N", "S", "E", "W"]
     fig.add_trace(go.Scatter(
         x=cardinal_x, y=cardinal_y,
         mode="markers+text",
         text=cardinal_t,
-        textfont=dict(color=fg, size=11),
+        textfont=dict(color=fg, size=12),
         textposition="middle center",
-        marker=dict(size=20,
+        marker=dict(size=26,
                     color=bg,
                     line=dict(color=fg, width=1)),
         hoverinfo="skip", showlegend=False,

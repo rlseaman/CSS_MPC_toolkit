@@ -6164,6 +6164,34 @@ app.layout = html.Div(
                                                "fontSize": "12px",
                                                "padding": "3px 6px"},
                                     ),
+                                    html.Label("Forecast",
+                                               style={"fontSize": "12px",
+                                                      "color":
+                                                      "var(--subtext-color,"
+                                                      " #888)"}),
+                                    # Prediction window.  Step adapts
+                                    # to length so Horizons responses
+                                    # stay manageable: 1 yr / 1 d,
+                                    # 5 yr / 7 d, 10 yr / 14 d,
+                                    # 20 yr / 30 d.  All windows
+                                    # disk-cache separately per object.
+                                    dcc.Dropdown(
+                                        id="fc-pred-window",
+                                        options=[
+                                            {"label": "1 year",
+                                             "value": 1},
+                                            {"label": "5 years",
+                                             "value": 5},
+                                            {"label": "10 years",
+                                             "value": 10},
+                                            {"label": "20 years",
+                                             "value": 20},
+                                        ],
+                                        value=1,
+                                        clearable=False,
+                                        style={"width": "110px",
+                                               "fontSize": "12px"},
+                                    ),
                                 ],
                             ),
                             html.Div(
@@ -6198,6 +6226,8 @@ app.layout = html.Div(
                                              "value": "predictions"},
                                             {"label": " Prediction labels",
                                              "value": "prediction_labels"},
+                                            {"label": " Hide non-observable",
+                                             "value": "hide_gray"},
                                         ],
                                         value=["grid", "ecliptic", "galactic",
                                                "prediction_labels"],
@@ -6295,6 +6325,15 @@ app.layout = html.Div(
                             dcc.Loading(
                                 id="fc-loading",
                                 type="default",
+                                # Only paint the spinner for genuinely
+                                # slow callbacks (cold Horizons fetch);
+                                # in-process callbacks like slider
+                                # drags or overlay toggles take <100 ms
+                                # and were causing a visible "blink"
+                                # of the spinner / dim overlay on every
+                                # tweak.
+                                delay_show=400,
+                                delay_hide=100,
                                 children=[
                                     dcc.Graph(
                                         id="fc-plot",
@@ -12497,14 +12536,15 @@ def sync_obshist_designation_to_plot(state):
     Input("fc-elong-min", "value"),
     Input("fc-colormap", "value"),
     Input("fc-center-ra", "value"),
+    Input("fc-pred-window", "value"),
     Input("theme-toggle", "value"),
     State("tabs", "value"),
     State("fc-slider-state", "data"),
     prevent_initial_call=False,
 )
 def update_finding_chart(plot_state, projection, overlays, vmag_value,
-                         elong_min, colormap, center_ra, theme_name,
-                         active_tab, slider_state):
+                         elong_min, colormap, center_ra, pred_window_yrs,
+                         theme_name, active_tab, slider_state):
     from lib.finding_chart import build_finding_figure
     t = theme(theme_name)
     if theme_name == "dark":
@@ -12535,6 +12575,16 @@ def update_finding_chart(plot_state, projection, overlays, vmag_value,
     show_sep = "sep" in overlays
     show_predictions = "predictions" in overlays
     show_prediction_labels = "prediction_labels" in overlays
+    hide_gray_predictions = "hide_gray" in overlays
+    # Forecast window: years → (t_stop offset, Horizons step).  Step
+    # widens with the window so responses stay manageable for the
+    # multi-year cases.
+    try:
+        window_yrs = int(pred_window_yrs or 1)
+    except (TypeError, ValueError):
+        window_yrs = 1
+    _STEP_FOR_WINDOW = {1: "1 d", 5: "7 d", 10: "14 d", 20: "30 d"}
+    pred_step = _STEP_FOR_WINDOW.get(window_yrs, "1 d")
     # Slider value comes through as a 2-element list from RangeSlider.
     if isinstance(vmag_value, (list, tuple)) and len(vmag_value) == 2:
         v_lo, v_hi = float(vmag_value[0]), float(vmag_value[1])
@@ -12602,15 +12652,16 @@ def update_finding_chart(plot_state, projection, overlays, vmag_value,
                 permid=permid or None,
                 provid=provid or None,
                 t_start=today,
-                t_stop=today + pd.Timedelta(days=365),
-                step="1 d",
+                t_stop=today + pd.Timedelta(days=365 * window_yrs),
+                step=pred_step,
             )
             if predictions is None or predictions.empty:
                 prediction_note = (" · predictions unavailable for "
                                    "this designation")
             else:
                 prediction_note = (f" · {len(predictions)} predicted "
-                                   "positions over next 365 d")
+                                   f"positions over next "
+                                   f"{window_yrs} y")
         except Exception as e:
             prediction_note = f" · predictions unavailable ({type(e).__name__})"
 
@@ -12620,7 +12671,7 @@ def update_finding_chart(plot_state, projection, overlays, vmag_value,
     # callback fire (otherwise the user's drag-narrowed range would
     # snap back on every projection switch or overlay toggle).
     object_key = plot_state.get("key") if plot_state else None
-    reset_key = [object_key, bool(show_predictions)]
+    reset_key = [object_key, bool(show_predictions), window_yrs]
     new_min = no_update
     new_max = no_update
     new_marks = no_update
@@ -12665,6 +12716,7 @@ def update_finding_chart(plot_state, projection, overlays, vmag_value,
         show_prediction_labels=show_prediction_labels,
         prediction_v_limit=v_range,
         prediction_elong_min=elong_floor,
+        hide_gray_predictions=hide_gray_predictions,
         uirevision=uir)
     n = len(df)
     ra_span = float(df["ra"].max() - df["ra"].min())
