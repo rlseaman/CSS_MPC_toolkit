@@ -11685,9 +11685,11 @@ def reorder_obshist_sites_on_range(relayout_data, plot_state,
     permid, provid, name = plot_state["key"]
     try:
         df = _fetch_obshist_obs(permid=permid, provid=provid)
-    except Exception:
+    except Exception as e:
+        print(f"[obshist] fetch_obs failed: {e}", flush=True)
         raise PreventUpdate
     if df is None or df.empty:
+        print("[obshist] df is None/empty", flush=True)
         raise PreventUpdate
 
     if autorange:
@@ -11698,7 +11700,17 @@ def reorder_obshist_sites_on_range(relayout_data, plot_state,
         df_win = df[(df["obstime"] >= start)
                     & (df["obstime"] <= end)]
     if df_win.empty:
+        print("[obshist] df_win is empty after filter", flush=True)
         raise PreventUpdate
+
+    # Surface the top sites before and after for diagnostic — if these
+    # match across two range events, the user won't see a visible
+    # change even though the rebuild ran.
+    top_all = list(df["stn"].value_counts().head(10).index)
+    top_win = list(df_win["stn"].value_counts().head(10).index)
+    print(f"[obshist] permid={permid} provid={provid}  "
+          f"df={len(df)} df_win={len(df_win)}  "
+          f"top10_full={top_all}  top10_win={top_win}", flush=True)
 
     label_bits = []
     if name:
@@ -11714,6 +11726,7 @@ def reorder_obshist_sites_on_range(relayout_data, plot_state,
     fig = build_history_figure(
         df_win, name=label, height=900, theme=theme_dict,
         with_controls=False)
+    print(f"[obshist] returning rebuilt figure for {label}", flush=True)
     if autorange or len(df_win) == len(df):
         status = (f"Plotted {len(df_win):,} obs for {label} "
                   f"({df_win['stn'].nunique()} stations, "
