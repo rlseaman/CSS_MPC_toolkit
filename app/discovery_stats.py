@@ -6146,14 +6146,20 @@ app.layout = html.Div(
                                     # wrap-around in either direction.
                                     # Double-click resets to 0 h
                                     # (assets/finding_chart.js).
+                                    # Double-click resets to 0 h
+                                    # (assets/finding_chart.js).  The
+                                    # tooltip would be a native HTML
+                                    # `title` attribute, but this Dash
+                                    # version's dcc.Input doesn't pass
+                                    # arbitrary attrs through, so we
+                                    # rely on the label / project
+                                    # docs for that hint.
                                     dcc.Input(
                                         id="fc-center-ra",
                                         type="number",
                                         min=-12, max=12, step=0.25,
                                         value=0,
                                         debounce=True,
-                                        title="Hours of RA · "
-                                              "double-click to reset",
                                         style={"width": "90px",
                                                "fontSize": "12px",
                                                "padding": "3px 6px"},
