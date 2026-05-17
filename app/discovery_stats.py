@@ -6129,7 +6129,32 @@ app.layout = html.Div(
                                         value="Viridis",
                                         clearable=False,
                                         style={"width": "150px",
-                                               "fontSize": "12px"},
+                                                "fontSize": "12px"},
+                                    ),
+                                    html.Label("Center RA (°)",
+                                               style={"fontSize": "12px",
+                                                      "color":
+                                                      "var(--subtext-color,"
+                                                      " #888)"}),
+                                    # Up/down spinner.  Default 180°
+                                    # (12h-shifted) puts RA=0/24h at
+                                    # the edges of a whole-sky view.
+                                    # Step 7.5° = half an hour of RA so
+                                    # the user can nudge the view to
+                                    # frame a particular apparition or
+                                    # the predicted track.  Value wraps
+                                    # mod 360 in the callback so the
+                                    # spinner can be driven past either
+                                    # edge.
+                                    dcc.Input(
+                                        id="fc-center-ra",
+                                        type="number",
+                                        min=-360, max=720, step=7.5,
+                                        value=180,
+                                        debounce=True,
+                                        style={"width": "90px",
+                                               "fontSize": "12px",
+                                               "padding": "3px 6px"},
                                     ),
                                 ],
                             ),
@@ -12443,14 +12468,15 @@ def sync_obshist_designation_to_plot(state):
     Input("fc-vmag-limit", "value"),
     Input("fc-elong-min", "value"),
     Input("fc-colormap", "value"),
+    Input("fc-center-ra", "value"),
     Input("theme-toggle", "value"),
     State("tabs", "value"),
     State("fc-slider-state", "data"),
     prevent_initial_call=False,
 )
 def update_finding_chart(plot_state, projection, overlays, vmag_value,
-                         elong_min, colormap, theme_name, active_tab,
-                         slider_state):
+                         elong_min, colormap, center_ra, theme_name,
+                         active_tab, slider_state):
     from lib.finding_chart import build_finding_figure
     t = theme(theme_name)
     if theme_name == "dark":
@@ -12486,12 +12512,20 @@ def update_finding_chart(plot_state, projection, overlays, vmag_value,
     v_range = (v_lo, v_hi)
     elong_floor = float(elong_min) if elong_min is not None else 60.0
     cmap = colormap or "Viridis"
+    # Wrap the center RA into [0, 360) so the spinner can be nudged
+    # past either edge without producing out-of-range projection input.
+    try:
+        center_ra_val = float(center_ra) if center_ra is not None else 180.0
+    except (TypeError, ValueError):
+        center_ra_val = 180.0
+    center_ra_val = center_ra_val % 360.0
 
     # Empty figure when no object loaded yet (initial page render).
     if not plot_state or not plot_state.get("key"):
         return (build_finding_figure(
             pd.DataFrame(columns=["obstime", "ra", "dec"]),
             projection=projection or "hammer",
+            center_ra_deg=center_ra_val,
             show_stars=show_stars,
             show_constellations=show_constellations,
             show_grid=show_grid,
@@ -12499,7 +12533,8 @@ def update_finding_chart(plot_state, projection, overlays, vmag_value,
             show_galactic=show_galactic,
             colorscale=cmap,
             theme=theme_dict,
-            uirevision=f"empty|{projection or 'hammer'}"),
+            uirevision=(f"empty|{projection or 'hammer'}|"
+                        f"{center_ra_val:.1f}")),
             "Select an object to populate the finding chart.",
             no_update, no_update, no_update, no_update, no_update)
 
@@ -12573,13 +12608,15 @@ def update_finding_chart(plot_state, projection, overlays, vmag_value,
                 v_range = (lo, hi)
 
     # Stable tag for plotly's `uirevision`.  Built from the inputs
-    # whose change actually requires a viewport reset (object identity
-    # and projection); overlay toggles, slider drags, and theme
-    # changes share the same tag so plotly preserves the zoom/pan
-    # state.
-    uir = f"{permid}|{provid}|{projection or 'hammer'}"
+    # whose change actually requires a viewport reset (object identity,
+    # projection, and center RA — each rotates or remaps the
+    # coordinate space).  Overlay toggles, slider drags, and theme
+    # changes share the same tag so plotly preserves zoom/pan state.
+    uir = (f"{permid}|{provid}|{projection or 'hammer'}|"
+           f"{center_ra_val:.1f}")
     fig = build_finding_figure(
         df, projection=projection or "hammer",
+        center_ra_deg=center_ra_val,
         show_stars=show_stars,
         show_constellations=show_constellations,
         show_grid=show_grid,
