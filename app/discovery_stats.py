@@ -6084,7 +6084,7 @@ app.layout = html.Div(
                                                       "color":
                                                       "var(--subtext-color,"
                                                       " #888)"}),
-                                    dcc.RadioItems(
+                                    dcc.Dropdown(
                                         id="fc-projection",
                                         options=[
                                             {"label": "Hammer",
@@ -6097,10 +6097,49 @@ app.layout = html.Div(
                                              "value": "rectangular"},
                                         ],
                                         value="hammer",
-                                        inline=True,
-                                        labelStyle={"marginRight": "10px",
-                                                    "fontSize": "12px"},
+                                        clearable=False,
+                                        style={"width": "140px",
+                                               "fontSize": "12px"},
                                     ),
+                                    html.Label("Colormap",
+                                               style={"fontSize": "12px",
+                                                      "color":
+                                                      "var(--subtext-color,"
+                                                      " #888)"}),
+                                    dcc.Dropdown(
+                                        id="fc-colormap",
+                                        options=[
+                                            {"label": "Viridis",
+                                             "value": "Viridis"},
+                                            {"label": "Plasma",
+                                             "value": "Plasma"},
+                                            {"label": "Cividis",
+                                             "value": "Cividis"},
+                                            {"label": "Turbo",
+                                             "value": "Turbo"},
+                                            {"label": "Magma",
+                                             "value": "Magma"},
+                                            {"label": "Inferno",
+                                             "value": "Inferno"},
+                                            {"label": "RdYlBu (rev.)",
+                                             "value": "RdYlBu_r"},
+                                            {"label": "Spectral (rev.)",
+                                             "value": "Spectral_r"},
+                                        ],
+                                        value="Viridis",
+                                        clearable=False,
+                                        style={"width": "150px",
+                                               "fontSize": "12px"},
+                                    ),
+                                ],
+                            ),
+                            html.Div(
+                                style={"display": "flex",
+                                       "flexWrap": "wrap",
+                                       "gap": "10px 16px",
+                                       "marginTop": "6px",
+                                       "marginBottom": "8px"},
+                                children=[
                                     dcc.Checklist(
                                         id="fc-overlays",
                                         options=[
@@ -6160,6 +6199,41 @@ app.layout = html.Div(
                                                 "always_visible": False,
                                                 "placement": "bottom"},
                                             allowCross=False,
+                                        ),
+                                        style={"flex": "1"}),
+                                ],
+                            ),
+                            # Minimum solar-elongation threshold for
+                            # "observable" predicted dates.  Default
+                            # 60° is a conservative cutoff for
+                            # medium-aperture survey work; 0° lets
+                            # everything pass on elongation, 90° is
+                            # the strict "perpendicular-to-sun" cut.
+                            html.Div(
+                                style={"display": "flex",
+                                       "alignItems": "center",
+                                       "gap": "10px",
+                                       "marginBottom": "10px"},
+                                children=[
+                                    html.Label(
+                                        "Min solar elongation",
+                                        style={"fontSize": "12px",
+                                               "color":
+                                               "var(--subtext-color,"
+                                               " #888)",
+                                               "minWidth": "170px"}),
+                                    html.Div(
+                                        dcc.Slider(
+                                            id="fc-elong-min",
+                                            min=0, max=180, step=5,
+                                            value=60,
+                                            marks={v: f"{v}°"
+                                                   for v in
+                                                   (0, 30, 60, 90,
+                                                    120, 150, 180)},
+                                            tooltip={
+                                                "always_visible": False,
+                                                "placement": "bottom"},
                                         ),
                                         style={"flex": "1"}),
                                 ],
@@ -11775,8 +11849,12 @@ def _fetch_obshist_obs(*, permid=None, provid=None):
     raise ValueError("supply permid or provid")
 
 
-_OBSHIST_DEFAULT_PERMID = "134340"  # Pluto — first thing rendered when
+_OBSHIST_DEFAULT_PERMID = "99942"   # Apophis — first thing rendered when
                                     # the user has not yet clicked a row.
+                                    # Picked because it's the canonical
+                                    # planetary-defense NEO and exercises
+                                    # the finding-chart predictions cleanly.
+_OBSHIST_DEFAULT_NAME = "Apophis"
 
 
 @app.callback(
@@ -11834,9 +11912,9 @@ def update_obshist_plot(selected_rows, theme_name, active_tab,
         permid, provid, name = state["key"]
         new_key = state["key"]
     elif state["key"] is None:
-        # First ever activation of the tab → Pluto default.
+        # First ever activation of the tab → default object.
         permid = _OBSHIST_DEFAULT_PERMID
-        name = "Pluto"
+        name = _OBSHIST_DEFAULT_NAME
         new_key = [permid, None, name]
     else:
         # Filter cleared the selection (not a theme/tab event) — keep
@@ -12363,13 +12441,16 @@ def sync_obshist_designation_to_plot(state):
     Input("fc-projection", "value"),
     Input("fc-overlays", "value"),
     Input("fc-vmag-limit", "value"),
+    Input("fc-elong-min", "value"),
+    Input("fc-colormap", "value"),
     Input("theme-toggle", "value"),
     State("tabs", "value"),
     State("fc-slider-state", "data"),
     prevent_initial_call=False,
 )
 def update_finding_chart(plot_state, projection, overlays, vmag_value,
-                         theme_name, active_tab, slider_state):
+                         elong_min, colormap, theme_name, active_tab,
+                         slider_state):
     from lib.finding_chart import build_finding_figure
     t = theme(theme_name)
     if theme_name == "dark":
@@ -12403,6 +12484,8 @@ def update_finding_chart(plot_state, projection, overlays, vmag_value,
         # Defensive fallback if the slider hasn't initialized yet.
         v_lo, v_hi = 14.0, 28.0
     v_range = (v_lo, v_hi)
+    elong_floor = float(elong_min) if elong_min is not None else 60.0
+    cmap = colormap or "Viridis"
 
     # Empty figure when no object loaded yet (initial page render).
     if not plot_state or not plot_state.get("key"):
@@ -12414,6 +12497,7 @@ def update_finding_chart(plot_state, projection, overlays, vmag_value,
             show_grid=show_grid,
             show_ecliptic=show_ecliptic,
             show_galactic=show_galactic,
+            colorscale=cmap,
             theme=theme_dict,
             uirevision=f"empty|{projection or 'hammer'}"),
             "Select an object to populate the finding chart.",
@@ -12501,10 +12585,12 @@ def update_finding_chart(plot_state, projection, overlays, vmag_value,
         show_grid=show_grid,
         show_ecliptic=show_ecliptic,
         show_galactic=show_galactic,
+        colorscale=cmap,
         theme=theme_dict, label=label,
         predictions_df=predictions,
         show_prediction_labels=show_prediction_labels,
         prediction_v_limit=v_range,
+        prediction_elong_min=elong_floor,
         uirevision=uir)
     n = len(df)
     ra_span = float(df["ra"].max() - df["ra"].min())

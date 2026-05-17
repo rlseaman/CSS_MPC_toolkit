@@ -65,9 +65,18 @@ PROJECTIONS = ("rectangular", "hammer", "aitoff", "mollweide")
 
 
 def _center_lon(ra_deg: np.ndarray, center_ra_deg: float) -> np.ndarray:
-    """Return longitude in (-180, +180] centered on `center_ra_deg`."""
-    return ((np.asarray(ra_deg, dtype=float) - center_ra_deg + 540.0)
-            % 360.0) - 180.0
+    """Centered longitude in (-180, +180].
+
+    The final negation flips the longitude axis so that increasing RA
+    (eastward on the sky) maps to *decreasing* x — the astronomical
+    convention NEOlyzer uses, with east on the LEFT of the plot.
+    Wrap-break logic compares `|Δlon|` so it's invariant under this
+    sign flip, and projection_boundary() returns a symmetric ellipse,
+    so no other code needs to change.
+    """
+    lon = ((np.asarray(ra_deg, dtype=float) - center_ra_deg + 540.0)
+           % 360.0) - 180.0
+    return -lon
 
 
 def project(ra_deg, dec_deg, kind: str,
@@ -413,6 +422,7 @@ def build_finding_figure(
     prediction_elong_min: float = 90.0,
     show_ecliptic: bool = False,
     show_galactic: bool = False,
+    colorscale: str = "Viridis",
     uirevision: str | None = None,
 ) -> go.Figure:
     """Build the finding-chart Plotly figure.
@@ -466,8 +476,8 @@ def build_finding_figure(
         ex, ey = ecliptic_plane_segments(projection, center_ra_deg)
         fig.add_trace(go.Scatter(
             x=ex, y=ey, mode="lines",
-            line=dict(color="rgba(255,200,120,0.55)",
-                      width=1.0, dash="dash"),
+            line=dict(color="rgba(255,200,90,0.90)",
+                      width=1.8, dash="dash"),
             hoverinfo="skip", showlegend=False,
         ))
 
@@ -476,8 +486,8 @@ def build_finding_figure(
         gx2, gy2 = galactic_plane_segments(projection, center_ra_deg)
         fig.add_trace(go.Scatter(
             x=gx2, y=gy2, mode="lines",
-            line=dict(color="rgba(180,140,255,0.55)",
-                      width=1.0, dash="dashdot"),
+            line=dict(color="rgba(190,140,255,0.90)",
+                      width=1.8, dash="dashdot"),
             hoverinfo="skip", showlegend=False,
         ))
 
@@ -525,7 +535,7 @@ def build_finding_figure(
         fig.add_trace(go.Scatter(
             x=mx, y=my, mode="markers",
             marker=dict(
-                color=years, colorscale="Viridis",
+                color=years, colorscale=colorscale,
                 size=5, line=dict(width=0),
                 colorbar=dict(
                     title=dict(text="Year", font=dict(color=fg)),
