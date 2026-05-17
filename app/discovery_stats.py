@@ -5960,7 +5960,6 @@ app.layout = html.Div(
                             # Sink Stores absorb the clientside-callback
                             # returns (Plotly.relayout doesn't have a
                             # natural Output target).
-                            dcc.Store(id="obshist-sink-reset"),
                             dcc.Store(id="obshist-sink-bands"),
                             dcc.Store(id="obshist-sink-shading"),
                             dcc.Store(id="obshist-sink-vslider"),
@@ -11356,10 +11355,6 @@ def update_obshist(classes, filters, h_range, arc_range, nopp_range,
     # plot-state-fallback pin would yank the table away from the
     # newly-resolved row before the plot has loaded it).  Skip.
     triggered = ctx.triggered_id
-    print(f"[obshist] UPDATE_OBSHIST triggered_id={triggered!r} "
-          f"pending_target={pending_target} "
-          f"plot_state_key={(plot_state or {}).get('key')}",
-          flush=True)
     if triggered == "obshist-pending-target" and not pending_target:
         raise PreventUpdate
 
@@ -11580,10 +11575,6 @@ def update_obshist_plot(selected_rows, theme_name, active_tab,
     from lib.observation_history import fetch_obs, build_history_figure
 
     state = plot_state or {"key": None}
-    triggered = ctx.triggered_id
-    print(f"[obshist] PLOT_CB triggered={triggered!r} "
-          f"selected_rows={selected_rows} state_key={state.get('key')}",
-          flush=True)
 
     permid = provid = name = None
     if selected_rows and derived_data:
@@ -11593,8 +11584,6 @@ def update_obshist_plot(selected_rows, theme_name, active_tab,
             permid = (row.get("permid") or "").strip() or None
             provid = (row.get("provid") or "").strip() or None
             name = row.get("iau_name") or None
-    print(f"[obshist] PLOT_CB extracted permid={permid!r} "
-          f"provid={provid!r} name={name!r}", flush=True)
 
     if permid or provid:
         # Active selection — fetch this object.
@@ -11668,13 +11657,13 @@ def update_obshist_plot(selected_rows, theme_name, active_tab,
             vslider_reset)
 
 
-# When the user drags the rangeslider or zooms the x-axis, re-rank
-# the site panel's top-10 against observations *in the visible
-# window*.  Implemented by rebuilding the figure with windowed obs;
-# the in-process memo above keeps the per-object DB fetch
-# one-shot, so the rebuild is ~50 ms.  Reset Axes (which fires
-# Plotly.relayout({xaxis.autorange: true})) restores the full
-# timeline by retriggering with the unfiltered df.
+# When the user drags the rangeslider, re-rank the site panel's
+# top-10 against observations *in the visible window*.  The
+# in-process memo on `_fetch_obshist_obs` keeps the per-object DB
+# fetch one-shot, so the rebuild is ~50 ms.  Reset is handled by
+# a separate callback below (it fires on the Reset button's
+# n_clicks, not on relayoutData — going through Plotly.react's
+# autorange path proved unreliable for reverting an explicit range).
 @app.callback(
     Output("obshist-plot", "figure", allow_duplicate=True),
     Output("obshist-plot-status", "children", allow_duplicate=True),
@@ -11690,13 +11679,11 @@ def reorder_obshist_sites_on_range(relayout_data, plot_state,
             or not plot_state or not plot_state.get("key")):
         raise PreventUpdate
 
-    # Distinguish range-window events from other relayout chatter
-    # (V slider, shading toggle, etc., all of which target other axes
-    # or attributes).  Be permissive about the axis name — subplots
-    # with shared_xaxes can fire on xaxis OR xaxis2 depending on
-    # which axis the rangeslider is anchored to.
+    # Only react to xaxis range edits (slider drag / box-zoom).
+    # Ignore autorange events — those come from Reset Axes, which
+    # is handled by `reset_obshist_plot` below.  Also ignore
+    # y-axis, shading, legend, and other relayout chatter.
     xrange = None
-    autorange = False
     for key, val in relayout_data.items():
         if not key.startswith("xaxis"):
             continue
@@ -11709,43 +11696,22 @@ def reorder_obshist_sites_on_range(relayout_data, plot_state,
             if x1_key in relayout_data:
                 xrange = [val, relayout_data[x1_key]]
                 break
-        if key.endswith(".autorange") and val is True:
-            autorange = True
-            break
-    print(f"[obshist] relayoutData={relayout_data}  "
-          f"-> xrange={xrange}, autorange={autorange}", flush=True)
-    if xrange is None and not autorange:
+    if xrange is None:
         raise PreventUpdate
 
     permid, provid, name = plot_state["key"]
     try:
         df = _fetch_obshist_obs(permid=permid, provid=provid)
-    except Exception as e:
-        print(f"[obshist] fetch_obs failed: {e}", flush=True)
+    except Exception:
         raise PreventUpdate
     if df is None or df.empty:
-        print("[obshist] df is None/empty", flush=True)
         raise PreventUpdate
 
-    if autorange:
-        df_win = df
-    else:
-        start = pd.to_datetime(xrange[0])
-        end = pd.to_datetime(xrange[1])
-        df_win = df[(df["obstime"] >= start)
-                    & (df["obstime"] <= end)]
+    start = pd.to_datetime(xrange[0])
+    end = pd.to_datetime(xrange[1])
+    df_win = df[(df["obstime"] >= start) & (df["obstime"] <= end)]
     if df_win.empty:
-        print("[obshist] df_win is empty after filter", flush=True)
         raise PreventUpdate
-
-    # Surface the top sites before and after for diagnostic — if these
-    # match across two range events, the user won't see a visible
-    # change even though the rebuild ran.
-    top_all = list(df["stn"].value_counts().head(10).index)
-    top_win = list(df_win["stn"].value_counts().head(10).index)
-    print(f"[obshist] permid={permid} provid={provid}  "
-          f"df={len(df)} df_win={len(df_win)}  "
-          f"top10_full={top_all}  top10_win={top_win}", flush=True)
 
     label_bits = []
     if name:
@@ -11761,28 +11727,11 @@ def reorder_obshist_sites_on_range(relayout_data, plot_state,
     fig = build_history_figure(
         df_win, name=label, height=900, theme=theme_dict,
         with_controls=False)
-    if autorange:
-        # On Reset Axes, dcc.Graph's Plotly.react diff carries the
-        # previous figure's windowed `xaxis2.range` across into the
-        # new figure — neither autorange=True nor an explicit new
-        # range on its own dislodged it.  `uirevision` is Plotly's
-        # mechanism for controlling whether user-interaction state
-        # (axis ranges, legend, etc.) carries across a Plotly.react
-        # call: when uirevision changes, that state is discarded.
-        # Stamp a fresh value on Reset rebuilds; keep it stable on
-        # rangeslider-driven rebuilds so the user's window survives
-        # the re-rank.
-        import time as _t
-        fig.update_layout(uirevision=f"reset-{_t.time_ns()}")
-        full_start = df["obstime"].min()
-        full_end = df["obstime"].max()
-        fig.update_xaxes(autorange=False,
-                         range=[full_start, full_end],
-                         row=2, col=1)
-    else:
-        fig.update_layout(uirevision="windowed")
-    print(f"[obshist] returning rebuilt figure for {label}", flush=True)
-    if autorange or len(df_win) == len(df):
+    # Keep uirevision stable so the user's slider window survives
+    # the figure swap.  Reset's own callback stamps a fresh value
+    # to discard that state.
+    fig.update_layout(uirevision="windowed")
+    if len(df_win) == len(df):
         status = (f"Plotted {len(df_win):,} obs for {label} "
                   f"({df_win['stn'].nunique()} stations, "
                   f"{df_win['obstime'].min():%Y} – "
@@ -11791,6 +11740,53 @@ def reorder_obshist_sites_on_range(relayout_data, plot_state,
         status = (f"Windowed: {len(df_win):,} of {len(df):,} obs "
                   f"({df_win['stn'].nunique()} stations in window). "
                   "Reset axes to restore the full timeline.")
+    return fig, status
+
+
+# Reset Axes: dedicated rebuild path.  Going through Plotly.react's
+# autorange semantics couldn't reliably discard an explicit range
+# from the previous (windowed) figure, so Reset gets its own
+# server callback that fires on the button's n_clicks — the same
+# path used for initial plot loads.  uirevision is stamped fresh
+# to drop any preserved user-interaction state.
+@app.callback(
+    Output("obshist-plot", "figure", allow_duplicate=True),
+    Output("obshist-plot-status", "children", allow_duplicate=True),
+    Input("obshist-btn-reset", "n_clicks"),
+    State("obshist-plot-state", "data"),
+    State("theme-toggle", "value"),
+    State("tabs", "value"),
+    prevent_initial_call=True,
+)
+def reset_obshist_plot(n_clicks, plot_state, theme_name, active_tab):
+    if (not n_clicks or active_tab != "tab-obshist"
+            or not plot_state or not plot_state.get("key")):
+        raise PreventUpdate
+    permid, provid, name = plot_state["key"]
+    try:
+        df = _fetch_obshist_obs(permid=permid, provid=provid)
+    except Exception:
+        raise PreventUpdate
+    if df is None or df.empty:
+        raise PreventUpdate
+    label_bits = []
+    if name:
+        label_bits.append(name)
+    if provid:
+        label_bits.append(provid)
+    if permid:
+        label_bits.append(f"permid {permid}")
+    label = " — ".join(label_bits) if label_bits else "?"
+    from lib.observation_history import build_history_figure
+    theme_dict = theme(theme_name)
+    fig = build_history_figure(
+        df, name=label, height=900, theme=theme_dict,
+        with_controls=False)
+    import time as _t
+    fig.update_layout(uirevision=f"reset-{_t.time_ns()}")
+    status = (f"Plotted {len(df):,} obs for {label} "
+              f"({df['stn'].nunique()} stations, "
+              f"{df['obstime'].min():%Y} – {df['obstime'].max():%Y}).")
     return fig, status
 
 
@@ -12012,11 +12008,9 @@ def _resolve_obshist_designation(text):
 )
 def resolve_obshist_designation_input(_n_submit, value):
     """Designation entry submit → broaden filters to the object's class."""
-    print(f"[obshist] RESOLVER fired with value={value!r}", flush=True)
     if not value or not value.strip():
         return (no_update,) * 6 + (None, no_update)
     result = _resolve_obshist_designation(value.strip())
-    print(f"[obshist] RESOLVER resolved {value!r} -> {result}", flush=True)
     if result is None:
         return ((no_update,) * 6
                 + (None, f"Not found: '{value.strip()}'"))
@@ -12042,9 +12036,6 @@ def resolve_obshist_designation_input(_n_submit, value):
     prevent_initial_call=True,
 )
 def select_obshist_pending(data, target, plot_state, page_size):
-    print(f"[obshist] SELECT_PENDING fired data_len={len(data) if data else 0} "
-          f"target={target} plot_state_key={(plot_state or {}).get('key')}",
-          flush=True)
     """When `update_obshist` rewrites the table, snap to the displayed row.
 
     Source preference:
@@ -12140,38 +12131,13 @@ def sync_obshist_designation_to_plot(state):
 # attaches `.data` / `.layout` / `._fullLayout` only to the inner
 # `.js-plotly-plot` child it controls.
 
-app.clientside_callback(
-    """
-    function(n_clicks) {
-        if (!n_clicks) { return null; }
-        var c = document.getElementById('obshist-plot');
-        var gd = c ? c.querySelector('.js-plotly-plot') : null;
-        if (!gd || !gd._fullLayout) { return null; }
-        var has_v = gd._fullLayout.yaxis2 !== undefined;
-        // Reset both xaxis AND xaxis2 — make_subplots with
-        // shared_xaxes puts the rangeslider on xaxis2, so targeting
-        // only xaxis was leaving the windowed range in place.
-        if (has_v) {
-            Plotly.relayout(gd, {
-                'xaxis.autorange': true,
-                'xaxis2.autorange': true,
-                'yaxis.autorange': 'reversed',
-                'yaxis2.autorange': true
-            });
-        } else {
-            Plotly.relayout(gd, {
-                'xaxis.autorange': true,
-                'xaxis2.autorange': true,
-                'yaxis.autorange': true
-            });
-        }
-        return n_clicks;
-    }
-    """,
-    Output("obshist-sink-reset", "data"),
-    Input("obshist-btn-reset", "n_clicks"),
-    prevent_initial_call=True,
-)
+# Reset Axes: the actual figure rebuild lives server-side in
+# `reset_obshist_plot` (above).  No clientside Plotly.relayout — a
+# client-side autorange call on the windowed figure would flash an
+# autoranged-on-subset view before the server rebuild swapped in
+# the full-data figure.  Letting the server own the swap removes
+# that flash.  The V-slider widget reset is still handled
+# server-side by `reset_obshist_vslider_on_reset`.
 
 app.clientside_callback(
     """
