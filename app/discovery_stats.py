@@ -6228,6 +6228,8 @@ app.layout = html.Div(
                                              "value": "prediction_labels"},
                                             {"label": " Hide non-observable",
                                              "value": "hide_gray"},
+                                            {"label": " Hide historical",
+                                             "value": "hide_historical"},
                                         ],
                                         value=["grid", "ecliptic", "galactic",
                                                "prediction_labels"],
@@ -12576,6 +12578,7 @@ def update_finding_chart(plot_state, projection, overlays, vmag_value,
     show_predictions = "predictions" in overlays
     show_prediction_labels = "prediction_labels" in overlays
     hide_gray_predictions = "hide_gray" in overlays
+    hide_historical = "hide_historical" in overlays
     # Forecast window: years → (t_stop offset, Horizons step).  Step
     # widens with the window so responses stay manageable for the
     # multi-year cases.
@@ -12701,7 +12704,8 @@ def update_finding_chart(plot_state, projection, overlays, vmag_value,
     uir = (f"{permid}|{provid}|{projection or 'hammer'}|"
            f"{center_ra_val:.1f}")
     fig = build_finding_figure(
-        df, projection=projection or "hammer",
+        df if not hide_historical else df.iloc[0:0],
+        projection=projection or "hammer",
         center_ra_deg=center_ra_val,
         show_stars=show_stars,
         show_constellations=show_constellations,
