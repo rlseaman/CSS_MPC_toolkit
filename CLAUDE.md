@@ -41,7 +41,7 @@ University of Arizona.
 
 ```
 app/                          # Interactive Dash web application
-  discovery_stats.py          #   NEO discovery explorer (12 tabs, ~12,800 lines)
+  discovery_stats.py          #   NEO discovery explorer (13 tabs, ~15,100 lines)
   assets/                     #   CSS, logo, static files
 lib/                          # Python library layer
   db.py                       #   DB connections, timed queries, QueryLog
@@ -312,7 +312,7 @@ Stations are mapped to project groups via `STATION_TO_PROJECT`:
 - Per-tab "Download CSV" buttons export currently filtered data
 
 ### Architecture
-- **Three SQL queries** cached to Parquet (1-day auto-invalidation,
+- **Seven SQL queries** cached to Parquet (1-day auto-invalidation,
   falls back to legacy CSV if Parquet not yet generated). Scan sources
   and timings differ between hosts; numbers below are DB-only wall
   clocks measured 2026-04-24:
@@ -344,7 +344,18 @@ Stations are mapped to project groups via `STATION_TO_PROJECT`:
     NVMe: **~0.7 s**. Sibyl: **~3 s**. (CLAUDE.md prior to 2026-04-24
     quoted "~13 min" for Sibyl — that was either a cold-cache reading
     or wall-clock for the full Python cache-rebuild including the
-    SBDB MOID API call; the DB query itself is seconds.)
+    SBDB MOID API call; the DB query itself is seconds.)  At load
+    time we LEFT JOIN the boxscore in-memory with the next entry
+    (`obs_summary_all_cache`) to surface authoritative obs aggregates.
+  - `OBS_SUMMARY_ALL_SQL` — full-catalog sibling to
+    `css_neo_consensus.obs_summary`.  `SELECT primary_desig,
+    first_obs, last_obs, arc_days, nobs, disc_by FROM
+    public.obs_summary_all` (~1.6M rows, ~38 MB parquet, hash
+    `065fdeb7`).  The matview itself is built by
+    `sql/obs_summary_all.sql` and refreshed nightly by stage 3b
+    of `refresh_matview_gizmo.sh` (~2:30 on Gizmo NVMe via parallel
+    seq scan + hash aggregate; Sibyl HDD couldn't finish in 10 min
+    — see 2026-05-16 benchmark).
 - **NEA.txt H magnitude override** (`lib/nea_catalog.py`): downloads
   the MPC's curated NEA catalog, resolves designations via
   `numbered_identifications` and `mpc_designation`, and overrides
@@ -369,10 +380,14 @@ Public surface at `hotwireduniverse.org` is served from a Mac mini
 (Gizmo) replica via a Cloudflare named tunnel. Dash itself runs
 under launchd (`com.rlseaman.dashboard`, port 8050) behind a
 waitress WSGI server. A daily launchd agent
-(`org.seaman.gizmo-refresh`, 06:00 MST) runs five stages:
+(`org.seaman.gizmo-refresh`, 06:00 MST) runs six stages:
   1. `REFRESH MATERIALIZED VIEW CONCURRENTLY obs_sbn_neo`
   2. NEO consensus refresh (six sources, best-effort)
   3. `REFRESH MATERIALIZED VIEW CONCURRENTLY obs_summary`
+     (NEO-scoped, drives the NEO Consensus tab).
+  3b. `REFRESH MATERIALIZED VIEW CONCURRENTLY obs_summary_all`
+     (full mpc_orbits catalog, drives the Observation history tab;
+     added 2026-05-16).
   4. `python app/discovery_stats.py --refresh-only` to rebuild
      parquet caches against today's matview state
   4a. Sweep orphan parquet/.meta files from prior SQL-hash bumps
@@ -381,7 +396,7 @@ waitress WSGI server. A daily launchd agent
   5. `launchctl kickstart -k` on the Dash plist so the running
      process picks up the fresh caches (~5 s of 502s while the
      port rebinds; acceptable for a low-traffic outreach window).
-Total elapsed ~14–16 min in normal operation. See `docs/disaster_recovery.md`
+Total elapsed ~16–19 min in normal operation. See `docs/disaster_recovery.md`
 for what to do if a stage fails.
 
 ### Dev surface

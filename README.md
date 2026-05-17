@@ -18,10 +18,11 @@ libraries, and derived data products useful to the NEO community.
 **App:** [`app/discovery_stats.py`](app/discovery_stats.py)
 
 Interactive Dash web application for exploring NEO discovery statistics,
-survey reach, follow-up activity, and the cross-source NEO consensus
-catalog. Twelve tabbed pages; the Station Report tab is gated behind
-the `--dev-tabs` flag and only appears on the `dev.hotwireduniverse.org`
-staging surface (currently fed from the `station-report` branch).
+survey reach, follow-up activity, per-object observation history, and
+the cross-source NEO consensus catalog. Twelve tabs on prod, thirteen
+on dev. The Station Report tab is gated behind the `--dev-tabs` flag
+and only appears on the `dev.hotwireduniverse.org` staging surface
+(currently fed from the `station-report` branch).
 
 | Tab | Content |
 |-----|---------|
@@ -33,6 +34,7 @@ staging surface (currently fed from the `station-report` branch).
 | **Follow-up Comparison** | Per-site (not per-survey) follow-up activity. World map of MPC obscodes colored by follow-up volume with selectable projection / colormap / scale / graticule; viewport-aware stats card; bar chart with multi-select and matched colors. Time scope selector (Discovery apparition / All time / Recovery only — the latter two backed by a separate lifetime cache), follow-up window (1 day / 1 week / 1 lunation / 100 days / 200 days), post-discovery vs include-precoveries radio, Metric selector (NEOs / Tracklets / Observations), and V-mag depth filter (Median + 1.4826·MAD / Mean + 1σ / 95th percentile, with a double-ended range slider). |
 | **Follow-up Timing** | Response curves showing how quickly other surveys observe newly-discovered NEOs; per-survey response time distributions; follow-up network heatmap; trend by year |
 | **Discovery Circumstances** | Sky map (RA/Dec) of discovery positions with ecliptic and galactic plane overlays; apparent V magnitude histogram; rate of motion vs. H scatter; position angle rose diagram |
+| **Observation history** | Class-filtered catalog of mpc_orbits objects paired with a per-object plot of band-corrected V vs. obstime over the full obs_sbn record (site-code lifeline below, solar-elongation > 90° shading). Designation entry resolves permid / provid / iau_name / packed forms and pins the row to the top of the table for as long as that object is displayed. Details strip above the plot with Class / H / q / Q / e / i / a / U / Nopp / n_obs / arc / disc-by chips plus JPL SBDB · MPC Explorer · NEOfixer (NEOs only) link buttons. |
 | **Asteroid Classes** | Cross-tabulation of the full `mpc_orbits` catalog (~1.5M objects, all classes) by orbit type and selected attributes. Class grouping (Fine / Standard / Coarse), NEO/PHA/retrograde filters, H histogram, a–e scatter. |
 | **Tools** | Standalone calculators and converters for planetary-defense work — pack/unpack/validate designation, H↔diameter, Tisserand, orbit classification, parse obs80, date conversions, airmass↔altitude. |
 | **Station Report** *(dev)* | Per-site deep-dive: site code + optional date range yields summary line, year × class breakdown for NEOs and non-NEOs, MPEC-publications stub (Phase 2, ADS-backed). |
@@ -41,14 +43,15 @@ staging surface (currently fed from the `station-report` branch).
 Each tab has a **Download CSV** button that exports the currently filtered
 data. Shared banner controls: NEO source filter (per-consensus-source
 membership), survey grouping, plot height, light/dark theme, service
-health indicators, reset buttons. Data is sourced from seven caches —
+health indicators, reset buttons. Data is sourced from eight caches —
 discovery tracklets (`LOAD_SQL`), apparition observations
 (`APPARITION_SQL`), object catalog (`BOXSCORE_SQL`), NEO consensus
 membership, MPC obscodes, lifetime per-(NEO × station) follow-up
-totals (`LIFETIME_FOLLOWUP_SQL`), and per-station V-mag depth stats
-(`SITE_MAG_STATS_SQL`) — all stored as Parquet with 1-day
-auto-invalidation; falls back to legacy CSV when Parquet isn't yet
-generated.
+totals (`LIFETIME_FOLLOWUP_SQL`), per-station V-mag depth stats
+(`SITE_MAG_STATS_SQL`), and full-catalog obs aggregates
+(`OBS_SUMMARY_ALL_SQL`, joined into the boxscore at load time) —
+all stored as Parquet with 1-day auto-invalidation; falls back to
+legacy CSV when Parquet isn't yet generated.
 
 **Survey groupings:** Catalina Survey (703, G96, E12), Catalina Follow-up
 (I52, V06, G84), Pan-STARRS (F51, F52), ATLAS (T05, T07, T08, T03, M22,
@@ -184,7 +187,7 @@ CSS_MPC_toolkit/
 ├── README.md                           # This file
 ├── CLAUDE.md                           # Claude Code project guide
 ├── app/                                # Interactive Dash web application
-│   ├── discovery_stats.py              #   NEO discovery explorer (12 tabs)
+│   ├── discovery_stats.py              #   NEO discovery explorer (13 tabs)
 │   └── assets/                         #   CSS, logo, static files
 ├── lib/                                # Python library layer
 │   ├── db.py                           #   DB connections, timed queries
@@ -193,10 +196,12 @@ CSS_MPC_toolkit/
 │   ├── mpc_convert.py                  #   MPC format conversion functions
 │   ├── mpec_parser.py                  #   MPEC fetch, parse, classify
 │   ├── api_clients.py                  #   JPL/NEOfixer/NEOCC API wrappers
+│   ├── observation_history.py          #   obs_sbn → per-object V/site plot
 │   ├── ades_export.py                  #   ADES XML/PSV export
 │   └── ades_validate.py                #   XSD validation
 ├── sql/
 │   ├── discovery_tracklets.sql         #   NEO discovery tracklet statistics
+│   ├── obs_summary_all.sql             #   Full-catalog obs aggregates matview
 │   ├── css_utilities_functions.sql     #   PostgreSQL conversion functions
 │   ├── ades_export.sql                 #   ADES-ready columns from NEOCP
 │   ├── viz/                            #   Reference queries for visualization
