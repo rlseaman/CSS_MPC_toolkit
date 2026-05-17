@@ -233,6 +233,49 @@ def spline_overlay(df: pd.DataFrame, kind: str,
 # draw a long line across the meridian).
 # ---------------------------------------------------------------------------
 
+def graticule_segments(kind: str, center_ra_deg: float = 180.0,
+                       ra_step_deg: float = 30.0,
+                       dec_step_deg: float = 15.0,
+                       sample_deg: float = 2.0,
+                       ) -> tuple[np.ndarray, np.ndarray]:
+    """Build NaN-separated (x, y) for an RA/Dec coordinate graticule.
+
+    Dec parallels are drawn at every `dec_step_deg`, RA meridians at
+    every `ra_step_deg`; each line is sampled at `sample_deg` and broken
+    where the centered longitude jumps > 180° (the projection meridian).
+    """
+    xs: list[float] = []
+    ys: list[float] = []
+
+    def _emit(ra_arr, dec_arr):
+        # Project the polyline and insert NaN where centered-lon wraps.
+        x, y = project(ra_arr, dec_arr, kind, center_ra_deg=center_ra_deg)
+        lon = _center_lon(ra_arr, center_ra_deg)
+        breaks = np.where(np.abs(np.diff(lon)) > 180.0)[0]
+        last = 0
+        for b in breaks:
+            xs.extend(x[last:b + 1].tolist() + [np.nan])
+            ys.extend(y[last:b + 1].tolist() + [np.nan])
+            last = b + 1
+        xs.extend(x[last:].tolist() + [np.nan])
+        ys.extend(y[last:].tolist() + [np.nan])
+
+    # Dec parallels (skip the poles, which collapse to a point).
+    ra_arr = np.arange(0.0, 360.0 + sample_deg, sample_deg)
+    for dec in np.arange(-90.0 + dec_step_deg, 90.0, dec_step_deg):
+        _emit(ra_arr, np.full_like(ra_arr, dec))
+
+    # RA meridians.
+    dec_arr = np.arange(-90.0, 90.0 + sample_deg, sample_deg)
+    for ra in np.arange(0.0, 360.0, ra_step_deg):
+        _emit(np.full_like(dec_arr, ra), dec_arr)
+
+    if xs:
+        xs = xs[:-1]
+        ys = ys[:-1]
+    return np.array(xs), np.array(ys)
+
+
 def _project_constellation_segments(kind: str, center_ra_deg: float
                                     ) -> tuple[np.ndarray, np.ndarray]:
     """Build NaN-separated (x, y) for all IAU constellation boundary segs."""
@@ -277,9 +320,8 @@ def build_finding_figure(
     gap_days: float = 60.0,
     show_stars: bool = True,
     show_constellations: bool = True,
-    show_spline: bool = False,
+    show_grid: bool = False,
     star_mag_limit: float = 6.0,
-    height: int = 600,
     theme: dict | None = None,
     label: str = "",
 ) -> go.Figure:
@@ -287,24 +329,36 @@ def build_finding_figure(
 
     Coordinate convention follows NEOlyzer / matplotlib geo projections:
     longitude increases right (east-right).  No axis flip is applied.
+    Observed positions are drawn as discrete markers — no connecting
+    lines.  The cartesian XY axis grid is suppressed (it doesn't
+    correspond to anything on the sky); enable `show_grid` to draw a
+    proper RA/Dec graticule instead.
     """
     if projection not in PROJECTIONS:
         raise ValueError(f"projection must be one of {PROJECTIONS}")
 
     fg = (theme or {}).get("fg", "#e0e0e0")
     bg = (theme or {}).get("plot", "#1e1e1e")
-    grid = (theme or {}).get("grid", "rgba(128,128,128,0.25)")
 
     fig = go.Figure()
 
-    # ── Constellation lines (drawn first, behind everything) ─────────
+    # ── Coordinate graticule (drawn first, behind everything) ─────────
+    if show_grid:
+        gx, gy = graticule_segments(projection, center_ra_deg)
+        fig.add_trace(go.Scatter(
+            x=gx, y=gy, mode="lines",
+            line=dict(color="rgba(140,140,140,0.30)",
+                      width=0.6, dash="dot"),
+            hoverinfo="skip", showlegend=False,
+        ))
+
+    # ── Constellation lines ───────────────────────────────────────────
     if show_constellations:
         cx, cy = _project_constellation_segments(projection, center_ra_deg)
         fig.add_trace(go.Scatter(
             x=cx, y=cy, mode="lines",
             line=dict(color="rgba(120,140,200,0.35)", width=0.7),
-            hoverinfo="skip", name="Constellations",
-            showlegend=True,
+            hoverinfo="skip", showlegend=False,
         ))
 
     # ── Bright stars (sized by magnitude) ──────────────────────────────
@@ -314,7 +368,6 @@ def build_finding_figure(
         sx, sy = project(stars["ra"].to_numpy(),
                          stars["dec"].to_numpy(),
                          projection, center_ra_deg=center_ra_deg)
-        # Inverse-magnitude marker size: brighter (smaller V) → bigger
         size = np.clip(6.0 - 0.7 * stars["vmag"].to_numpy(), 0.6, 6.0)
         fig.add_trace(go.Scatter(
             x=sx, y=sy, mode="markers",
@@ -326,43 +379,22 @@ def build_finding_figure(
                 stars["hip"].to_numpy(),
                 stars["vmag"].to_numpy(),
             ]),
-            name=f"Stars (V≤{star_mag_limit:g})",
-            showlegend=True,
+            showlegend=False,
         ))
 
-    # ── Optional smooth spline overlay (off by default) ────────────────
-    if show_spline:
-        sx, sy = spline_overlay(df, projection,
-                                center_ra_deg=center_ra_deg,
-                                gap_days=gap_days)
-        if len(sx):
-            fig.add_trace(go.Scatter(
-                x=sx, y=sy, mode="lines",
-                line=dict(color="rgba(255,180,80,0.55)",
-                          width=1.0, dash="dot"),
-                hoverinfo="skip", name="Spline fit",
-                showlegend=True,
-            ))
-
-    # ── Observation trail (the actual finding-chart data) ──────────────
+    # ── Observation markers (no connecting lines) ──────────────────────
     if not df.empty:
-        tx, ty, tt = trail_with_breaks(df, projection,
-                                       center_ra_deg=center_ra_deg,
-                                       gap_days=gap_days)
-        # Color points by decimal year via viridis ramp.  NaN at break
-        # positions makes that segment invisible in the line.
+        d = df.sort_values("obstime").reset_index(drop=True)
+        mx, my = project(d["ra"].to_numpy(), d["dec"].to_numpy(),
+                         projection, center_ra_deg=center_ra_deg)
         years = np.array([
             (pd.Timestamp(v).year
              + (pd.Timestamp(v).dayofyear - 1)
              / (366.0 if pd.Timestamp(v).is_leap_year else 365.0))
-            if v is not None and not (isinstance(v, np.datetime64)
-                                      and np.isnat(v))
-            else np.nan
-            for v in tt
+            for v in d["obstime"]
         ], dtype=float)
         fig.add_trace(go.Scatter(
-            x=tx, y=ty, mode="lines+markers",
-            line=dict(color="rgba(255,255,255,0.45)", width=1.2),
+            x=mx, y=my, mode="markers",
             marker=dict(
                 color=years, colorscale="Viridis",
                 size=5, line=dict(width=0),
@@ -371,11 +403,10 @@ def build_finding_figure(
                     tickformat="d",
                 ),
             ),
-            customdata=tt,
+            customdata=d["obstime"].to_numpy(),
             hovertemplate=("%{customdata|%Y-%m-%d %H:%M}<br>"
                            "x %{x:.3f} · y %{y:.3f}<extra></extra>"),
-            name=label or "Observed trail",
-            showlegend=True,
+            showlegend=False,
         ))
 
     # ── Layout ────────────────────────────────────────────────────────
@@ -383,23 +414,25 @@ def build_finding_figure(
             f"  ({projection.title()})"
     fig.update_layout(
         title=dict(text=title, font=dict(color=fg, size=14), x=0.02),
-        height=height,
-        margin=dict(l=40, r=40, t=50, b=40),
+        autosize=True,
+        margin=dict(l=20, r=20, t=40, b=20),
         paper_bgcolor=bg, plot_bgcolor=bg,
         font=dict(color=fg),
-        legend=dict(font=dict(color=fg),
-                    bgcolor="rgba(0,0,0,0)"),
+        showlegend=False,
         dragmode="pan",
     )
-    # Equal aspect ratio keeps the projection's shape true.
+    # Equal aspect in data space keeps the projection true.  The XY
+    # cartesian grid is meaningless for a sky projection, so it's
+    # suppressed; use `show_grid=True` for a real RA/Dec graticule.
     fig.update_xaxes(
         scaleanchor="y", scaleratio=1,
-        showgrid=True, gridcolor=grid, zeroline=False,
-        title=dict(text="x (projected, east → right)",
-                   font=dict(color=fg)),
+        showgrid=False, zeroline=False,
+        showticklabels=False,
+        title=None,
     )
     fig.update_yaxes(
-        showgrid=True, gridcolor=grid, zeroline=False,
-        title=dict(text="y (projected)", font=dict(color=fg)),
+        showgrid=False, zeroline=False,
+        showticklabels=False,
+        title=None,
     )
     return fig

@@ -5971,15 +5971,37 @@ app.layout = html.Div(
                             # row-selection follow-up that fires once
                             # `update_obshist` refreshes the table.
                             dcc.Store(id="obshist-pending-target"),
-                            # Status banner — row count, truncation
-                            # warning, etc.  Set by the callback.
+                            # Status banner + Collapse-to-selected toggle.
+                            # When the Collapse switch is on, the table
+                            # contracts to just the displayed object's
+                            # row (header still shown) so the finding
+                            # chart and the table header sit close
+                            # together on screen.
                             html.Div(
-                                id="obshist-status",
-                                className="subtext",
-                                style={"fontSize": "12px",
+                                style={"display": "flex",
+                                       "alignItems": "center",
+                                       "gap": "16px",
                                        "marginTop": "16px",
-                                       "marginBottom": "8px",
-                                       "minHeight": "16px"}),
+                                       "marginBottom": "8px"},
+                                children=[
+                                    html.Div(
+                                        id="obshist-status",
+                                        className="subtext",
+                                        style={"fontSize": "12px",
+                                               "minHeight": "16px",
+                                               "flex": "1"}),
+                                    dcc.Checklist(
+                                        id="obshist-collapse",
+                                        options=[{
+                                            "label": " Collapse to "
+                                                     "selected row",
+                                            "value": "collapse"}],
+                                        value=[],
+                                        inline=True,
+                                        labelStyle={"fontSize": "12px"},
+                                    ),
+                                ],
+                            ),
                             # Result table — declared once in the layout
                             # so callbacks only mutate `data`, never
                             # replace the component (avoids React-state
@@ -6086,8 +6108,8 @@ app.layout = html.Div(
                                              "value": "stars"},
                                             {"label": " Constellations",
                                              "value": "constellations"},
-                                            {"label": " Smoothed trail",
-                                             "value": "spline"},
+                                            {"label": " Grid",
+                                             "value": "grid"},
                                         ],
                                         value=["stars", "constellations"],
                                         inline=True,
@@ -6099,8 +6121,14 @@ app.layout = html.Div(
                             dcc.Graph(
                                 id="fc-plot",
                                 figure=go.Figure(),
-                                config={**GRAPH_CONFIG, "scrollZoom": True},
-                                style={"height": "600px"},
+                                config={**GRAPH_CONFIG, "scrollZoom": True,
+                                        "responsive": True},
+                                style={"width": "100%",
+                                       "aspectRatio": "2 / 1",
+                                       "border":
+                                           "1px solid var(--hr-color, #ccc)",
+                                       "borderRadius": "3px",
+                                       "boxSizing": "border-box"},
                             ),
                             html.Div(
                                 id="fc-status",
@@ -11417,13 +11445,15 @@ def download_boxscore(n_clicks, grouping, filters, h_range):
     # default filters used to leave the resolved row unselected
     # because none of the other inputs changed value.)
     Input("obshist-pending-target", "data"),
+    Input("obshist-collapse", "value"),
     # plot-state stays State: filter-driven refilters honour the
     # pin, but the plot callback rewriting plot-state mustn't
     # itself refire this callback.
     State("obshist-plot-state", "data"),
 )
 def update_obshist(classes, filters, h_range, arc_range, nopp_range,
-                   nobs_range, active_tab, pending_target, plot_state):
+                   nobs_range, active_tab, pending_target, collapse,
+                   plot_state):
     if active_tab != "tab-obshist":
         raise PreventUpdate
 
@@ -11442,6 +11472,64 @@ def update_obshist(classes, filters, h_range, arc_range, nopp_range,
     bdf = load_boxscore_data()
     if bdf is None or len(bdf) == 0:
         return [], "No catalog data loaded."
+
+    # Collapse-to-selected: bypass the filter pipeline entirely and
+    # emit a single-row table containing only the displayed object.
+    # The user gets the table header + one row, sitting near the
+    # finding chart.  Falls back to the normal filter view when no
+    # object is pinned (e.g. before initial load).
+    collapse_on = bool(collapse) and "collapse" in collapse
+    sel_permid = sel_provid = ""
+    if collapse_on:
+        if pending_target:
+            sel_permid = (pending_target.get("permid") or "").strip()
+            sel_provid = (pending_target.get("provid") or "").strip()
+        if not sel_permid and not sel_provid:
+            if plot_state and plot_state.get("key"):
+                k = plot_state["key"]
+                if isinstance(k, (list, tuple)) and len(k) >= 2:
+                    sel_permid = str(k[0] or "").strip()
+                    sel_provid = str(k[1] or "").strip()
+        if sel_permid or sel_provid:
+            mask = pd.Series(False, index=bdf.index)
+            if sel_permid:
+                mask |= bdf["permid"].astype(str).str.strip() == sel_permid
+            if sel_provid:
+                mask |= bdf["provid"].astype(str).str.strip() == sel_provid
+            sel = bdf[mask].head(1).copy()
+            if len(sel):
+                bound = sel["e"].lt(1.0).fillna(False)
+                sel.loc[bound, "Q"] = (
+                    sel.loc[bound, "a"] * (1.0 + sel.loc[bound, "e"]))
+                cols = [c["id"] for c in _OBS_HISTORY_TABLE_COLUMNS]
+                cols_present = [c for c in cols if c in sel.columns]
+                disp = sel[cols_present].copy()
+                for c in cols:
+                    if c not in disp.columns:
+                        disp[c] = ""
+                fmt_map = {"h": "%.2f", "q": "%.4f", "Q": "%.4f",
+                           "e": "%.4f", "i": "%.3f", "a": "%.4f"}
+                for col, fmt in fmt_map.items():
+                    if col in disp.columns:
+                        disp[col] = disp[col].apply(
+                            lambda v, f=fmt:
+                                f % v if pd.notna(v) else "")
+                for col in ("arc_days_obs", "nobs_obs",
+                            "u_param", "nopp"):
+                    if col in disp.columns:
+                        disp[col] = disp[col].apply(
+                            lambda v: int(v) if pd.notna(v) else "")
+                for col in ("first_obs", "last_obs"):
+                    if col in disp.columns:
+                        disp[col] = disp[col].apply(
+                            lambda v: str(v) if pd.notna(v) else "")
+                for col in ("permid", "iau_name", "ext_name",
+                            "disc_by"):
+                    if col in disp.columns:
+                        disp[col] = disp[col].fillna("").astype(object)
+                return (disp.to_dict("records"),
+                        "Collapsed view — showing only the displayed "
+                        "object.")
 
     # Locate the pinned row (whatever the user is currently looking
     # at) in the *unfiltered* catalog.  Used after truncation to
@@ -12221,7 +12309,7 @@ def update_finding_chart(plot_state, projection, overlays,
     overlays = overlays or []
     show_stars = "stars" in overlays
     show_constellations = "constellations" in overlays
-    show_spline = "spline" in overlays
+    show_grid = "grid" in overlays
 
     # Empty figure when no object loaded yet (initial page render).
     if not plot_state or not plot_state.get("key"):
@@ -12230,7 +12318,7 @@ def update_finding_chart(plot_state, projection, overlays,
             projection=projection or "hammer",
             show_stars=show_stars,
             show_constellations=show_constellations,
-            show_spline=False, theme=theme_dict),
+            show_grid=show_grid, theme=theme_dict),
             "Select an object to populate the finding chart.")
 
     permid, provid, name = plot_state["key"]
@@ -12248,14 +12336,14 @@ def update_finding_chart(plot_state, projection, overlays,
         df, projection=projection or "hammer",
         show_stars=show_stars,
         show_constellations=show_constellations,
-        show_spline=show_spline,
+        show_grid=show_grid,
         theme=theme_dict, label=label)
     n = len(df)
     ra_span = float(df["ra"].max() - df["ra"].min())
     dec_span = float(df["dec"].max() - df["dec"].min())
     status = (f"{n:,} observations · RA span {ra_span:.2f}° · "
               f"Dec span {dec_span:.2f}° · "
-              "trail breaks at gaps > 60 days · pan / scroll-zoom enabled.")
+              "pan / scroll-zoom enabled.")
     return fig, status
 
 
