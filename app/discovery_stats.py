@@ -11347,6 +11347,18 @@ def update_obshist(classes, filters, h_range, arc_range, nopp_range,
     if active_tab != "tab-obshist":
         raise PreventUpdate
 
+    # When select_obshist_pending finishes locating a resolved row it
+    # clears pending_target back to None.  That clear shows up here
+    # as a pending_target Input change with value=None — but the
+    # filter inputs haven't actually changed, and a second refilter
+    # would race against the in-flight plot callback (plot-state
+    # still points at the previously-displayed object, so the
+    # plot-state-fallback pin would yank the table away from the
+    # newly-resolved row before the plot has loaded it).  Skip.
+    triggered = ctx.triggered_id
+    if triggered == "obshist-pending-target" and not pending_target:
+        raise PreventUpdate
+
     bdf = load_boxscore_data()
     if bdf is None or len(bdf) == 0:
         return [], "No catalog data loaded."
