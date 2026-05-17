@@ -36,15 +36,18 @@ _CACHE_DIR = os.path.normpath(os.path.join(
 os.makedirs(_CACHE_DIR, exist_ok=True)
 _CACHE_TTL_SEC = 7 * 24 * 3600
 
-# One ephemeris row, QUANTITIES='1,9' format:
-#    " 2026-May-17 00:00     06 17 10.46 +21 18 00.8   21.684   3.551"
+# One ephemeris row, QUANTITIES='1,9,23' format:
+#    " 2026-May-17 00:00     06 17 10.46 +21 18 00.8   21.684   3.551   38.2942 /T"
 #  year-monthAbbr-day  hr:mn   rah ram ras   ±decd decm decs   APmag  S-brt
+#    S-O-T (solar elongation, deg) /r-flag (T=trailing sun, L=leading)
 _DATE_LINE = re.compile(
     r"^\s*(\d{4})-([A-Za-z]+)-(\d{2})\s+(\d{2}):(\d{2})\s+"
     r"(\d{1,2})\s+(\d{2})\s+([\d.]+)\s+"
     r"([+-]\d{1,2})\s+(\d{2})\s+([\d.]+)"
     r"(?:\s+(\S+))?"   # APmag (may be 'n.a.')
     r"(?:\s+(\S+))?"   # S-brt (may be 'n.a.')
+    r"(?:\s+(\S+))?"   # S-O-T (solar elongation, may be 'n.a.')
+    r"(?:\s+/[TL])?"   # trailing/leading flag (discarded)
 )
 _MONTHS = {m: i + 1 for i, m in enumerate(
     ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -65,16 +68,18 @@ def _cache_key(*parts) -> str:
 
 
 def _parse_response(text: str) -> pd.DataFrame:
+    cols = ["obstime", "ra", "dec", "v_pred", "solar_elong"]
     soe = text.find("$$SOE")
     eoe = text.find("$$EOE")
     if soe < 0 or eoe < 0:
-        return pd.DataFrame(columns=["obstime", "ra", "dec", "v_pred"])
+        return pd.DataFrame(columns=cols)
     rows = []
     for line in text[soe + 5:eoe].splitlines():
         m = _DATE_LINE.match(line)
         if not m:
             continue
-        y, mon, d, hr, mn, rh, rm, rs, dd, dm, ds, vmag, _ = m.groups()
+        (y, mon, d, hr, mn, rh, rm, rs, dd, dm, ds,
+         vmag, _sbrt, sot) = m.groups()
         if mon not in _MONTHS:
             continue
         obstime = pd.Timestamp(
@@ -85,8 +90,10 @@ def _parse_response(text: str) -> pd.DataFrame:
         dec = sign * (abs(int(dd)) + int(dm) / 60.0 + float(ds) / 3600.0)
         v = (float(vmag) if vmag and vmag not in ("n.a.", "N.A.")
              else np.nan)
-        rows.append((obstime, ra, dec, v))
-    return pd.DataFrame(rows, columns=["obstime", "ra", "dec", "v_pred"])
+        e = (float(sot) if sot and sot not in ("n.a.", "N.A.")
+             else np.nan)
+        rows.append((obstime, ra, dec, v, e))
+    return pd.DataFrame(rows, columns=cols)
 
 
 def fetch_predictions(
@@ -110,7 +117,10 @@ def fetch_predictions(
     cmd = _object_command(permid, provid)
     t_start_s = pd.Timestamp(t_start).strftime("%Y-%m-%d")
     t_stop_s = pd.Timestamp(t_stop).strftime("%Y-%m-%d")
-    h = _cache_key(cmd, t_start_s, t_stop_s, step, observer)
+    # QUANTITIES is part of the cache key so a future schema change
+    # (adding/dropping columns) invalidates stale parquet files
+    # automatically.
+    h = _cache_key(cmd, t_start_s, t_stop_s, step, observer, "1,9,23")
     cache_path = os.path.join(_CACHE_DIR, f"{h}.parquet")
     if os.path.exists(cache_path):
         age = time.time() - os.path.getmtime(cache_path)
@@ -127,7 +137,7 @@ def fetch_predictions(
         "START_TIME": f"'{t_start_s}'",
         "STOP_TIME": f"'{t_stop_s}'",
         "STEP_SIZE": f"'{step}'",
-        "QUANTITIES": "'1,9'",
+        "QUANTITIES": "'1,9,23'",
     }
     r = requests.get(_HORIZONS_URL, params=params, timeout=timeout)
     r.raise_for_status()
