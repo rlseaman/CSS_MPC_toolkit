@@ -11764,15 +11764,23 @@ def reorder_obshist_sites_on_range(relayout_data, plot_state,
     if autorange:
         # On Reset Axes, dcc.Graph's Plotly.react diff carries the
         # previous figure's windowed `xaxis2.range` across into the
-        # new figure — autorange=True alone wasn't enough to
-        # dislodge it.  Pin an explicit range on xaxis2 (the
-        # rangeslider's axis; xaxis follows via matches='x2') so
-        # Plotly.react has to apply the new range.
+        # new figure — neither autorange=True nor an explicit new
+        # range on its own dislodged it.  `uirevision` is Plotly's
+        # mechanism for controlling whether user-interaction state
+        # (axis ranges, legend, etc.) carries across a Plotly.react
+        # call: when uirevision changes, that state is discarded.
+        # Stamp a fresh value on Reset rebuilds; keep it stable on
+        # rangeslider-driven rebuilds so the user's window survives
+        # the re-rank.
+        import time as _t
+        fig.update_layout(uirevision=f"reset-{_t.time_ns()}")
         full_start = df["obstime"].min()
         full_end = df["obstime"].max()
         fig.update_xaxes(autorange=False,
                          range=[full_start, full_end],
                          row=2, col=1)
+    else:
+        fig.update_layout(uirevision="windowed")
     print(f"[obshist] returning rebuilt figure for {label}", flush=True)
     if autorange or len(df_win) == len(df):
         status = (f"Plotted {len(df_win):,} obs for {label} "
