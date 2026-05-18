@@ -12088,6 +12088,7 @@ def update_obshist_plot(selected_rows, theme_name, active_tab,
 
     from lib.observation_history import fetch_obs, build_history_figure
 
+    triggered = ctx.triggered_id
     state = plot_state or {"key": None}
 
     permid = provid = name = None
