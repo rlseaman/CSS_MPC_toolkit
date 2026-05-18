@@ -7837,10 +7837,10 @@ def _get_defaults():
         "tool-cln-date": "",
         "tool-cln-offset": None,
         "tool-cln-tz": 7,
-        # Tab 10 — Station Report
-        "station-site": "V00",
-        "station-date-start": "",
-        "station-date-end": "",
+        # Tab 10 — Station Report (dev only)
+        **({"station-site": "V00",
+            "station-date-start": "",
+            "station-date-end": ""} if _DEV_TABS else {}),
         # Tab 11 — Observation history
         "obshist-designation": "",
         # Apophis is the default object, so default the class filter
@@ -7873,8 +7873,8 @@ _TAB_KEYS = {
     "tab-mpec": set(),       # no resettable controls
     "tab-consensus": set(),  # has its own consensus-reset button
     "tab-about": set(),      # static content
-    "tab-station": {"station-site", "station-date-start",
-                    "station-date-end"},
+    "tab-station": ({"station-site", "station-date-start",
+                     "station-date-end"} if _DEV_TABS else set()),
     "tab-discovery": {"year-range", "size-filter", "cumulative-toggle"},
     "tab-neomod": {"h-year-range", "h-range", "h-yscale", "h-mode",
                     "size-mapping", "comp-labels-toggle"},
@@ -7923,7 +7923,11 @@ _RESET_ORDER = [
     "tool-obs80-input", "tool-date-input",
     "tool-airmass-x", "tool-airmass-alt",
     "tool-cln-date", "tool-cln-offset", "tool-cln-tz",
-    "station-site", "station-date-start", "station-date-end",
+    # Station Report controls are dev-only; on prod they aren't in
+    # the layout, and listing them as Outputs on a non-allow_duplicate
+    # callback silently breaks the whole callback on the client.
+    *(["station-site", "station-date-start", "station-date-end"]
+      if _DEV_TABS else []),
     "obshist-designation", "obshist-classes", "obshist-filters",
     "obshist-h-range", "obshist-arc-range", "obshist-nopp-range",
     "obshist-nobs-range", "obshist-collapse",
@@ -8049,8 +8053,6 @@ def _update_source_filter_caption(source):
 )
 def reset_controls(_tab_clicks, _all_clicks, active_tab):
     triggered = ctx.triggered_id
-    print(f"[reset_controls] triggered={triggered!r} "
-          f"active_tab={active_tab!r}", flush=True)
     defaults = _get_defaults()
     if triggered == "reset-all-btn":
         reset_keys = set(defaults)
@@ -8058,8 +8060,6 @@ def reset_controls(_tab_clicks, _all_clicks, active_tab):
         reset_keys = _TAB_KEYS.get(active_tab, set()) | _SHARED_KEYS
     else:
         raise PreventUpdate
-    print(f"[reset_controls] reset_keys={sorted(reset_keys)[:8]}... "
-          f"({len(reset_keys)} total)", flush=True)
     values = tuple(
         defaults[k] if k in reset_keys else no_update
         for k in _RESET_ORDER
