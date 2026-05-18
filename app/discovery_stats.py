@@ -8049,6 +8049,8 @@ def _update_source_filter_caption(source):
 )
 def reset_controls(_tab_clicks, _all_clicks, active_tab):
     triggered = ctx.triggered_id
+    print(f"[reset_controls] triggered={triggered!r} "
+          f"active_tab={active_tab!r}", flush=True)
     defaults = _get_defaults()
     if triggered == "reset-all-btn":
         reset_keys = set(defaults)
@@ -8056,6 +8058,8 @@ def reset_controls(_tab_clicks, _all_clicks, active_tab):
         reset_keys = _TAB_KEYS.get(active_tab, set()) | _SHARED_KEYS
     else:
         raise PreventUpdate
+    print(f"[reset_controls] reset_keys={sorted(reset_keys)[:8]}... "
+          f"({len(reset_keys)} total)", flush=True)
     values = tuple(
         defaults[k] if k in reset_keys else no_update
         for k in _RESET_ORDER
