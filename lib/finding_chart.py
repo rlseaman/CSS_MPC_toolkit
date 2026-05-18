@@ -878,6 +878,12 @@ def build_finding_figure(
         # back to whole-sky — only switching object or projection
         # does.
         uirevision=uirevision or "default",
+        # Smooth marker-position interpolation on rebuilds.  Most
+        # useful when swapping objects: Plotly tweens between matching
+        # traces (e.g. the predicted-marker arc), reducing the snap.
+        # Traces that appear/disappear (overlays toggled, year-1+
+        # palette absent) still cut hard.
+        transition=dict(duration=400, easing="cubic-in-out"),
     )
     # Equal aspect in data space keeps the projection true.  The XY
     # cartesian grid is meaningless for a sky projection, so it's

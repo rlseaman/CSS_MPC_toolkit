@@ -5712,13 +5712,23 @@ app.layout = html.Div(
                                             style=LABEL_STYLE),
                                         dcc.Dropdown(
                                             id="obshist-classes",
-                                            options=[
-                                                {"label": v[1],
-                                                 "value": v[1]}
-                                                for k, v in
-                                                EXTENDED_ORBIT_TYPES.items()
-                                                if k is not None
-                                            ],
+                                            options=(
+                                                # "All NEOs" virtual option
+                                                # — the callback below
+                                                # expands it into the five
+                                                # NEO sub-classes when
+                                                # selected.
+                                                [{"label": "All NEOs",
+                                                  "value": "__all_neos__"}]
+                                                + [
+                                                    {"label": v[1],
+                                                     "value": v[1]}
+                                                    for k, v in
+                                                    EXTENDED_ORBIT_TYPES
+                                                    .items()
+                                                    if k is not None
+                                                ]
+                                            ),
                                             value=["TNO"],
                                             multi=True,
                                             placeholder="Pick one or more "
@@ -6079,6 +6089,61 @@ app.layout = html.Div(
                                                    "fontWeight": "600",
                                                    "fontSize": "16px"}),
                                     html.Div(style={"flex": "1"}),
+                                    # Duplicate Designation entry +
+                                    # Random-object button for the
+                                    # finding-chart context — saves
+                                    # scrolling back up to the table
+                                    # block when changing object while
+                                    # studying the sky map.  Mirrored
+                                    # to/from the upper input via
+                                    # `sync_obshist_designation_to_plot`
+                                    # and shares the same resolver
+                                    # body.
+                                    html.Div(
+                                        style={"position": "relative"},
+                                        children=[
+                                            dcc.Input(
+                                                id="obshist-designation-fc",
+                                                type="text",
+                                                placeholder=("Designation…"),
+                                                debounce=True,
+                                                style={
+                                                    "width": "180px",
+                                                    "padding": "4px 8px",
+                                                    "fontSize": "12px",
+                                                    "fontFamily":
+                                                        "sans-serif",
+                                                    "boxSizing":
+                                                        "border-box"},
+                                            ),
+                                            html.Div(
+                                                id="obshist-designation"
+                                                   "-fc-status",
+                                                className="subtext",
+                                                style={
+                                                    "position": "absolute",
+                                                    "top": "100%",
+                                                    "left": 0,
+                                                    "right": 0,
+                                                    "marginTop": "4px",
+                                                    "fontSize": "11px",
+                                                    "whiteSpace": "nowrap",
+                                                    "overflow": "hidden",
+                                                    "textOverflow":
+                                                        "ellipsis"}),
+                                        ],
+                                    ),
+                                    html.Button(
+                                        "Random",
+                                        id="obshist-random-btn-fc",
+                                        n_clicks=0,
+                                        style={
+                                            "padding": "5px 10px",
+                                            "fontSize": "12px",
+                                            "fontFamily": "sans-serif",
+                                            "cursor": "pointer",
+                                        },
+                                    ),
                                     html.Label("Projection",
                                                style={"fontSize": "12px",
                                                       "color":
@@ -6257,12 +6322,12 @@ app.layout = html.Div(
                                                "flex": "1"},
                                         children=[
                                             html.Label(
-                                                "V-mag range",
+                                                "Horizons V-mag range",
                                                 style={"fontSize": "12px",
                                                        "color":
                                                        "var(--subtext-"
                                                        "color, #888)",
-                                                       "minWidth": "90px",
+                                                       "minWidth": "150px",
                                                        "whiteSpace":
                                                        "nowrap"}),
                                             html.Div(
@@ -7782,6 +7847,16 @@ def _get_defaults():
         "obshist-arc-range": [0, 50000],
         "obshist-nopp-range": [0, 30],
         "obshist-nobs-range": [0, 500],
+        "obshist-collapse": [],
+        # Finding-chart controls below the table
+        "fc-projection": "hammer",
+        "fc-colormap": "Viridis",
+        "fc-center-ra": 0,
+        "fc-pred-window": 1,
+        "fc-overlays": ["grid", "ecliptic", "galactic",
+                        "prediction_labels"],
+        "fc-vmag-limit": [14, 28],
+        "fc-elong-min": 60,
         # Shared
         "group-by": "combined",
         "plot-height": "700",
@@ -7816,7 +7891,10 @@ _TAB_KEYS = {
     "tab-obshist": {"obshist-designation", "obshist-classes",
                     "obshist-filters", "obshist-h-range",
                     "obshist-arc-range", "obshist-nopp-range",
-                    "obshist-nobs-range"},
+                    "obshist-nobs-range", "obshist-collapse",
+                    "fc-projection", "fc-colormap", "fc-center-ra",
+                    "fc-pred-window", "fc-overlays", "fc-vmag-limit",
+                    "fc-elong-min"},
 }
 _SHARED_KEYS = {"group-by", "plot-height", "neo-source-filter"}
 
@@ -7842,7 +7920,9 @@ _RESET_ORDER = [
     "station-site", "station-date-start", "station-date-end",
     "obshist-designation", "obshist-classes", "obshist-filters",
     "obshist-h-range", "obshist-arc-range", "obshist-nopp-range",
-    "obshist-nobs-range",
+    "obshist-nobs-range", "obshist-collapse",
+    "fc-projection", "fc-colormap", "fc-center-ra", "fc-pred-window",
+    "fc-overlays", "fc-vmag-limit", "fc-elong-min",
     "group-by", "plot-height", "neo-source-filter",
 ]
 
@@ -12307,24 +12387,47 @@ def _obshist_details_for(*, permid=None, provid=None):
     Output("obshist-table", "selected_rows", allow_duplicate=True),
     Output("obshist-table", "page_current", allow_duplicate=True),
     Input("obshist-random-btn", "n_clicks"),
+    Input("obshist-random-btn-fc", "n_clicks"),
     State("obshist-table", "data"),
     State("obshist-table", "page_size"),
     prevent_initial_call=True,
 )
-def random_obshist_row(n_clicks, data, page_size):
+def random_obshist_row(_n_table, _n_fc, data, page_size):
     """Pick a uniform-random row from the current table data.
 
+    Listens to either Random-object button — the one above the table
+    or the duplicate next to the finding-chart projection dropdown.
     Setting `selected_rows` triggers the plot callback through the
     normal `derived_virtual_selected_rows` chain, so the random pick
-    flows through the same code path as a user click.  Also paginates
-    so the highlighted row is actually visible.
+    flows through the same code path as a user click.
     """
-    if not n_clicks or not data:
+    if not data:
         raise PreventUpdate
     import random
     idx = random.randrange(len(data))
     page = idx // (page_size or 50)
     return [idx], page
+
+
+# Expand "All NEOs" into the five NEO sub-classes whenever it lands
+# in the obshist-classes value.  The dropdown lists this option at
+# the top as a convenience for the canonical NEO group — Atira, Aten,
+# Apollo, Near Amor, Distant Amor (codes 0, 1, 2, 30, 31 in
+# EXTENDED_ORBIT_TYPES).  Replaces (rather than augments) any other
+# current selection so picking "All NEOs" gives the clean group.
+_NEO_GROUP_LABELS = ["Atira", "Aten", "Apollo", "Near Amor",
+                     "Distant Amor"]
+
+
+@app.callback(
+    Output("obshist-classes", "value", allow_duplicate=True),
+    Input("obshist-classes", "value"),
+    prevent_initial_call=True,
+)
+def expand_all_neos(classes):
+    if not classes or "__all_neos__" not in classes:
+        raise PreventUpdate
+    return list(_NEO_GROUP_LABELS)
 
 
 def _resolve_obshist_designation(text):
@@ -12407,8 +12510,14 @@ def _resolve_obshist_designation(text):
     State("obshist-designation", "value"),
     prevent_initial_call=True,
 )
-def resolve_obshist_designation_input(_n_submit, value):
-    """Designation entry submit → broaden filters to the object's class."""
+def _resolve_for_callback(value):
+    """Shared body of the designation-submit handler.
+
+    Used by both the table-region input (`obshist-designation`) and
+    the finding-chart input (`obshist-designation-fc`).  Returns the
+    eight-element tuple the surrounding callbacks emit, with index 7
+    being the status message string.
+    """
     if not value or not value.strip():
         return (no_update,) * 6 + (None, no_update)
     result = _resolve_obshist_designation(value.strip())
@@ -12417,13 +12526,37 @@ def resolve_obshist_designation_input(_n_submit, value):
                 + (None, f"Not found: '{value.strip()}'"))
     permid, provid, iau_name, ext_name = result
     label = iau_name or provid or permid or value.strip()
-    # Switch the table to the object's class and clear the other
-    # filters / sliders so the row is guaranteed to be in view.
     target = {"permid": permid, "provid": provid, "iau_name": iau_name}
     msg = (f"Resolved: {label}"
            + (f" — class {ext_name}" if ext_name else ""))
     return ([ext_name] if ext_name else no_update,
             [], [0, 32], [0, 50000], [0, 30], [0, 500], target, msg)
+
+
+def resolve_obshist_designation_input(_n_submit, value):
+    """Designation entry submit → broaden filters to the object's class."""
+    return _resolve_for_callback(value)
+
+
+# Parallel resolver for the second Designation input that lives next
+# to the finding-chart projection dropdown.  Same shared-output set,
+# different status div.  allow_duplicate=True because every output
+# already has a primary writer registered above.
+@app.callback(
+    Output("obshist-classes", "value", allow_duplicate=True),
+    Output("obshist-filters", "value", allow_duplicate=True),
+    Output("obshist-h-range", "value", allow_duplicate=True),
+    Output("obshist-arc-range", "value", allow_duplicate=True),
+    Output("obshist-nopp-range", "value", allow_duplicate=True),
+    Output("obshist-nobs-range", "value", allow_duplicate=True),
+    Output("obshist-pending-target", "data", allow_duplicate=True),
+    Output("obshist-designation-fc-status", "children"),
+    Input("obshist-designation-fc", "n_submit"),
+    State("obshist-designation-fc", "value"),
+    prevent_initial_call=True,
+)
+def resolve_obshist_designation_fc(_n_submit, value):
+    return _resolve_for_callback(value)
 
 
 @app.callback(
@@ -12503,14 +12636,16 @@ def reset_obshist_vslider_on_reset(n_clicks):
 # re-enter it.
 @app.callback(
     Output("obshist-designation", "value", allow_duplicate=True),
+    Output("obshist-designation-fc", "value", allow_duplicate=True),
     Input("obshist-plot-state", "data"),
     prevent_initial_call=True,
 )
 def sync_obshist_designation_to_plot(state):
     if not state or not state.get("key"):
-        return no_update
+        return no_update, no_update
     permid, provid, name = state["key"]
-    return name or provid or permid or ""
+    label = name or provid or permid or ""
+    return label, label
 
 
 # Finding chart — sky-plot of the displayed object's observed trail in
