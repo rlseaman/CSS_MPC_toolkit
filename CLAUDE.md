@@ -41,20 +41,29 @@ University of Arizona.
 
 ```
 app/                          # Interactive Dash web application
-  discovery_stats.py          #   NEO discovery explorer (13 tabs, ~15,100 lines)
-  assets/                     #   CSS, logo, static files
+  discovery_stats.py          #   NEO discovery explorer (13 tabs, ~15,500 lines)
+  assets/                     #   CSS, theme, custom JS (finding_chart.js,
+                              #     slider_linked.js, keyboard.js)
+  .horizons_cache/            #   Per-object Horizons ephemeris parquet
+                              #     (gitignored; 1-week TTL)
 lib/                          # Python library layer
   db.py                       #   DB connections, timed queries, QueryLog
   orbits.py                   #   Parameterized query builders for mpc_orbits
   orbit_classes.py            #   Classification constants, Tisserand, colors
   mpc_convert.py              #   80-col format converters, designation pack/unpack
+  observation_history.py      #   V-vs-time figure for the obshist tab
+  finding_chart.py            #   Projection math, graticule, NSEW, predictions
+  horizons.py                 #   JPL Horizons web-API client + parquet cache
   ades_export.py              #   ADES XML/PSV generation from NEOCP data
   ades_validate.py            #   XSD validation
 sql/                          # SQL scripts
   discovery_tracklets.sql     #   Main NEO discovery statistics (43,629 tracklets)
   css_utilities_functions.sql #   PostgreSQL equivalents of Python converters
+  obs_summary_all.sql         #   Full-catalog obs aggregate matview (1.6M rows)
   ades_export.sql             #   ADES-ready columns from NEOCP
   viz/                        #   Reference queries for visualization
+data/                         # Vendored static reference data
+  finding_chart/              #   Hipparcos V<6 + IAU constellation boundaries
 scripts/                      # Operational tools
   run_pipeline.sh             #   Execute SQL, validate, upload discovery tracklets
   db_health_check.sh          #   Diagnostic: replication, dead tuples, indexes
@@ -210,33 +219,112 @@ Observation history — are live on prod.
   to `LOAD_SQL`; same ~44K rows, 6 new columns
 
 ### Tab 8: Observation history
-- Class-filtered catalog of mpc_orbits objects, paired with a
-  per-object plot of band-corrected V vs. obstime over the full
-  obs_sbn record. Site-code lifeline on the lower panel; vertical
-  shading marks solar elongation > 90° (observable) vs. ≤ 90°.
-- Designation entry box (Enter to submit) resolves permid
-  (`134340`), provid (`2019 UZ173`), iau_name (`Pluto`), and
-  packed forms (`K24Y04R` → unpacks via
-  `lib/mpc_convert.unpack_designation`). On submit, switches
-  Classes to the resolved object's orbit class, clears the other
-  filters, and pins the row to the top of the table.
+- Default object on first load is **Apophis (99942)**.  Default class
+  filter is "All NEOs" — Atira / Aten / Apollo / Near Amor / Distant
+  Amor, the canonical NEO group.  The Classes dropdown carries an
+  "All NEOs" virtual option at the top that expands to those five
+  on selection.
+- Three stacked panels:
+  1. **Class-filtered catalog** of mpc_orbits objects, paired with a
+     per-object **V-vs-time plot** of band-corrected magnitudes over
+     the full obs_sbn record.  Site-code lifeline below; vertical
+     shading marks solar elongation > 90° (observable) vs. ≤ 90°.
+  2. **Finding chart** (sky map) — see next section.
+- Designation entry (Enter to submit) resolves permid (`99942`),
+  provid (`2019 UZ173`), iau_name (`Pluto`), and packed forms
+  (`K24Y04R` → `lib/mpc_convert.unpack_designation`).  On submit,
+  switches Classes to the resolved object's orbit class, clears
+  other filters, and pins the row to the top of the table.  A
+  duplicate Designation + Random-object button sits next to the
+  Finding-chart projection picker so the user doesn't have to
+  scroll back up to switch object while studying the sky map.
+- "Collapse to selected row" checkbox above the table contracts
+  the catalog to the displayed object's single row, keeping the
+  finding chart visually anchored to its data.
 - Plot controls (Reset axes / Show all bands / Toggle elongation
   shading / V-range slider) are html.Buttons + dcc.RangeSlider
   below the dcc.Graph — they pick up the page's theme CSS on
-  hover, where the in-figure Plotly updatemenus rendered
-  light-on-light in dark mode.
-- Details panel above the plot: Class / H / q / Q / e / i / a /
-  U / Nopp / n_obs / arc / disc-by chips + JPL SBDB · MPC
+  hover.
+- Details panel above the V-vs-time plot: Class / H / q / Q / e /
+  i / a / U / Nopp / n_obs / arc / disc-by chips + JPL SBDB · MPC
   Explorer · NEOfixer (NEOs only) link buttons.
 - Pin tracks the currently-displayed object across arbitrary
   filter changes — selecting a row, pressing Random, or typing
-  another designation moves the pin. With the 5000-row H-sort
+  another designation moves the pin.  With the 5000-row H-sort
   cap on classes >5K (any MBA fine class), this is how an object
   like Lewseaman (H 17.0, IMB H-rank 77,744) stays in the table
   while it's plotted.
 - Data: `boxscore_cache` (same source as Asteroid Classes), joined
   at load time with `obs_summary_all_cache` for the authoritative
   first_obs / last_obs / arc / nobs / disc_by columns.
+
+#### Finding chart (sky-plot section under the obshist table)
+- Per-object sky-plot of the observed (RA, Dec) trail, with optional
+  Horizons-predicted track overlay.  Lives in `lib/finding_chart.py`
+  (~500 lines) plus the Horizons client in `lib/horizons.py`
+  (~140 lines).  Drawn as a Plotly cartesian scatter — server-side
+  projection math, plain pan/zoom, no scattergeo.
+- **Projections:** Hammer (default), Aitoff, Mollweide, Rectangular.
+  East-on-left convention (NEOlyzer-style); `_center_lon` negates the
+  centered longitude.  Center RA in **hours** (default 0 h, step
+  0.25 h = 15 min, range −12 to +12; double-click resets to 0 via
+  `assets/finding_chart.js`).  Whole-sky boundary is drawn at moderate
+  weight (ellipse for the equal-area three; rectangle for
+  Rectangular).
+- **Static reference data**: `data/finding_chart/bright_stars.csv`
+  (~160 KB Hipparcos V<6, vendored from NEOlyzer/data) and
+  `data/finding_chart/iau_boundaries_j2000.csv` (~85 KB IAU
+  constellation boundaries).  Loaded once per process.
+- **Overlays** (Checklist): Stars · Constellations · Grid
+  (RA/Dec graticule) · Ecliptic · Galactic plane · Ecliptic poles ·
+  Galactic poles · Predictions · Prediction labels · Hide
+  non-observable · Hide historical.  Defaults: Grid, Ecliptic,
+  Galactic plane, Prediction labels on.  Ecliptic / galactic plane
+  are dashed lines at width 1.8 in the matching pole color.  Pole
+  markers are plus signs (Plotly `symbol="cross"`) at the canonical
+  J2000 positions.
+- **NSEW badges** at the projection's whole-sky extent (0.97 N/S,
+  0.98 E/W) — small circles overlaying the map.  E on the left.
+- **Colormap dropdown** (Viridis default) — drives the
+  viridis-by-year markers for historical observations.
+- **Predictions** via the JPL Horizons web API (`lib/horizons.py`,
+  endpoint `https://ssd.jpl.nasa.gov/api/horizons.api`).  Forecast
+  window dropdown: 1 / 5 / 10 / 20 years.  Horizons step auto-widens
+  (1 y/1 d, 5 y/7 d, 10 y/14 d, 20 y/30 d) so responses stay small.
+  On-demand fetch when the Predictions toggle is on; disk-cached
+  per `(designation, t_start, t_stop, step, observer)` under
+  `app/.horizons_cache/<hash>.parquet` with a 1-week TTL.  Cold
+  fetch ~400 ms, cache hit ~30 ms.  Failure modes (Horizons down,
+  designation not resolved) degrade quietly to the observed-only
+  chart with a status-line note.
+- **Predicted-marker treatment**: year 0 (next 12 months) in solid
+  orange `circle-open`; years 1+ in a Turbo gradient by year offset
+  so each future year reads as a distinct color.  Dates with
+  solar elongation < `Min elongation` slider (default 60°) OR
+  Horizons V outside the `Horizons V-mag range` slider gray out as
+  `rgba(150,150,150,0.55)` open circles.  "Hide non-observable"
+  drops every gray marker entirely.  No connecting line through
+  the markers (it hid the gray ones).
+- **V-mag range** is a `dcc.RangeSlider` whose min/max snap to the
+  object's predicted V range (rounded to 0.1 mag) on object change
+  or Predictions toggle-on.  Slider geometry tracked via the
+  `fc-slider-state` Store so projection switches / overlay toggles
+  don't reset the user's narrowed range.
+- **Prediction labels** annotate the first and last observable date
+  *per year* (so a 5-year forecast can show up to 10 date labels).
+  Labels shift with the slider — narrowing the V range or raising
+  the elongation cut moves them inward.
+- **`uirevision`** keyed on `(permid, provid, projection, center_ra)`
+  so overlay toggles, slider drags, hide-historical, etc. preserve
+  the user's zoom/pan.  Switching object, projection, or center
+  resets the viewport.  Axis ranges locked to 1.05× the projection's
+  extent so toggling traces never auto-refits the view.
+- **Drag-rectangle zoom** is the default `dragmode`; modebar Pan
+  swaps to drag-pan; double-click resets.  `scrollZoom` is off so
+  trackpad scrolling the page works normally over the chart.
+- **`dcc.Loading`** with `delay_show=400` so the spinner only paints
+  for genuinely slow callbacks (cold Horizons fetch); slider drags
+  no longer blink.
 
 ### Tab 9: Asteroid Classes
 - Cross-tabulation of the full `mpc_orbits` catalog (~1.5M objects,
@@ -312,6 +400,10 @@ Stations are mapped to project groups via `STATION_TO_PROJECT`:
 - Per-tab "Download CSV" buttons export currently filtered data
 
 ### Architecture
+- **Finding-chart predictions** add an on-demand per-object
+  `app/.horizons_cache/<hash>.parquet` pool — 1-week TTL, keyed on
+  designation × window × step × observer.  Hand-rolled requests
+  client in `lib/horizons.py`; no astroquery dependency.
 - **Seven SQL queries** cached to Parquet (1-day auto-invalidation,
   falls back to legacy CSV if Parquet not yet generated). Scan sources
   and timings differ between hosts; numbers below are DB-only wall

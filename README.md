@@ -34,7 +34,7 @@ and only appears on the `dev.hotwireduniverse.org` staging surface
 | **Follow-up Comparison** | Per-site (not per-survey) follow-up activity. World map of MPC obscodes colored by follow-up volume with selectable projection / colormap / scale / graticule; viewport-aware stats card; bar chart with multi-select and matched colors. Time scope selector (Discovery apparition / All time / Recovery only — the latter two backed by a separate lifetime cache), follow-up window (1 day / 1 week / 1 lunation / 100 days / 200 days), post-discovery vs include-precoveries radio, Metric selector (NEOs / Tracklets / Observations), and V-mag depth filter (Median + 1.4826·MAD / Mean + 1σ / 95th percentile, with a double-ended range slider). |
 | **Follow-up Timing** | Response curves showing how quickly other surveys observe newly-discovered NEOs; per-survey response time distributions; follow-up network heatmap; trend by year |
 | **Discovery Circumstances** | Sky map (RA/Dec) of discovery positions with ecliptic and galactic plane overlays; apparent V magnitude histogram; rate of motion vs. H scatter; position angle rose diagram |
-| **Observation history** | Class-filtered catalog of mpc_orbits objects paired with a per-object plot of band-corrected V vs. obstime over the full obs_sbn record (site-code lifeline below, solar-elongation > 90° shading). Designation entry resolves permid / provid / iau_name / packed forms and pins the row to the top of the table for as long as that object is displayed. Details strip above the plot with Class / H / q / Q / e / i / a / U / Nopp / n_obs / arc / disc-by chips plus JPL SBDB · MPC Explorer · NEOfixer (NEOs only) link buttons. |
+| **Observation history** | Default object **Apophis (99942)**; default class filter is the All-NEOs group (Atira / Aten / Apollo / Near Amor / Distant Amor). Three stacked panels: (1) class-filtered catalog of mpc_orbits objects with a "Collapse to selected row" option; (2) per-object **V vs. obstime** plot over the full obs_sbn record with a site-code lifeline and solar-elongation > 90° shading; (3) a **Finding chart** — projected sky-plot with optional JPL Horizons predicted track. Designation entry resolves permid / provid / iau_name / packed forms; duplicate entry + Random-object button sits next to the projection picker. Details strip above the V-vs-time plot with orbital chips plus JPL SBDB · MPC Explorer · NEOfixer (NEOs only) link buttons. **Finding chart:** Hammer (default) / Aitoff / Mollweide / Rectangular projections (east-on-left); Center RA spinner in hours; Hipparcos V<6 stars and IAU constellation boundaries; ecliptic / galactic plane overlays plus optional pole markers; predictions over 1 / 5 / 10 / 20-year windows from `lib/horizons.py` (disk-cached per object), year 0 in orange and years 1+ in a Turbo gradient; markers gray out below the Min-elongation slider (default 60°) or outside the Horizons V-mag range slider; per-year first/last-visible date labels. |
 | **Asteroid Classes** | Cross-tabulation of the full `mpc_orbits` catalog (~1.5M objects, all classes) by orbit type and selected attributes. Class grouping (Fine / Standard / Coarse), NEO/PHA/retrograde filters, H histogram, a–e scatter. |
 | **Tools** | Standalone calculators and converters for planetary-defense work — pack/unpack/validate designation, H↔diameter, Tisserand, orbit classification, parse obs80, date conversions, airmass↔altitude. |
 | **Station Report** *(dev)* | Per-site deep-dive: site code + optional date range yields summary line, year × class breakdown for NEOs and non-NEOs, MPEC-publications stub (Phase 2, ADS-backed). |
@@ -197,6 +197,8 @@ CSS_MPC_toolkit/
 │   ├── mpec_parser.py                  #   MPEC fetch, parse, classify
 │   ├── api_clients.py                  #   JPL/NEOfixer/NEOCC API wrappers
 │   ├── observation_history.py          #   obs_sbn → per-object V/site plot
+│   ├── finding_chart.py                #   Sky-projection figure + overlays
+│   ├── horizons.py                     #   JPL Horizons API client + cache
 │   ├── ades_export.py                  #   ADES XML/PSV export
 │   └── ades_validate.py                #   XSD validation
 ├── sql/
@@ -224,6 +226,8 @@ CSS_MPC_toolkit/
 ├── schema/                             #   ADES format XSD schemas
 │   ├── general.xsd
 │   └── submit.xsd
+├── data/                               #   Vendored static reference data
+│   └── finding_chart/                  #     Hipparcos V<6 + IAU boundaries
 ├── sandbox/                            #   Analysis notes, exploratory outputs
 └── docs/                               #   Operations + scoping notes
     ├── deployment.md                   #   Server provisioning and operations
