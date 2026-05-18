@@ -5729,7 +5729,9 @@ app.layout = html.Div(
                                                     if k is not None
                                                 ]
                                             ),
-                                            value=["TNO"],
+                                            value=["Atira", "Aten",
+                                                   "Apollo", "Near Amor",
+                                                   "Distant Amor"],
                                             multi=True,
                                             placeholder="Pick one or more "
                                                         "classes…",
@@ -7841,7 +7843,11 @@ def _get_defaults():
         "station-date-end": "",
         # Tab 11 — Observation history
         "obshist-designation": "",
-        "obshist-classes": ["TNO"],
+        # Apophis is the default object, so default the class filter
+        # to the NEO group it belongs to.  Matches `_NEO_GROUP_LABELS`
+        # below — keep both lists in sync.
+        "obshist-classes": ["Atira", "Aten", "Apollo",
+                            "Near Amor", "Distant Amor"],
         "obshist-filters": [],
         "obshist-h-range": [0, 32],
         "obshist-arc-range": [0, 50000],
@@ -8020,7 +8026,17 @@ def _update_source_filter_caption(source):
 
 
 @app.callback(
-    [Output(k, "value", allow_duplicate=True) for k in _RESET_ORDER],
+    [Output(k, "value", allow_duplicate=True) for k in _RESET_ORDER]
+    # fc-vmag-limit's min/max/marks (not just value) need restoring
+    # to defaults — `update_finding_chart` rewrites them when an
+    # object's predicted-V range is known, and they'd otherwise stay
+    # pinned to that range across a Reset.  Clearing fc-slider-state
+    # also forces the next finding-chart rebuild to re-snap the slider
+    # cleanly from the new object's predictions.
+    + [Output("fc-vmag-limit", "min", allow_duplicate=True),
+       Output("fc-vmag-limit", "max", allow_duplicate=True),
+       Output("fc-vmag-limit", "marks", allow_duplicate=True),
+       Output("fc-slider-state", "data", allow_duplicate=True)],
     Input("reset-tab-btn", "n_clicks"),
     Input("reset-all-btn", "n_clicks"),
     State("tabs", "value"),
@@ -8035,10 +8051,15 @@ def reset_controls(_tab_clicks, _all_clicks, active_tab):
         reset_keys = _TAB_KEYS.get(active_tab, set()) | _SHARED_KEYS
     else:
         raise PreventUpdate
-    return tuple(
+    values = tuple(
         defaults[k] if k in reset_keys else no_update
         for k in _RESET_ORDER
     )
+    if "fc-vmag-limit" in reset_keys:
+        slider_extras = (14, 28, {14: "14", 28: "28"}, None)
+    else:
+        slider_extras = (no_update,) * 4
+    return values + slider_extras
 
 
 # ---------------------------------------------------------------------------
