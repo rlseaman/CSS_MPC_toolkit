@@ -8036,7 +8036,12 @@ def _update_source_filter_caption(source):
     + [Output("fc-vmag-limit", "min", allow_duplicate=True),
        Output("fc-vmag-limit", "max", allow_duplicate=True),
        Output("fc-vmag-limit", "marks", allow_duplicate=True),
-       Output("fc-slider-state", "data", allow_duplicate=True)],
+       Output("fc-slider-state", "data", allow_duplicate=True),
+       # Clearing plot-state and selected_rows together puts the
+       # obshist plot callback into its "first activation" branch on
+       # the next fire, which reloads the default object (Apophis).
+       Output("obshist-plot-state", "data", allow_duplicate=True),
+       Output("obshist-table", "selected_rows", allow_duplicate=True)],
     Input("reset-tab-btn", "n_clicks"),
     Input("reset-all-btn", "n_clicks"),
     State("tabs", "value"),
@@ -8059,7 +8064,14 @@ def reset_controls(_tab_clicks, _all_clicks, active_tab):
         slider_extras = (14, 28, {14: "14", 28: "28"}, None)
     else:
         slider_extras = (no_update,) * 4
-    return values + slider_extras
+    # Obshist controls being reset → also snap the displayed object
+    # back to Apophis.  Clearing plot-state and selected_rows lets
+    # update_obshist_plot reload the default on its next fire.
+    if "obshist-classes" in reset_keys:
+        obj_extras = (None, [])
+    else:
+        obj_extras = (no_update, no_update)
+    return values + slider_extras + obj_extras
 
 
 # ---------------------------------------------------------------------------
