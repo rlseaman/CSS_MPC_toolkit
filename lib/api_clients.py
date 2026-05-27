@@ -10,8 +10,10 @@ Usage:
 """
 
 import bisect
+import datetime
 import json
 import re
+import threading
 import time
 import xml.etree.ElementTree as ET
 import urllib.request
@@ -21,55 +23,152 @@ from html.parser import HTMLParser
 from statistics import median
 
 # ---------------------------------------------------------------------------
-# TTL cache
+# Outbound-request rate limiting + structured request log
+#
+# A single user interaction issues only a handful of calls and is dominated
+# by each call's own round-trip, so these per-host caps are invisible to one
+# user — they only serialize bursts (concurrent users, crawlers, and the
+# MPEC enrichment poll, which re-fires every 60 s for up to 10 minutes until
+# every source responds).  See lib/api_clients tests / CLAUDE.md.
 # ---------------------------------------------------------------------------
 
-_CACHE_TTL = 300  # 5 minutes
-_cache = {}  # key -> (timestamp, value)
+# Per-host minimum seconds between outbound requests.  JPL is the service we
+# most want to be a good citizen to; everyone else gets the default.
+_THROTTLE_INTERVALS = {
+    "ssd-api.jpl.nasa.gov": 0.25,   # JPL SBDB + Sentry -> 4 req/s ceiling
+}
+_THROTTLE_DEFAULT = 0.2             # 5 req/s for NEOfixer / NEOCC / others
+_throttle_lock = threading.Lock()
+_throttle_next = {}                 # host -> next allowed monotonic slot
+
+
+def _host(url):
+    try:
+        return urllib.parse.urlsplit(url).netloc or "?"
+    except Exception:
+        return "?"
+
+
+def _throttle(host):
+    """Block until this host's rate budget allows another request."""
+    interval = _THROTTLE_INTERVALS.get(host, _THROTTLE_DEFAULT)
+    with _throttle_lock:
+        now = time.monotonic()
+        slot = max(now, _throttle_next.get(host, 0.0))
+        _throttle_next[host] = slot + interval
+        wait = slot - now
+    if wait > 0:
+        time.sleep(wait)
+
+
+def _log_request(host, url, outcome, ms):
+    """Emit one structured line per outbound network call, for auditing.
+
+    Grep ``APIREQ`` in the dashboard log to quantify request volume by host
+    and outcome.  In-process cache hits make no network call and are not
+    logged here; failure-cooldown suppressions surface as the separate
+    ``API neg-cache`` line in `_cached`, so avoided volume is also visible.
+    """
+    ts = datetime.datetime.now(datetime.timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ")
+    print(f"APIREQ ts={ts} host={host} outcome={outcome} ms={ms} url={url}",
+          flush=True)
+
+
+# ---------------------------------------------------------------------------
+# TTL cache (positive) + failure cooldown (negative)
+#
+# Positive results cache for _CACHE_TTL.  Failures — upstream errors *and*
+# genuine not-found Nones — start a cooldown so the 60 s enrichment poll and
+# repeat selections stop re-hitting the upstream while it's down or the
+# object is simply absent.  Cooldown escalates on consecutive failures and
+# resets on the first success.
+# ---------------------------------------------------------------------------
+
+_CACHE_TTL = 300            # 5 minutes (positive)
+_cache = {}                # key -> (timestamp, value)
+
+_NEG_TTL_BASE = 90.0       # first failure suppressed ~1.5 poll cycles
+_NEG_TTL_CAP = 600.0       # escalate x2, capped at 10 min on sustained outage
+_neg_cache = {}            # key -> (expiry_ts, consecutive_failures)
 
 
 def _cached(key, func):
-    """Return cached value if fresh, otherwise call func and cache result.
-
-    Only caches non-None results.  Transient failures (None / exception)
-    are never cached so the next request retries immediately.
+    """Return cached value if fresh; else call func, caching success and
+    applying a failure cooldown so transient upstream outages and absent
+    objects don't trigger a retry storm.
     """
     now = time.time()
-    if key in _cache:
-        ts, val = _cache[key]
-        if now - ts < _CACHE_TTL:
-            return val
+    hit = _cache.get(key)
+    if hit is not None and now - hit[0] < _CACHE_TTL:
+        return hit[1]
+
+    neg = _neg_cache.get(key)
+    if neg is not None and now < neg[0]:
+        return None  # within failure cooldown — short-circuit, no network
+
     try:
         val = func()
     except Exception as e:
         print(f"API error [{key}]: {e}")
-        return None
+        val = None
+
     if val is not None:
         _cache[key] = (now, val)
-    return val
+        _neg_cache.pop(key, None)  # success resets the cooldown
+        return val
+
+    fails = (neg[1] + 1) if neg is not None else 1
+    ttl = min(_NEG_TTL_BASE * (2 ** (fails - 1)), _NEG_TTL_CAP)
+    _neg_cache[key] = (now + ttl, fails)
+    if fails == 1 or fails % 5 == 0:
+        print(f"API neg-cache [{key}]: suppressing {ttl:.0f}s "
+              f"(consecutive failures={fails})", flush=True)
+    return None
 
 
 def _get_json(url, timeout=10):
-    """Fetch URL and parse as JSON."""
+    """Fetch URL and parse as JSON (rate-limited + logged)."""
+    host = _host(url)
+    _throttle(host)
     req = urllib.request.Request(url, headers={
         "User-Agent": "CSS-MPC-Toolkit/1.0",
     })
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
+    t0 = time.monotonic()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        _log_request(host, url, f"http-{e.code}", int((time.monotonic() - t0) * 1000))
+        raise
+    except Exception:
+        _log_request(host, url, "error", int((time.monotonic() - t0) * 1000))
+        raise
+    _log_request(host, url, "ok", int((time.monotonic() - t0) * 1000))
+    return json.loads(body)
 
 
 def _get_text(url, timeout=10):
-    """Fetch URL and return as text, or None on 404."""
+    """Fetch URL and return as text, or None on 404 (rate-limited + logged)."""
+    host = _host(url)
+    _throttle(host)
     req = urllib.request.Request(url, headers={
         "User-Agent": "CSS-MPC-Toolkit/1.0",
     })
+    t0 = time.monotonic()
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.read().decode("utf-8", errors="replace")
+            body = resp.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as e:
+        _log_request(host, url, f"http-{e.code}", int((time.monotonic() - t0) * 1000))
         if e.code == 404:
             return None
         raise
+    except Exception:
+        _log_request(host, url, "error", int((time.monotonic() - t0) * 1000))
+        raise
+    _log_request(host, url, "ok", int((time.monotonic() - t0) * 1000))
+    return body
 
 
 # ---------------------------------------------------------------------------
