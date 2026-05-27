@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import threading
 import time
 from typing import Optional
 
@@ -35,6 +36,30 @@ _CACHE_DIR = os.path.normpath(os.path.join(
     os.path.dirname(__file__), "..", "app", ".horizons_cache"))
 os.makedirs(_CACHE_DIR, exist_ok=True)
 _CACHE_TTL_SEC = 7 * 24 * 3600
+
+# Be a good citizen to Horizons.  A single user toggling Predictions triggers
+# one request (then disk-cached for a week), so this cap is invisible — it only
+# serialises bursts.  Paired with a failure cooldown so an outage or an
+# unresolved designation isn't re-fetched on every finding-chart re-render
+# (slider drags, overlay toggles).
+_THROTTLE_INTERVAL = 0.5            # 2 req/s ceiling to ssd.jpl.nasa.gov
+_throttle_lock = threading.Lock()
+_throttle_next = 0.0
+
+_NEG_TTL_SEC = 120.0               # cooldown after a failure / empty result
+_neg_cache: dict[str, float] = {}  # cache-key hash -> cooldown expiry ts
+
+
+def _throttle() -> None:
+    """Block until the Horizons rate budget allows another request."""
+    global _throttle_next
+    with _throttle_lock:
+        now = time.monotonic()
+        slot = max(now, _throttle_next)
+        _throttle_next = slot + _THROTTLE_INTERVAL
+        wait = slot - now
+    if wait > 0:
+        time.sleep(wait)
 
 # One ephemeris row, QUANTITIES='1,9,23' format:
 #    " 2026-May-17 00:00     06 17 10.46 +21 18 00.8   21.684   3.551   38.2942 /T"
@@ -127,6 +152,14 @@ def fetch_predictions(
         if age < _CACHE_TTL_SEC:
             return pd.read_parquet(cache_path)
 
+    # Failure cooldown: a recent outage / unresolved designation suppresses
+    # re-fetching for _NEG_TTL_SEC.  Return an empty frame, which the caller
+    # already renders as the observed-only chart.
+    neg_exp = _neg_cache.get(h)
+    if neg_exp is not None and time.time() < neg_exp:
+        return pd.DataFrame(columns=["obstime", "ra", "dec", "v_pred",
+                                     "solar_elong"])
+
     params = {
         "format": "json",
         "COMMAND": cmd,
@@ -139,9 +172,21 @@ def fetch_predictions(
         "STEP_SIZE": f"'{step}'",
         "QUANTITIES": "'1,9,23'",
     }
-    r = requests.get(_HORIZONS_URL, params=params, timeout=timeout)
-    r.raise_for_status()
+    _throttle()
+    try:
+        r = requests.get(_HORIZONS_URL, params=params, timeout=timeout)
+        r.raise_for_status()
+    except Exception:
+        # Down / rate-limited / unresolved: start a cooldown, then let the
+        # caller fall back to the observed-only chart (+ status-line note).
+        _neg_cache[h] = time.time() + _NEG_TTL_SEC
+        raise
     df = _parse_response(r.json().get("result", ""))
     if len(df):
         df.to_parquet(cache_path)
+        _neg_cache.pop(h, None)        # success clears any prior cooldown
+    else:
+        # 200 OK but no ephemeris rows (designation Horizons can't resolve) —
+        # cool down so we don't re-request it on every interaction.
+        _neg_cache[h] = time.time() + _NEG_TTL_SEC
     return df

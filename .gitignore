@@ -43,9 +43,13 @@ app/.pha_*
 app/.sbdb_*
 app/.apparition_cache*
 app/.boxscore_cache*
+app/.obscodes_cache*
+app/.lifetime_cache*
+app/.site_mag_stats*
 app/.mpec_cache/
 app/.station_cache/
 app/.horizons_cache/
+app/*.meta
 
 # Downloaded / generated data files
 downloads/
