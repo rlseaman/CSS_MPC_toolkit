@@ -42,7 +42,8 @@ from .neo_consensus import (
 
 SOURCE = "neocc"
 NEOCC_URL = "https://neo.ssa.esa.int/PSDB-portlet/download?file=allneo.lst"
-USER_AGENT = "CSS_MPC_toolkit/1.0 (consensus ingest)"
+USER_AGENT = ("CSS-MPC-Toolkit/1.0 (consensus ingest; "
+              "+https://hotwireduniverse.org; contact@hotwireduniverse.org)")
 
 _CACHE_FILE = ".neocc_allneo.lst"
 _CACHE_MAX_AGE_SEC = 21600  # 6 h

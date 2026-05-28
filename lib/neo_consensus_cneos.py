@@ -41,7 +41,8 @@ from .neo_consensus import (
 SOURCE = "cneos"
 SBDB_URL = "https://ssd-api.jpl.nasa.gov/sbdb_query.api"
 SBDB_NEO_CLASSES = "IEO,ATE,APO,AMO"
-USER_AGENT = "CSS_MPC_toolkit/1.0 (consensus ingest)"
+USER_AGENT = ("CSS-MPC-Toolkit/1.0 (consensus ingest; "
+              "+https://hotwireduniverse.org; contact@hotwireduniverse.org)")
 
 _CACHE_FILE = ".cneos_neo_list.json"
 _CACHE_MAX_AGE_SEC = 21600  # 6 h — SBDB updates often, but not by the minute

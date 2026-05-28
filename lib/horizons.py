@@ -30,6 +30,8 @@ import numpy as np
 import pandas as pd
 import requests
 
+from . import USER_AGENT
+
 
 _HORIZONS_URL = "https://ssd.jpl.nasa.gov/api/horizons.api"
 _CACHE_DIR = os.path.normpath(os.path.join(
@@ -174,7 +176,12 @@ def fetch_predictions(
     }
     _throttle()
     try:
-        r = requests.get(_HORIZONS_URL, params=params, timeout=timeout)
+        r = requests.get(
+            _HORIZONS_URL,
+            params=params,
+            headers={"User-Agent": USER_AGENT},
+            timeout=timeout,
+        )
         r.raise_for_status()
     except Exception:
         # Down / rate-limited / unresolved: start a cooldown, then let the

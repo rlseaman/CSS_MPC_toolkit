@@ -64,7 +64,8 @@ Q_SOLIDITY_TOLERANCE = 0.02
     # that distinguishes legitimate boundary-q disagreements (e.g.
     # NF 1.31 vs MPC 1.29 — both within 0.01 AU of cutoff, agreement)
     # from Find_Orb instabilities (e.g. NF 2.44 vs MPC 1.20).
-USER_AGENT = "CSS_MPC_toolkit/1.0 (consensus ingest)"
+USER_AGENT = ("CSS-MPC-Toolkit/1.0 (consensus ingest; "
+              "+https://hotwireduniverse.org; contact@hotwireduniverse.org)")
 
 _CACHE_FILE = ".neofixer_targets.json"
 _CACHE_MAX_AGE_SEC = 21600  # 6 h

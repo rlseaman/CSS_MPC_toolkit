@@ -51,7 +51,8 @@ from .neo_consensus import (
 
 SOURCE = "lowell"
 ASTORB_URL = "https://ftp.lowell.edu/pub/elgb/astorb.dat.gz"
-USER_AGENT = "CSS_MPC_toolkit/1.0 (consensus ingest)"
+USER_AGENT = ("CSS-MPC-Toolkit/1.0 (consensus ingest; "
+              "+https://hotwireduniverse.org; contact@hotwireduniverse.org)")
 
 _CACHE_FILE = ".astorb.dat.gz"
 _CACHE_MAX_AGE_SEC = 21600  # 6 h

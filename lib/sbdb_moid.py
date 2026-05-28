@@ -25,6 +25,8 @@ import urllib.request
 
 import pandas as pd
 
+from . import USER_AGENT
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -55,7 +57,7 @@ def _fetch_sbdb_moid():
     print(f"Fetching Earth MOID from SBDB ({SBDB_CLASSES})...")
 
     req = urllib.request.Request(url)
-    req.add_header("User-Agent", "CSS_MPC_toolkit/1.0")
+    req.add_header("User-Agent", USER_AGENT)
     with urllib.request.urlopen(req, timeout=120) as resp:
         data = json.loads(resp.read().decode())
 

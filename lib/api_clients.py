@@ -22,6 +22,8 @@ from collections import defaultdict
 from html.parser import HTMLParser
 from statistics import median
 
+from . import USER_AGENT
+
 # ---------------------------------------------------------------------------
 # Outbound-request rate limiting + structured request log
 #
@@ -132,7 +134,7 @@ def _get_json(url, timeout=10):
     host = _host(url)
     _throttle(host)
     req = urllib.request.Request(url, headers={
-        "User-Agent": "CSS-MPC-Toolkit/1.0",
+        "User-Agent": USER_AGENT,
     })
     t0 = time.monotonic()
     try:
@@ -153,7 +155,7 @@ def _get_text(url, timeout=10):
     host = _host(url)
     _throttle(host)
     req = urllib.request.Request(url, headers={
-        "User-Agent": "CSS-MPC-Toolkit/1.0",
+        "User-Agent": USER_AGENT,
     })
     t0 = time.monotonic()
     try:
@@ -823,7 +825,7 @@ def check_service_health():
     try:
         req = urllib.request.Request(
             f"{_NEOFIXER_BASE}/orbit/?object=test",
-            headers={"User-Agent": "CSS-MPC-Toolkit/1.0"})
+            headers={"User-Agent": USER_AGENT})
         with urllib.request.urlopen(req, timeout=5) as resp:
             resp.read()
         results["NEOfixer"] = True
@@ -839,7 +841,7 @@ def check_service_health():
     try:
         req = urllib.request.Request(
             "https://ssd-api.jpl.nasa.gov/sbdb.api?sstr=1",
-            headers={"User-Agent": "CSS-MPC-Toolkit/1.0"})
+            headers={"User-Agent": USER_AGENT})
         with urllib.request.urlopen(req, timeout=5) as resp:
             resp.read()
         results["JPL"] = True
@@ -850,7 +852,7 @@ def check_service_health():
     try:
         req = urllib.request.Request(
             "https://ssd-api.jpl.nasa.gov/sentry.api",
-            headers={"User-Agent": "CSS-MPC-Toolkit/1.0"})
+            headers={"User-Agent": USER_AGENT})
         with urllib.request.urlopen(req, timeout=5) as resp:
             resp.read()
         results["Sentry"] = True
@@ -861,7 +863,7 @@ def check_service_health():
     try:
         req = urllib.request.Request(
             f"{_NEOCC_BASE}?file=test.risk",
-            headers={"User-Agent": "CSS-MPC-Toolkit/1.0"})
+            headers={"User-Agent": USER_AGENT})
         with urllib.request.urlopen(req, timeout=5) as resp:
             resp.read()
         results["NEOCC"] = True

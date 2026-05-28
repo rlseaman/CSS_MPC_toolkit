@@ -25,6 +25,8 @@ import time
 import urllib.request
 from html.parser import HTMLParser
 
+from . import USER_AGENT
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -611,7 +613,7 @@ def _fetch_url(url):
     """Fetch URL content as string with timeout and outbound throttle."""
     _mpc_throttle()
     req = urllib.request.Request(url, headers={
-        "User-Agent": "CSS-MPC-Toolkit/1.0",
+        "User-Agent": USER_AGENT,
     })
     with urllib.request.urlopen(req, timeout=15) as resp:
         return resp.read().decode("utf-8", errors="replace")
@@ -833,7 +835,7 @@ def lookup_mpecs_by_designation(designation):
         _API_URL,
         data=payload,
         method="GET",
-        headers={"User-Agent": "CSS-MPC-Toolkit/1.0",
+        headers={"User-Agent": USER_AGENT,
                  "Content-Type": "application/json"},
     )
     _mpc_throttle()  # share the 5 req/s MPC budget with _fetch_url
