@@ -54,6 +54,9 @@ lib/                          # Python library layer
   observation_history.py      #   V-vs-time figure for the obshist tab
   finding_chart.py            #   Projection math, graticule, NSEW, predictions
   horizons.py                 #   JPL Horizons web-API client + parquet cache
+  api_clients.py              #   JPL SBDB/Sentry, NEOfixer, NEOCC, MPC archive
+                              #     (shared throttle, failure cooldown, APIREQ log)
+  mpec_parser.py              #   MPC.net MPEC list + body fetch / parse (5 req/s)
   ades_export.py              #   ADES XML/PSV generation from NEOCP data
   ades_validate.py            #   XSD validation
 sql/                          # SQL scripts
