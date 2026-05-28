@@ -46,9 +46,9 @@ app/.boxscore_cache*
 app/.obscodes_cache*
 app/.lifetime_cache*
 app/.site_mag_stats*
-app/.mpec_cache/
-app/.station_cache/
-app/.horizons_cache/
+app/.mpec_cache
+app/.station_cache
+app/.horizons_cache
 app/*.meta
 # NEO-consensus source caches written at runtime on the replica host
 app/.cneos_*
