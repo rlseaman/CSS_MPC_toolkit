@@ -207,3 +207,142 @@ WHERE o.permid IN ('2P','141P')
   AND o.obstime > '2025-01-01'
 GROUP BY o.permid, o.stn
 ORDER BY o.permid, n_obs DESC;
+
+\echo
+\echo ============================================================
+\echo  Section H — pairwise directed disagreement matrix
+\echo  Cell [A, -B] = count of objects A has but B does NOT.
+\echo  (Diagonal omitted; cells read row-by-column.)
+\echo ============================================================
+
+WITH w AS (
+  SELECT in_mpc, in_cneos, in_neocc, in_neofixer, in_lowell
+  FROM css_neo_consensus.v_membership_wide
+)
+SELECT 'mpc' AS source_A,
+       0                                                          AS vs_mpc,
+       COUNT(*) FILTER (WHERE in_mpc AND NOT in_cneos)::int        AS vs_cneos,
+       COUNT(*) FILTER (WHERE in_mpc AND NOT in_neocc)::int        AS vs_neocc,
+       COUNT(*) FILTER (WHERE in_mpc AND NOT in_neofixer)::int     AS vs_nf,
+       COUNT(*) FILTER (WHERE in_mpc AND NOT in_lowell)::int       AS vs_lowell,
+       COUNT(*) FILTER (WHERE in_mpc)::int                         AS total
+FROM w
+UNION ALL SELECT 'cneos',
+       COUNT(*) FILTER (WHERE in_cneos AND NOT in_mpc)::int,
+       0,
+       COUNT(*) FILTER (WHERE in_cneos AND NOT in_neocc)::int,
+       COUNT(*) FILTER (WHERE in_cneos AND NOT in_neofixer)::int,
+       COUNT(*) FILTER (WHERE in_cneos AND NOT in_lowell)::int,
+       COUNT(*) FILTER (WHERE in_cneos)::int
+FROM w
+UNION ALL SELECT 'neocc',
+       COUNT(*) FILTER (WHERE in_neocc AND NOT in_mpc)::int,
+       COUNT(*) FILTER (WHERE in_neocc AND NOT in_cneos)::int,
+       0,
+       COUNT(*) FILTER (WHERE in_neocc AND NOT in_neofixer)::int,
+       COUNT(*) FILTER (WHERE in_neocc AND NOT in_lowell)::int,
+       COUNT(*) FILTER (WHERE in_neocc)::int
+FROM w
+UNION ALL SELECT 'neofixer',
+       COUNT(*) FILTER (WHERE in_neofixer AND NOT in_mpc)::int,
+       COUNT(*) FILTER (WHERE in_neofixer AND NOT in_cneos)::int,
+       COUNT(*) FILTER (WHERE in_neofixer AND NOT in_neocc)::int,
+       0,
+       COUNT(*) FILTER (WHERE in_neofixer AND NOT in_lowell)::int,
+       COUNT(*) FILTER (WHERE in_neofixer)::int
+FROM w
+UNION ALL SELECT 'lowell',
+       COUNT(*) FILTER (WHERE in_lowell AND NOT in_mpc)::int,
+       COUNT(*) FILTER (WHERE in_lowell AND NOT in_cneos)::int,
+       COUNT(*) FILTER (WHERE in_lowell AND NOT in_neocc)::int,
+       COUNT(*) FILTER (WHERE in_lowell AND NOT in_neofixer)::int,
+       0,
+       COUNT(*) FILTER (WHERE in_lowell)::int
+FROM w;
+
+\echo
+\echo === MPC-internal: NEA.txt vs mpc_orbits divergence ===
+SELECT COUNT(*) FILTER (WHERE in_mpc AND NOT in_mpc_orbits)  AS in_nea_txt_not_orbits,
+       COUNT(*) FILTER (WHERE in_mpc_orbits AND NOT in_mpc)  AS in_orbits_not_nea_txt,
+       COUNT(*) FILTER (WHERE in_mpc AND in_mpc_orbits)      AS both
+FROM css_neo_consensus.v_membership_wide;
+
+\echo
+\echo ============================================================
+\echo  Section I — observational characteristics per small
+\echo              disagreement category (skip baseline for speed)
+\echo ============================================================
+
+DROP TABLE IF EXISTS pg_temp.cat_small;
+CREATE TEMP TABLE cat_small AS
+SELECT primary_desig, 'missing only NF' AS cat
+FROM css_neo_consensus.v_membership_wide
+WHERE in_mpc AND in_mpc_orbits AND in_cneos
+      AND in_neocc AND NOT in_neofixer AND in_lowell
+UNION ALL SELECT primary_desig, 'only NF'
+FROM css_neo_consensus.v_membership_wide
+WHERE NOT in_mpc AND NOT in_mpc_orbits AND NOT in_cneos
+      AND NOT in_neocc AND in_neofixer AND NOT in_lowell
+UNION ALL SELECT primary_desig, 'mpc_orbits only'
+FROM css_neo_consensus.v_membership_wide
+WHERE NOT in_mpc AND in_mpc_orbits AND NOT in_cneos
+      AND NOT in_neocc AND NOT in_neofixer AND NOT in_lowell
+UNION ALL SELECT primary_desig, 'missing CNEOS+NF'
+FROM css_neo_consensus.v_membership_wide
+WHERE in_mpc AND in_mpc_orbits AND NOT in_cneos
+      AND in_neocc AND NOT in_neofixer AND in_lowell
+UNION ALL SELECT primary_desig, 'missing only Lowell'
+FROM css_neo_consensus.v_membership_wide
+WHERE in_mpc AND in_mpc_orbits AND in_cneos
+      AND in_neocc AND in_neofixer AND NOT in_lowell
+UNION ALL SELECT primary_desig, 'only Lowell'
+FROM css_neo_consensus.v_membership_wide
+WHERE NOT in_mpc AND NOT in_mpc_orbits AND NOT in_cneos
+      AND NOT in_neocc AND NOT in_neofixer AND in_lowell;
+CREATE INDEX ON cat_small (primary_desig);
+ANALYZE cat_small;
+
+\echo --- arc / nobs / age per category (obs_summary_all) ---
+SELECT t.cat,
+       COUNT(*)                                                       AS n,
+       ROUND(AVG(o.nobs)::numeric, 0)                                 AS nobs_avg,
+       PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY o.nobs)::int       AS nobs_p50,
+       ROUND(AVG(o.arc_days)::numeric, 0)                             AS arc_avg,
+       PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY o.arc_days)::int   AS arc_p50,
+       COUNT(*) FILTER (WHERE o.arc_days < 1)                         AS one_night,
+       COUNT(*) FILTER (WHERE o.arc_days < 30)                        AS arc_lt_30d,
+       to_char(MIN(o.first_obs), 'YYYY-MM-DD')                        AS earliest_disc,
+       to_char(MAX(o.last_obs), 'YYYY-MM-DD')                         AS most_recent_obs
+FROM cat_small t
+JOIN obs_summary_all o ON o.primary_desig = t.primary_desig
+GROUP BY t.cat ORDER BY n DESC;
+
+\echo --- top discovery stations per category ---
+WITH ds AS (
+  SELECT t.cat, o.disc_by, COUNT(*) AS n_in_cat
+  FROM cat_small t
+  JOIN obs_summary_all o ON o.primary_desig = t.primary_desig
+  WHERE o.disc_by IS NOT NULL
+  GROUP BY t.cat, o.disc_by
+)
+SELECT cat, disc_by,
+       (SELECT name FROM public.obscodes WHERE obscode = ds.disc_by) AS station_name,
+       n_in_cat
+FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY cat ORDER BY n_in_cat DESC) AS rn
+        FROM ds) ds
+WHERE rn <= 6
+ORDER BY cat, n_in_cat DESC;
+
+\echo --- single-site counts per category (obs_sbn n_stns per provid) ---
+WITH cat_n_stns AS (
+  SELECT t.cat, t.primary_desig,
+         (SELECT COUNT(DISTINCT stn) FROM obs_sbn WHERE provid = t.primary_desig) AS n_stns
+  FROM cat_small t
+)
+SELECT cat,
+       COUNT(*)                            AS n,
+       COUNT(*) FILTER (WHERE n_stns = 1)  AS single_site,
+       COUNT(*) FILTER (WHERE n_stns <= 2) AS stns_le_2,
+       ROUND(AVG(n_stns)::numeric, 1)      AS n_stns_avg
+FROM cat_n_stns
+GROUP BY cat ORDER BY n DESC;
