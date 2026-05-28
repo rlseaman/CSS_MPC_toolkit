@@ -93,8 +93,12 @@ Observation history — are live on prod.
   the full text of the selected MPEC.
 - Per-MPEC enrichment cards pull live metadata: JPL SBDB orbit, JPL
   Sentry impact risk, NEOfixer orbit + ephemeris + ADES, ESA NEOCC
-  risk list. Outbound calls throttled to 5 req/s in
-  `lib/mpec_parser.py::_mpc_throttle`.
+  risk list. These fire on a 60 s `dcc.Interval` poll (up to 10×).
+  Enrichment calls (`lib/api_clients.py`) are per-host rate-limited
+  (JPL 4 req/s, others 5 req/s), cache failures with an escalating
+  cooldown, and emit one `APIREQ` log line per outbound call; MPC
+  fetches keep the separate 5 req/s `lib/mpec_parser.py::_mpc_throttle`.
+  See `docs/dashboard_security.md` → "Outbound politeness".
 - MPEC list itself is fetched live from MPC each time the tab opens;
   individual MPEC bodies are memoized to disk under
   `app/.mpec_cache/` (one `.txt` + `.nav` per MPEC, populated on
@@ -294,9 +298,10 @@ Observation history — are live on prod.
   On-demand fetch when the Predictions toggle is on; disk-cached
   per `(designation, t_start, t_stop, step, observer)` under
   `app/.horizons_cache/<hash>.parquet` with a 1-week TTL.  Cold
-  fetch ~400 ms, cache hit ~30 ms.  Failure modes (Horizons down,
-  designation not resolved) degrade quietly to the observed-only
-  chart with a status-line note.
+  fetch ~400 ms, cache hit ~30 ms.  Outbound is rate-limited to
+  2 req/s and a failure (Horizons down, designation not resolved)
+  starts a 120 s cooldown so re-renders don't re-hit it; failures
+  degrade quietly to the observed-only chart with a status-line note.
 - **Predicted-marker treatment**: year 0 (next 12 months) in solid
   orange `circle-open`; years 1+ in a Turbo gradient by year offset
   so each future year reads as a distinct color.  Dates with

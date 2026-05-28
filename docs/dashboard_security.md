@@ -97,6 +97,40 @@ fairly — verified with 10 concurrent threads emerging at exactly
 ~200 ms intervals.  MPC will see at most 5 req/sec from us
 regardless of what the frontend is doing.
 
+### Outbound politeness: JPL & enrichment APIs (2026-05-27)
+
+The MPC throttle above covers only `minorplanetcenter.net`.  The
+MPEC-Browser enrichment cards (JPL SBDB, JPL Sentry, NEOfixer, ESA
+NEOCC) and the Observation-history finding-chart's Horizons
+predictions are *separate* outbound paths that, until 2026-05-27, had
+no rate limit and never cached failures.
+
+The amplifier: the enrichment cards run on a `dcc.Interval`
+(`mpec-enrich-poll`, 60 s × up to 10) that re-fires until every
+source responds.  Failures returned `None` and were never cached, so
+an object whose SBDB/Sentry was returning `502` got re-hit every
+minute for ten minutes per view session.  Logs showed spikes of
+800–1300 failed JPL attempts/day during JPL-side outages (the `502
+Bad Gateway` / read-timeouts originate at JPL — we were a client
+getting bounced, not the cause).
+
+Fix (commits `a875710` + `97a891d`):
+
+- `lib/api_clients.py` — per-host throttle (`ssd-api.jpl.nasa.gov`
+  4 req/s; NEOfixer / NEOCC / MPC-archive 5 req/s), a failure
+  cooldown (90 s, ×2 backoff to a 600 s cap, reset on first success)
+  that also covers genuine not-founds, and a structured request log.
+- `lib/horizons.py` — 2 req/s + a 120 s failure cooldown that returns
+  an empty frame (caller already renders the observed-only chart).
+
+**Quantifying volume:** `grep APIREQ ~/Claude/mpc_sbn/logs/dashboard_*.log`.
+Each line is `APIREQ ts= host= outcome= ms= url=`, one per *network*
+call (cache hits aren't logged; cooldown suppressions show as the
+`API neg-cache` line).  Note the throttle is **per-process**, and
+prod + dev are two processes sharing Gizmo's outbound IP, so JPL can
+see up to ~2× the per-process cap.  NHATS is never called by this
+project.
+
 ## Hardening Backlog
 
 Three items deliberately deferred.  None are urgent given the threat
@@ -185,6 +219,76 @@ range so `pip install -r requirements.txt` stays reproducible.
 **Risk reduction:** catches CVEs before they become exploitable.
 Low-probability but cheap insurance.
 
+## Cloudflare protection refinements (2026-05-27, for later consideration)
+
+Defense-in-depth candidates that protect **Gizmo (the origin)** — its
+CPU and bandwidth — as opposed to the app-level throttle above, which
+protects the *upstream* services.  **None are deployed.**  They are
+drafted here so a future decision has copy-pasteable expressions.
+
+Reconcile with "Custom WAF rule ladder — not doing" below: these stay
+*off* unless the new `APIREQ` monitoring (item 5) or origin load
+actually shows a problem.  The app-level throttle/cooldown already
+caps outbound volume regardless of inbound rate, so for JPL's sake
+nothing here is required — these only matter if a scraper starts
+costing us origin resources.
+
+Site is on Cloudflare's **free plan**: Bot Fight Mode, *one*
+rate-limit rule, WAF custom rules (Block / Managed Challenge actions),
+and Cache Rules are available; rate-limiting by ASN/bot-score and
+gentler per-rule actions need Pro/Business.
+
+**1. Edge-cache static assets — highest value, lowest risk; safe to
+deploy anytime.**
+Caching → Cache Rules:
+- If:
+  `(starts_with(http.request.uri.path, "/assets/") or starts_with(http.request.uri.path, "/_dash-component-suites/") or http.request.uri.path eq "/_favicon.ico")`
+- Then: *Eligible for cache*, Edge TTL ~1 day.  Dash component suites
+  are content-hash-versioned and `/assets/` are static, so this is
+  safe.  Offloads CSS/JS from Gizmo; never touches the dynamic
+  `/_dash-update-component` POST.
+
+**2. Challenge non-browser POSTs to the callback path — cuts
+scraper-driven outbound calls at the edge.**
+Legit Dash callbacks come from the app's own JS as
+`POST … content-type: application/json`.  Security → WAF → Custom
+rules:
+- Expression:
+  `(http.request.uri.path contains "/_dash-update-component" and http.request.method eq "POST" and not any(http.request.headers["content-type"][*] contains "application/json"))`
+- Action: Managed Challenge (free-tier: Block).
+- **Caveat:** confirm Dash's exact `content-type` against a live
+  callback before enabling, or legit traffic gets challenged.  Probe
+  with `curl -sI` on a real callback first.
+
+**3. Tighter rate-limit sub-rule — optional, only if origin CPU
+suffers.**
+The existing 200/10 s rule on `/_dash-update-component` is unchanged
+and sufficient.  If a scraper just under that threshold strains
+Gizmo, add (Pro+) a second rule keyed to the same path but scoped to
+datacenter ASNs (`ip.src.asnum in {…}`) at a lower threshold with a
+Managed Challenge action.  Not worth it on free tier (Block-only,
+blunt).
+
+**4. Bot category challenge — paid tiers only.**
+If ever upgraded: Security → Bots → challenge "Likely automated" with
+a verified-bot allowlist.  Free-tier Bot Fight Mode (already on) is
+the no-cost equivalent.
+
+**5. Monitoring hook — do this before any of 2–4.**
+A log-watch on Gizmo turns the new request log into the trigger:
+```
+grep -hc APIREQ ~/Claude/mpc_sbn/logs/dashboard_$(date +%Y%m%d)*.log
+# or per-host breakdown:
+grep -h APIREQ ~/Claude/mpc_sbn/logs/dashboard_$(date +%Y%m%d)*.log \
+  | sed -E 's/.*host=([^ ]+).*/\1/' | sort | uniq -c | sort -rn
+```
+Wire into a daily cron or the existing refresh agent; alert if a host
+sustains an unusual rate.  This tells you whether 2–4 are warranted
+*before* paying their false-positive cost.
+
+**Recommended order:** deploy #1 now (pure win); stand up #5; hold
+#2–#4 until #5 shows sustained scraper-driven volume.
+
 ## Intentionally NOT Doing
 
 - **Cloudflare Access / auth of any kind** — the dashboard's purpose
@@ -192,7 +296,9 @@ Low-probability but cheap insurance.
 - **Origin certificate pinning** — no inbound ports, so moot.
 - **Custom WAF rule ladder** — one rate-limit rule is sufficient for
   the actual traffic profile.  More rules add maintenance cost and
-  false-positive risk without material gain.
+  false-positive risk without material gain.  (The candidates in
+  "Cloudflare protection refinements" above stay deferred under this
+  same reasoning until monitoring justifies them.)
 
 All of these remain options if the threat model ever shifts (e.g.,
 if the app ever accepts user input, stores state, or serves

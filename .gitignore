@@ -50,6 +50,15 @@ app/.mpec_cache/
 app/.station_cache/
 app/.horizons_cache/
 app/*.meta
+# NEO-consensus source caches written at runtime on the replica host
+app/.cneos_*
+app/.neocc_*
+app/.neofixer_*
+app/.astorb*
+# Process artifacts + logs
+app/.dash.pid
+app/*.log
+app.log
 
 # Downloaded / generated data files
 downloads/
