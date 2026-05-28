@@ -123,6 +123,25 @@ Fix (commits `a875710` + `97a891d`):
 - `lib/horizons.py` — 2 req/s + a 120 s failure cooldown that returns
   an empty frame (caller already renders the observed-only chart).
 
+**Identifying ourselves on the wire** (commit `cb53a9c`, 2026-05-28): all
+outbound calls now send a canonical, contact-bearing User-Agent.  Since
+our egress IP is a shared, dynamic residential NAT (whole household),
+the UA is how upstreams should attribute traffic to us:
+
+- Interactive paths (api_clients / mpec_parser / horizons / sbdb_moid /
+  neo_list) →
+  `CSS-MPC-Toolkit/1.0 (+https://hotwireduniverse.org; contact@hotwireduniverse.org)`
+  (canonical constant in `lib/__init__.py`).
+- Nightly batch (the four `lib/neo_consensus_*` modules) → same string
+  with a `consensus ingest;` tag, so JPL/MPC can tell the once-a-day
+  refresh apart from interactive load.
+
+Closes two prior gaps: `horizons.py` was previously sending the default
+`python-requests/<v>` UA (un-attributable), and the nightly-batch UA was
+underscored (`CSS_MPC_toolkit/1.0`) while the interactive UA was
+hyphenated.  Verified by hitting `httpbin.org/user-agent` through
+`api_clients._get_json` from the running prod process.
+
 **Quantifying volume:** `grep APIREQ ~/Claude/mpc_sbn/logs/dashboard_*.log`.
 Each line is `APIREQ ts= host= outcome= ms= url=`, one per *network*
 call (cache hits aren't logged; cooldown suppressions show as the
