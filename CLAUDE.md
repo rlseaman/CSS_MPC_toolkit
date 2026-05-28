@@ -480,7 +480,7 @@ Public surface at `hotwireduniverse.org` is served from a Mac mini
 (Gizmo) replica via a Cloudflare named tunnel. Dash itself runs
 under launchd (`com.rlseaman.dashboard`, port 8050) behind a
 waitress WSGI server. A daily launchd agent
-(`org.seaman.gizmo-refresh`, 06:00 MST) runs six stages:
+(`org.seaman.gizmo-refresh`, 06:00 MST) runs seven stages:
   1. `REFRESH MATERIALIZED VIEW CONCURRENTLY obs_sbn_neo`
   2. NEO consensus refresh (six sources, best-effort)
   3. `REFRESH MATERIALIZED VIEW CONCURRENTLY obs_summary`
@@ -496,6 +496,12 @@ waitress WSGI server. A daily launchd agent
   5. `launchctl kickstart -k` on the Dash plist so the running
      process picks up the fresh caches (~5 s of 502s while the
      port rebinds; acceptable for a low-traffic outreach window).
+  6. `scripts/apireq_summary.sh` — tally yesterday's outbound HTTP
+     volume by host / outcome from the just-rotated dashboard log
+     into `~/Claude/mpc_sbn/logs/apireq_summary_YYYYMMDD.txt`. Best-
+     effort; no alerts in week 1 (alert block commented in the script,
+     enable after a baseline). See `docs/dashboard_security.md` →
+     "Cloudflare protection refinements" #5.
 Total elapsed ~16–19 min in normal operation. See `docs/disaster_recovery.md`
 for what to do if a stage fails.
 

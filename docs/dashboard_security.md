@@ -293,20 +293,29 @@ If ever upgraded: Security → Bots → challenge "Likely automated" with
 a verified-bot allowlist.  Free-tier Bot Fight Mode (already on) is
 the no-cost equivalent.
 
-**5. Monitoring hook — do this before any of 2–4.**
-A log-watch on Gizmo turns the new request log into the trigger:
+**5. Monitoring hook — *wired up 2026-05-28* (commit `551c1f1`).**
+`scripts/apireq_summary.sh` runs as stage 6 of
+`org.seaman.gizmo-refresh` (06:00 MST daily, best-effort) and writes
+`~/Claude/mpc_sbn/logs/apireq_summary_YYYYMMDD.txt`.  Sections: source
+logs in window, total + neg-cache totals, per-host × outcome breakdown,
+per-host totals, top neg-cache suppression keys.  Manual run any time:
 ```
-grep -hc APIREQ ~/Claude/mpc_sbn/logs/dashboard_$(date +%Y%m%d)*.log
-# or per-host breakdown:
-grep -h APIREQ ~/Claude/mpc_sbn/logs/dashboard_$(date +%Y%m%d)*.log \
-  | sed -E 's/.*host=([^ ]+).*/\1/' | sort | uniq -c | sort -rn
+~/CSS_MPC_toolkit/scripts/apireq_summary.sh
 ```
-Wire into a daily cron or the existing refresh agent; alert if a host
-sustains an unusual rate.  This tells you whether 2–4 are warranted
-*before* paying their false-positive cost.
+**Week-1 behaviour:** summary only, no alerts.  After ~1–2 weeks of
+baseline observation, enable the alert block at the end of the script
+with per-host thresholds set to ~3× the observed 95th-percentile daily
+count.  Example, for JPL once a baseline exists:
+```
+awk '$2 == "ssd-api.jpl.nasa.gov" && $1 > <THRESHOLD> {hit=1}
+     END{exit !hit}' "$OUT" \
+  && mail -s "APIREQ: JPL daily volume above threshold" \
+          contact@hotwireduniverse.org < "$OUT"
+```
 
-**Recommended order:** deploy #1 now (pure win); stand up #5; hold
-#2–#4 until #5 shows sustained scraper-driven volume.
+**Recommended order:** deploy #1 now (pure win); #5 is live and
+accumulating baselines; hold #2–#4 until #5 shows sustained
+scraper-driven volume.
 
 ## Intentionally NOT Doing
 
