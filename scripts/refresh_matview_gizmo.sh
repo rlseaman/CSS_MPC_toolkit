@@ -18,6 +18,10 @@
 #   4a. Sweep orphan parquets / metas from prior SQL-hash bumps so the
 #       dashboard's "Caches refreshed …" label isn't back-dated.
 #   5. Restart Dash so it picks up the new caches
+#   6. APIREQ summary (best-effort) — tally yesterday's outbound HTTP
+#      volume by host / outcome into a flat file alongside the dashboard
+#      logs (see scripts/apireq_summary.sh). Week-1 monitoring without
+#      alerts; baseline for the eventual Cloudflare refinement decisions.
 #
 # Why this ordering: stages 2 + 3 land first so stage 4's parquet build
 # captures today's source memberships in the consensus_membership cache.
@@ -343,8 +347,32 @@ fi
 STAGE5_ELAPSED=$(( $(date +%s) - START ))
 log "stage 5: elapsed=${STAGE5_ELAPSED}s"
 
+# -- Stage 6: APIREQ summary (best-effort) --
+# Tally outbound HTTP request volume from the just-rotated dashboard
+# log into ~/Claude/mpc_sbn/logs/apireq_summary_YYYYMMDD.txt. Best-
+# effort: missing log dir, missing script, or zero APIREQ lines all
+# resolve quietly. The output is a baseline for the alert-threshold
+# decision documented in docs/dashboard_security.md (refinement #5).
+log "--- stage 6: APIREQ summary (best-effort) ---"
+START=$(date +%s)
+APIREQ_SCRIPT="$PROJECT_DIR/scripts/apireq_summary.sh"
+STAGE6_NOTE=""
+if [[ -x "$APIREQ_SCRIPT" ]]; then
+    if "$APIREQ_SCRIPT"; then
+        STAGE6_NOTE="\"apireq_summary\": \"ok\""
+    else
+        STAGE6_NOTE="\"apireq_summary\": \"fail\""
+        log "stage 6: WARN apireq_summary.sh returned non-zero"
+    fi
+else
+    STAGE6_NOTE="\"apireq_summary\": \"missing\""
+    log "stage 6: WARN $APIREQ_SCRIPT missing or not executable"
+fi
+STAGE6_ELAPSED=$(( $(date +%s) - START ))
+log "stage 6: elapsed=${STAGE6_ELAPSED}s"
+
 TOTAL=$(( $(date +%s) - START_ALL ))
-log "SUCCESS total ${TOTAL}s (stage1=${STAGE1_ELAPSED}s stage2=${STAGE2_ELAPSED}s stage3=${STAGE3_ELAPSED}s stage3b=${STAGE3B_ELAPSED}s stage4=${STAGE4_ELAPSED}s stage5=${STAGE5_ELAPSED}s)"
+log "SUCCESS total ${TOTAL}s (stage1=${STAGE1_ELAPSED}s stage2=${STAGE2_ELAPSED}s stage3=${STAGE3_ELAPSED}s stage3b=${STAGE3B_ELAPSED}s stage4=${STAGE4_ELAPSED}s stage5=${STAGE5_ELAPSED}s stage6=${STAGE6_ELAPSED}s)"
 
 # Record cache file sizes as a sanity-check proxy.
 CACHE_SIZES=""
@@ -357,11 +385,12 @@ for prefix in neo_cache apparition_cache boxscore_cache consensus_membership obs
 done
 CACHE_SIZES="${CACHE_SIZES%, }"
 
-EXTRA="\"stage1_s\": $STAGE1_ELAPSED, \"stage2_s\": $STAGE2_ELAPSED, \"stage3_s\": $STAGE3_ELAPSED, \"stage3b_s\": $STAGE3B_ELAPSED, \"stage4_s\": $STAGE4_ELAPSED, \"stage5_s\": $STAGE5_ELAPSED, \"cache_sizes\": {${CACHE_SIZES}}"
+EXTRA="\"stage1_s\": $STAGE1_ELAPSED, \"stage2_s\": $STAGE2_ELAPSED, \"stage3_s\": $STAGE3_ELAPSED, \"stage3b_s\": $STAGE3B_ELAPSED, \"stage4_s\": $STAGE4_ELAPSED, \"stage5_s\": $STAGE5_ELAPSED, \"stage6_s\": $STAGE6_ELAPSED, \"cache_sizes\": {${CACHE_SIZES}}"
 [[ -n "$CONSENSUS_RESULTS" ]] && EXTRA+=", $CONSENSUS_RESULTS"
 [[ -n "$STAGE3_NOTE" ]] && EXTRA+=", $STAGE3_NOTE"
 [[ -n "$STAGE3B_NOTE" ]] && EXTRA+=", $STAGE3B_NOTE"
 [[ -n "$STAGE5_NOTE" ]] && EXTRA+=", $STAGE5_NOTE"
+[[ -n "$STAGE6_NOTE" ]] && EXTRA+=", $STAGE6_NOTE"
 write_status OK "$TOTAL" "$EXTRA"
 log "=== gizmo refresh end — OK ==="
 exit 0
