@@ -4381,6 +4381,32 @@ app.layout = html.Div(
                                         labelStyle={"fontSize": "12px"},
                                         inputStyle={"marginRight": "4px"},
                                     ),
+                                    # Tab-local plot-height radio for
+                                    # plot #2.  The banner's "Plot height"
+                                    # uses 500/700/900 px (full-page
+                                    # plots) which is far too tall for
+                                    # an UpSet at this scale, so a
+                                    # tab-local radio is the better fit.
+                                    html.Span(
+                                        "Height:",
+                                        className="subtext",
+                                        style={"fontWeight": "600",
+                                               "marginLeft": "12px"}),
+                                    dcc.RadioItems(
+                                        id="consensus-upset-height",
+                                        options=[
+                                            {"label": " S", "value": "220"},
+                                            {"label": " M", "value": "280"},
+                                            {"label": " L", "value": "400"},
+                                            {"label": " XL", "value": "560"},
+                                        ],
+                                        value="280",
+                                        inline=True,
+                                        labelStyle={
+                                            "marginRight": "6px",
+                                            "fontSize": "12px"},
+                                        inputStyle={"marginRight": "3px"},
+                                    ),
                                 ],
                             ),
 
@@ -4392,8 +4418,10 @@ app.layout = html.Div(
                             dcc.Graph(
                                 id="consensus-upset",
                                 config={"displayModeBar": False},
-                                style={"height": "280px",
-                                       "marginBottom": "12px"},
+                                # No fixed height -- the height radio
+                                # above drives the figure's intrinsic
+                                # height, and the wrapper grows to fit.
+                                style={"marginBottom": "12px"},
                             ),
 
                             # Download buttons
@@ -14459,7 +14487,7 @@ def _upset_overlay_categories(df, color_by):
 
 
 def _build_upset_figure(df, top_n=15, color_by="pattern",
-                        show_mixed=False):
+                        show_mixed=False, height=280):
     """Render an UpSet plot of source-membership patterns: top
     subplot is intersection sizes (sorted descending, max top_n);
     bottom subplot is the membership matrix with dots indicating
@@ -14479,7 +14507,7 @@ def _build_upset_figure(df, top_n=15, color_by="pattern",
 
     if df.empty:
         return go.Figure(layout={
-            "height": 280,
+            "height": int(height),
             "margin": {"l": 8, "r": 8, "t": 8, "b": 8},
             "xaxis": {"visible": False},
             "yaxis": {"visible": False},
@@ -14506,7 +14534,7 @@ def _build_upset_figure(df, top_n=15, color_by="pattern",
     pat_counts = pat_counts.drop(index=all_six_key, errors="ignore")
     if pat_counts.empty:
         return go.Figure(layout={
-            "height": 280,
+            "height": int(height),
             "margin": {"l": 8, "r": 8, "t": 8, "b": 8},
             "xaxis": {"visible": False},
             "yaxis": {"visible": False},
@@ -14764,7 +14792,7 @@ def _build_upset_figure(df, top_n=15, color_by="pattern",
         row=2, col=1,
     )
     fig.update_layout(
-        height=280,
+        height=int(height),
         margin=dict(l=8, r=8, t=22, b=8),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
@@ -15039,6 +15067,7 @@ app.clientside_callback(
     Input("consensus-filter", "value"),
     Input("consensus-upset-color", "value"),
     Input("consensus-upset-mixed", "value"),
+    Input("consensus-upset-height", "value"),
 )
 def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
                      r_lowell,
@@ -15047,7 +15076,7 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
                      q_min, q_max, e_min, e_max, i_min, i_max,
                      h_min, h_max, u_min, u_max, nopp_min, nopp_max,
                      first_min, first_max, last_min, last_max,
-                     filter_value, upset_color, upset_mixed):
+                     filter_value, upset_color, upset_mixed, upset_height):
     sources = {
         "mpc": r_mpc, "mpc_orbits": r_mpc_orbits, "cneos": r_cneos,
         "neocc": r_neocc, "neofixer": r_neofixer, "lowell": r_lowell,
@@ -15073,6 +15102,14 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
     }
 
     show_mixed = "show" in (upset_mixed or [])
+    try:
+        upset_height_px = int(upset_height) if upset_height else 280
+    except (TypeError, ValueError):
+        upset_height_px = 280
+    # Whitelist guard so a bad cookie / hand-edited URL can't blow
+    # up the figure with absurd values.
+    if not 120 <= upset_height_px <= 1200:
+        upset_height_px = 280
 
     print(f"[consensus] inc={include!r} exc={exclude!r} "
           f"cinc={class_includes!r} cexc={class_excludes!r} "
@@ -15097,7 +15134,8 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
         return (f"Query failed: {type(e).__name__}: {e}", [], 0,
                 _build_breakdown_figure(empty),
                 _build_upset_figure(empty, color_by=upset_color,
-                                    show_mixed=show_mixed))
+                                    show_mixed=show_mixed,
+                                    height=upset_height_px))
     print(f"[consensus] -> n_total={n_total} returned_rows={len(df)}",
           flush=True)
 
@@ -15116,7 +15154,8 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
     return (count_text, _format_table_rows(df), 0,
             _build_breakdown_figure(df),
             _build_upset_figure(df, color_by=upset_color,
-                                show_mixed=show_mixed))
+                                show_mixed=show_mixed,
+                                height=upset_height_px))
 
 
 def _load_nea_txt_lookup():
