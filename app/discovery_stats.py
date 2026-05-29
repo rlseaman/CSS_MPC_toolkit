@@ -3192,9 +3192,15 @@ _CONSENSUS_TABLE_COLUMNS = [
     {"name": "Designation",   "id": "primary_desig"},
     {"name": "Permid",        "id": "permid"},
     {"name": "Name",          "id": "iau_name"},
+    # Per-row external link.  Target is chosen globally by the
+    # "Open external in:" dropdown above the table, then rendered as
+    # a markdown link that opens in a new tab (link_target=_blank on
+    # the DataTable's markdown_options).
+    {"name": "↗",             "id": "external_link",
+                              "presentation": "markdown"},
     # Alias resolution against MPC's current_identifications: shows
     # whether the row's primary_desig is itself a secondary of some
-    # other primary (15 such rows today), so the six split-primary
+    # other primary (9 such rows today), so the split-primary
     # consensus cases are visible without leaving the tab.
     {"name": "Alias?",        "id": "is_alias"},
     {"name": "True primary",  "id": "true_primary"},
@@ -3225,6 +3231,57 @@ _CONSENSUS_TABLE_BOOL_COLS = [
     "in_mpc", "in_mpc_orbits", "in_cneos",
     "in_neocc", "in_neofixer", "in_lowell",
 ]
+
+# External-service link targets for the per-row "↗" column.  The
+# dropdown above the table picks one of these globally; every row's
+# "↗" cell then becomes a markdown link to the chosen service.  URL
+# templates are copied from the existing MPEC-Browser link builder
+# (lib/api_clients/MPEC tab) so the conventions stay in lockstep:
+# SBDB / Sentry / MPC accept unpacked-or-numbered designation
+# strings; NEOfixer wants the packed designation; NEOCC wants the
+# unpacked form with spaces stripped.
+_EXTERNAL_TARGETS = [
+    ("sbdb",         "JPL SBDB"),
+    ("sentry",       "JPL Sentry"),
+    ("mpc_explorer", "MPC Explorer"),
+    ("mpc_db",       "MPC DB (legacy)"),
+    ("neofixer",     "NEOfixer"),
+    ("neocc",        "ESA NEOCC"),
+]
+_EXTERNAL_TARGETS_VALID = {t for t, _ in _EXTERNAL_TARGETS}
+_EXTERNAL_TARGETS_DEFAULT = "sbdb"
+
+
+def _consensus_external_url(designation, packed_desig, target):
+    """Build the external-service URL for one row given the chosen
+    target.  Returns None when the row is missing the field that
+    target needs (e.g., NEOfixer with no packed_desig)."""
+    import urllib.parse as _up
+    if not designation:
+        return None
+    desig_enc = _up.quote(str(designation), safe="")
+    if target == "sbdb":
+        return (f"https://ssd.jpl.nasa.gov/tools/sbdb_lookup.html"
+                f"#/?sstr={desig_enc}")
+    if target == "sentry":
+        return (f"https://cneos.jpl.nasa.gov/sentry/details.html"
+                f"#?des={desig_enc}")
+    if target == "mpc_explorer":
+        return (f"https://data.minorplanetcenter.net/explorer/"
+                f"?tab=Designated&search={desig_enc}")
+    if target == "mpc_db":
+        return (f"https://www.minorplanetcenter.net/db_search/"
+                f"show_object?utf8=✓&object_id={desig_enc}")
+    if target == "neofixer":
+        if not packed_desig:
+            return None
+        return (f"https://neofixer.arizona.edu/site/500/"
+                f"{_up.quote(str(packed_desig), safe='')}")
+    if target == "neocc":
+        nospace = str(designation).replace(" ", "")
+        return (f"https://neo.ssa.esa.int/search-for-asteroids"
+                f"?sum=1&des={_up.quote(nospace, safe='')}")
+    return None
 
 # UpSet plot color-overlay configuration.  The radio above plot #2 picks
 # one of these; "pattern" keeps the existing 1-source-light → 6-source-dark
@@ -4581,6 +4638,34 @@ app.layout = html.Div(
                             ),
                             dcc.Download(id="consensus-download"),
 
+                            # Global "Open external in:" picker.  Drives
+                            # the per-row "↗" markdown link column.
+                            # Default = JPL SBDB.
+                            html.Div(
+                                style={"display": "flex", "gap": "8px",
+                                       "alignItems": "center",
+                                       "marginBottom": "8px",
+                                       "fontSize": "12px"},
+                                children=[
+                                    html.Span(
+                                        "Open external links in:",
+                                        className="subtext",
+                                        style={"fontWeight": "600"}),
+                                    dcc.Dropdown(
+                                        id="consensus-external-target",
+                                        options=[
+                                            {"label": label, "value": tid}
+                                            for tid, label in
+                                            _EXTERNAL_TARGETS
+                                        ],
+                                        value=_EXTERNAL_TARGETS_DEFAULT,
+                                        clearable=False,
+                                        style={"width": "200px",
+                                               "fontSize": "12px"},
+                                    ),
+                                ],
+                            ),
+
                             # Result table — declared once in the
                             # layout so updates only mutate `data` and
                             # `page_current` props, never replace the
@@ -4595,6 +4680,11 @@ app.layout = html.Div(
                                 page_current=0,
                                 sort_action="native",
                                 filter_action="native",
+                                # Open all per-row markdown links in a
+                                # new tab so users don't lose their
+                                # filter state.
+                                markdown_options={
+                                    "link_target": "_blank"},
                                 style_table={"overflowX": "auto"},
                                 style_cell={
                                     "fontFamily": "sans-serif",
@@ -14448,14 +14538,28 @@ def _consensus_query(include, exclude, hide_all_agree=False,
     return df, int(n_total)
 
 
-def _format_table_rows(df):
+def _format_table_rows(df, external_target=_EXTERNAL_TARGETS_DEFAULT):
     """Build the list-of-records data payload for the consensus DataTable.
 
     Returns a list of dicts ready to assign to dash_table.DataTable.data.
     The DataTable component itself lives permanently in the layout — we
     only update the data prop, not the whole component.
+
+    `external_target` selects which service the per-row "↗" markdown
+    link points at; whitelist-checked against _EXTERNAL_TARGETS_VALID
+    before use (defaults to sbdb on bad input).
     """
     display_df = df.copy()
+    # Per-row external link as a Markdown cell.  The icon doubles as
+    # affordance and target hint; hover shows the URL.
+    if external_target not in _EXTERNAL_TARGETS_VALID:
+        external_target = _EXTERNAL_TARGETS_DEFAULT
+    def _ext_link(row):
+        url = _consensus_external_url(row.get("primary_desig"),
+                                      row.get("packed_desig"),
+                                      external_target)
+        return f"[↗]({url})" if url else ""
+    display_df["external_link"] = display_df.apply(_ext_link, axis=1)
     # Boolean columns rendered as ✓ / blank for compactness.
     for col in _CONSENSUS_TABLE_BOOL_COLS:
         display_df[col] = display_df[col].map({True: "✓", False: ""})
@@ -15394,6 +15498,7 @@ app.clientside_callback(
     Input("consensus-last_obs-max", "value"),
     Input("consensus-filter", "value"),
     Input("consensus-alias-filter", "value"),
+    Input("consensus-external-target", "value"),
     Input("consensus-upset-color", "value"),
     Input("consensus-upset-mixed", "value"),
     Input("consensus-upset-rare", "value"),
@@ -15407,7 +15512,7 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
                      q_min, q_max, e_min, e_max, i_min, i_max,
                      h_min, h_max, u_min, u_max, nopp_min, nopp_max,
                      first_min, first_max, last_min, last_max,
-                     filter_value, alias_filter,
+                     filter_value, alias_filter, external_target,
                      upset_color, upset_mixed, upset_rare,
                      upset_height, overlay_filter):
     sources = {
@@ -15543,7 +15648,9 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
         count_text += ("  (only showing objects that do not appear in "
                        "all lists)")
 
-    return (count_text, _format_table_rows(df), 0,
+    return (count_text,
+            _format_table_rows(df, external_target=external_target),
+            0,
             _build_breakdown_figure(df),
             _build_upset_figure(df, color_by=upset_color,
                                 show_mixed=show_mixed,
