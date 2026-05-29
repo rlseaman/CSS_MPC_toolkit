@@ -3226,6 +3226,86 @@ _CONSENSUS_TABLE_BOOL_COLS = [
     "in_neocc", "in_neofixer", "in_lowell",
 ]
 
+# UpSet plot color-overlay configuration.  The radio above plot #2 picks
+# one of these; "pattern" keeps the existing 1-source-light → 6-source-dark
+# consensus gradient (unchanged single bar per column).  The others stack
+# each column by category so the same geometry shows the orthogonal
+# explanatory dimension (who discovered / how big / when / arc / q).
+#
+# Bins and station list reflect the 2026-05-29 distribution drill: top-8
+# stations carry ~86 % of disagreements, the remaining ~50 stations roll
+# into "Other".  H thresholds 19.25 (≈ 500 m) and 24.25 (≈ 50 m) per the
+# user's call.  Years bin pre-2010 / 2010s / 2020+ to avoid a tiny
+# pre-2000 bucket.  q-proximity collapses the (0.05–0.10) thin bin into
+# 0.01–0.10.
+_UPSET_OVERLAY_OPTIONS = [
+    {"label": "Pattern",             "value": "pattern"},
+    {"label": "Discovery site",      "value": "disc_site"},
+    {"label": "H mag (size)",        "value": "h_size"},
+    {"label": "Discovery decade",    "value": "year_disc"},
+    {"label": "Arc length",          "value": "arc_class"},
+    {"label": "q distance from 1.3", "value": "q_proximity"},
+]
+_UPSET_OVERLAY_VALID = {o["value"] for o in _UPSET_OVERLAY_OPTIONS}
+
+_UPSET_TOP_STATIONS = ["C51", "F51", "G45", "G96",
+                       "F52", "704", "691", "V00"]
+
+_UPSET_CATEGORY_ORDER = {
+    "disc_site":   _UPSET_TOP_STATIONS + ["Other", "(unknown)"],
+    "h_size":      ["≥ 500 m", "50–500 m", "< 50 m", "(unknown)"],
+    "year_disc":   ["pre-2010", "2010s", "2020+", "(unknown)"],
+    "arc_class":   ["single-night (<1 d)", "1–30 d",
+                    "30 d – 1 yr", "≥ 1 yr", "(unknown)"],
+    "q_proximity": ["within 0.01 of 1.3", "0.01–0.10",
+                    ">0.10 from 1.3", "(unknown)"],
+}
+
+# One color per category per overlay.  Categorical overlays use distinct
+# hues; size / time / arc / q use sequential ramps so the gradient is
+# legible inside a stacked bar.  Unknown / missing always falls in
+# neutral dark gray so the visual cue for "data not available" is
+# consistent across overlays.
+_UPSET_PALETTES = {
+    "disc_site": {
+        "C51":       "#7570b3",
+        "F51":       "#1b9e77",
+        "G45":       "#d95f02",
+        "G96":       "#e7298a",
+        "F52":       "#66a61e",
+        "704":       "#e6ab02",
+        "691":       "#a6761d",
+        "V00":       "#1f78b4",
+        "Other":     "#bdbdbd",
+        "(unknown)": "#404040",
+    },
+    "h_size": {
+        "≥ 500 m":   "#08306b",
+        "50–500 m":  "#4292c6",
+        "< 50 m":    "#c6dbef",
+        "(unknown)": "#404040",
+    },
+    "year_disc": {
+        "pre-2010":  "#5e3c99",
+        "2010s":     "#b2abd2",
+        "2020+":     "#fdb863",
+        "(unknown)": "#404040",
+    },
+    "arc_class": {
+        "single-night (<1 d)": "#a50026",
+        "1–30 d":              "#f46d43",
+        "30 d – 1 yr":         "#74add1",
+        "≥ 1 yr":              "#313695",
+        "(unknown)":           "#404040",
+    },
+    "q_proximity": {
+        "within 0.01 of 1.3": "#d73027",
+        "0.01–0.10":          "#fdae61",
+        ">0.10 from 1.3":     "#4575b4",
+        "(unknown)":          "#404040",
+    },
+}
+
 # Static columns for the Observation history dev-tab DataTable.  Mirrors
 # the consensus table layout minus the six catalog booleans and three NF
 # columns (per the original Observability scoping), with `a` and Earth
@@ -4251,6 +4331,38 @@ app.layout = html.Div(
                                             "verticalAlign": "middle"}),
                                         "Gray: 2–4 sources disagree",
                                     ]),
+                                ],
+                            ),
+
+                            # Color-overlay radio for plot #2.  Geometry
+                            # (one column per pattern, dot matrix below)
+                            # is unchanged; the radio chooses what each
+                            # column's stack is broken up by.  Default
+                            # "Pattern" preserves the original
+                            # consensus-gradient single bar.
+                            html.Div(
+                                style={"display": "flex",
+                                       "gap": "10px",
+                                       "alignItems": "center",
+                                       "flexWrap": "wrap",
+                                       "marginBottom": "4px",
+                                       "fontSize": "12px"},
+                                children=[
+                                    html.Span(
+                                        "Color overlay:",
+                                        className="subtext",
+                                        style={"fontWeight": "600"}),
+                                    dcc.RadioItems(
+                                        id="consensus-upset-color",
+                                        options=_UPSET_OVERLAY_OPTIONS,
+                                        value="pattern",
+                                        inline=True,
+                                        labelStyle={
+                                            "marginRight": "12px",
+                                            "fontSize": "12px"},
+                                        inputStyle={
+                                            "marginRight": "4px"},
+                                    ),
                                 ],
                             ),
 
@@ -14282,7 +14394,53 @@ def _build_breakdown_figure(df, theme="dark"):
     return fig
 
 
-def _build_upset_figure(df, top_n=15):
+def _upset_overlay_categories(df, color_by):
+    """Return a same-length Series of category labels for the chosen
+    UpSet overlay.  Always string-typed (never NaN) so the downstream
+    groupby is deterministic; rows with missing input land in
+    "(unknown)".  Returns None if `color_by` is the no-op default
+    ("pattern") or not in the whitelist.
+    """
+    if color_by not in _UPSET_OVERLAY_VALID or color_by == "pattern":
+        return None
+    if color_by == "disc_site":
+        s = df.get("disc_by", pd.Series([""] * len(df))).fillna("").astype(str)
+        return s.where(s.isin(_UPSET_TOP_STATIONS),
+                       s.where(s == "", "Other").where(s != "", "(unknown)"))
+    if color_by == "h_size":
+        h = pd.to_numeric(df.get("h"), errors="coerce")
+        return pd.Series(
+            np.where(h.isna(), "(unknown)",
+                np.where(h < 19.25, "≥ 500 m",
+                np.where(h < 24.25, "50–500 m", "< 50 m"))),
+            index=df.index)
+    if color_by == "year_disc":
+        y = pd.to_datetime(df.get("first_obs"), errors="coerce").dt.year
+        return pd.Series(
+            np.where(y.isna(), "(unknown)",
+                np.where(y < 2010, "pre-2010",
+                np.where(y < 2020, "2010s", "2020+"))),
+            index=df.index)
+    if color_by == "arc_class":
+        a = pd.to_numeric(df.get("arc"), errors="coerce")
+        return pd.Series(
+            np.where(a.isna(), "(unknown)",
+                np.where(a < 1,   "single-night (<1 d)",
+                np.where(a < 30,  "1–30 d",
+                np.where(a < 365, "30 d – 1 yr", "≥ 1 yr")))),
+            index=df.index)
+    if color_by == "q_proximity":
+        q = pd.to_numeric(df.get("q"), errors="coerce")
+        d = (q - 1.3).abs()
+        return pd.Series(
+            np.where(d.isna(), "(unknown)",
+                np.where(d < 0.01, "within 0.01 of 1.3",
+                np.where(d < 0.10, "0.01–0.10", ">0.10 from 1.3"))),
+            index=df.index)
+    return None
+
+
+def _build_upset_figure(df, top_n=15, color_by="pattern"):
     """Render an UpSet plot of source-membership patterns: top
     subplot is intersection sizes (sorted descending, max top_n);
     bottom subplot is the membership matrix with dots indicating
@@ -14363,41 +14521,93 @@ def _build_upset_figure(df, top_n=15):
         shared_xaxes=True,
     )
 
-    # Top: intersection-size bars. Color each bar by how many sources
-    # are in the pattern — a "consensus gradient" from gray (1 source)
-    # to dark (all six).
+    # Top: intersection-size bars.
     pattern_n_src = [sum(p) for p in top.index]
-    bar_colors = [
-        f"rgba(91, 141, 239, {0.15 + 0.85 * (n_/src_count):.2f})"
-        for n_ in pattern_n_src
+    is_overlay = (color_by in _UPSET_OVERLAY_VALID
+                  and color_by != "pattern")
+
+    # Pre-computed once for both paths' hover text.
+    included_per_pat = [
+        ", ".join(src_labels[j]
+                  for j, inc in enumerate(pat) if inc) or "(none)"
+        for pat in top.index
     ]
-    bar_text = [f"{v:,}" for v in top.values]
-    bar_hover = []
-    for pat, cnt in top.items():
-        included = [src_labels[j] for j, inc in enumerate(pat) if inc]
-        n_in = len(included)
-        bar_hover.append(
+
+    if not is_overlay:
+        # Default "Pattern" overlay: one bar per column, coloured by the
+        # consensus gradient (1 source light → 6 sources dark).  Click
+        # customdata = the bool tuple of the pattern.
+        bar_colors = [
+            f"rgba(91, 141, 239, {0.15 + 0.85 * (n_/src_count):.2f})"
+            for n_ in pattern_n_src
+        ]
+        bar_text = [f"{v:,}" for v in top.values]
+        bar_hover = [
             f"<b>{cnt:,} NEOs</b><br>"
-            f"In {n_in} source{'s' if n_in != 1 else ''}: "
-            + (", ".join(included) if included else "(none)")
-        )
+            f"In {sum(pat)} source{'s' if sum(pat) != 1 else ''}: "
+            f"{included_per_pat[i]}"
+            for i, (pat, cnt) in enumerate(top.items())
+        ]
+        bar_customdata = [[bool(v) for v in pat] for pat in top.index]
 
-    # customdata carries the boolean tuple for each bar so a click
-    # handler downstream can map the bar back to a filter state.
-    bar_customdata = [[bool(v) for v in pat] for pat in top.index]
+        fig.add_trace(go.Bar(
+            x=list(range(n)),
+            y=top.values,
+            text=bar_text,
+            textposition="outside",
+            textfont=dict(color=fg_neutral, size=10),
+            marker=dict(color=bar_colors, line=dict(width=0)),
+            hovertext=bar_hover,
+            hoverinfo="text",
+            customdata=bar_customdata,
+            showlegend=False,
+        ), row=1, col=1)
+    else:
+        # Overlay path: same x-axis, but each column is broken into
+        # stacked segments by overlay category.  Each segment's
+        # customdata keeps the bool tuple in positions 0..5 so the
+        # existing click-to-snap handler still works; position 6 carries
+        # the category label for the upcoming overlay-aware refinement.
+        cats = _upset_overlay_categories(df, color_by)
+        df_cat = df.assign(_cat=(cats.values if cats is not None
+                                 else "(unknown)"))
+        # One groupby keyed on bools + category so each segment is one
+        # dict lookup.  Across ~42K NEOs × 9 categories × 15 patterns
+        # this stays well under a tenth of a second.
+        gb = df_cat.groupby(bool_cols + ["_cat"], sort=False).size()
+        gb_dict = {tuple(k): int(v) for k, v in gb.items()}
+        col_totals = list(top.values)
+        palette = _UPSET_PALETTES[color_by]
+        order = _UPSET_CATEGORY_ORDER[color_by]
 
-    fig.add_trace(go.Bar(
-        x=list(range(n)),
-        y=top.values,
-        text=bar_text,
-        textposition="outside",
-        textfont=dict(color=fg_neutral, size=10),
-        marker=dict(color=bar_colors, line=dict(width=0)),
-        hovertext=bar_hover,
-        hoverinfo="text",
-        customdata=bar_customdata,
-        showlegend=False,
-    ), row=1, col=1)
+        for cat_label in order:
+            y_vals = []
+            customdata = []
+            hover = []
+            for i, pat in enumerate(top.index):
+                cnt = gb_dict.get(tuple(pat) + (cat_label,), 0)
+                y_vals.append(cnt)
+                customdata.append([bool(v) for v in pat] + [cat_label])
+                tot = col_totals[i] or 1
+                hover.append(
+                    f"<b>{cnt:,}</b> NEOs "
+                    f"({100.0*cnt/tot:.0f} % of this column)<br>"
+                    f"Category: <b>{cat_label}</b><br>"
+                    f"Pattern: {included_per_pat[i]}"
+                )
+            if not any(y_vals):
+                continue
+            fig.add_trace(go.Bar(
+                name=cat_label,
+                x=list(range(n)),
+                y=y_vals,
+                marker=dict(color=palette.get(cat_label, "#888888"),
+                            line=dict(width=0)),
+                customdata=customdata,
+                hovertext=hover,
+                hoverinfo="text",
+                showlegend=True,
+            ), row=1, col=1)
 
     # Bottom: dot matrix. Filled dots = source is in pattern; empty
     # gray dots = source is not. One Scatter trace for all dots; one
@@ -14469,7 +14679,21 @@ def _build_upset_figure(df, top_n=15):
         margin=dict(l=8, r=8, t=22, b=8),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        showlegend=False,
+        # Show the legend only in overlay mode -- the default "Pattern"
+        # path has one trace and no useful legend entries.
+        showlegend=is_overlay,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom", y=1.04,
+            xanchor="right",  x=1.0,
+            font=dict(size=9, color=fg_neutral),
+            bgcolor="rgba(0,0,0,0)",
+            itemclick=False, itemdoubleclick=False,
+        ),
+        # "stack" puts the per-category traces on top of each other so
+        # the visible bar geometry matches the Pattern path; "group" is
+        # Plotly's default and would render them side-by-side.
+        barmode="stack" if is_overlay else "group",
         title=dict(text=subtitle,
                    font=dict(color=fg_neutral, size=11),
                    x=0.5, xanchor="center", y=0.98, yanchor="top"),
@@ -14621,10 +14845,13 @@ app.clientside_callback(
             return Array(7).fill(window.dash_clientside.no_update);
         }
         const cd = clickData.points[0].customdata;
-        if (!cd || cd.length !== 6) {
+        // Overlay-mode segments carry [bool_tuple..., category] (length 7);
+        // pattern-mode bars carry the bare bool tuple (length 6).  Accept
+        // both — we only need the first six for the source-radio snap.
+        if (!cd || cd.length < 6) {
             return Array(7).fill(window.dash_clientside.no_update);
         }
-        const radios = cd.map(b => b ? 'include' : 'exclude');
+        const radios = cd.slice(0, 6).map(b => b ? 'include' : 'exclude');
         return [...radios, []];
     }
     """,
@@ -14715,6 +14942,7 @@ app.clientside_callback(
     Input("consensus-last_obs-min", "value"),
     Input("consensus-last_obs-max", "value"),
     Input("consensus-filter", "value"),
+    Input("consensus-upset-color", "value"),
 )
 def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
                      r_lowell,
@@ -14723,7 +14951,7 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
                      q_min, q_max, e_min, e_max, i_min, i_max,
                      h_min, h_max, u_min, u_max, nopp_min, nopp_max,
                      first_min, first_max, last_min, last_max,
-                     filter_value):
+                     filter_value, upset_color):
     sources = {
         "mpc": r_mpc, "mpc_orbits": r_mpc_orbits, "cneos": r_cneos,
         "neocc": r_neocc, "neofixer": r_neofixer, "lowell": r_lowell,
@@ -14769,7 +14997,7 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
         empty = pd.DataFrame()
         return (f"Query failed: {type(e).__name__}: {e}", [], 0,
                 _build_breakdown_figure(empty),
-                _build_upset_figure(empty))
+                _build_upset_figure(empty, color_by=upset_color))
     print(f"[consensus] -> n_total={n_total} returned_rows={len(df)}",
           flush=True)
 
@@ -14787,7 +15015,7 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
 
     return (count_text, _format_table_rows(df), 0,
             _build_breakdown_figure(df),
-            _build_upset_figure(df))
+            _build_upset_figure(df, color_by=upset_color))
 
 
 def _load_nea_txt_lookup():
