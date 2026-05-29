@@ -4381,6 +4381,23 @@ app.layout = html.Div(
                                         labelStyle={"fontSize": "12px"},
                                         inputStyle={"marginRight": "4px"},
                                     ),
+                                    # Rare-patterns toggle: adds a
+                                    # separate "Rare (rank > 15)" bin
+                                    # to the right of Mixed.  Distinct
+                                    # from Mixed -- this is the long-
+                                    # tail-by-rank, not by source-type.
+                                    dcc.Checklist(
+                                        id="consensus-upset-rare",
+                                        options=[{
+                                            "label": " Show Rare (rank >15) bin",
+                                            "value": "show",
+                                        }],
+                                        value=[],
+                                        inline=True,
+                                        style={"marginLeft": "6px"},
+                                        labelStyle={"fontSize": "12px"},
+                                        inputStyle={"marginRight": "4px"},
+                                    ),
                                     # Tab-local plot-height radio for
                                     # plot #2.  The banner's "Plot height"
                                     # uses 500/700/900 px (full-page
@@ -14525,7 +14542,7 @@ def _upset_overlay_categories(df, color_by):
 
 
 def _build_upset_figure(df, top_n=15, color_by="pattern",
-                        show_mixed=False, height=280):
+                        show_mixed=False, show_rare=False, height=280):
     """Render an UpSet plot of source-membership patterns: top
     subplot is intersection sizes (sorted descending, max top_n);
     bottom subplot is the membership matrix with dots indicating
@@ -14609,8 +14626,29 @@ def _build_upset_figure(df, top_n=15, color_by="pattern",
     mixed_mask = (n_src_per_row >= 2) & (n_src_per_row <= 4)
     mixed_count = int(mixed_mask.sum())
     add_mixed_col = bool(show_mixed) and mixed_count > 0
-    n_cols = n + (1 if add_mixed_col else 0)
+
+    # Rare-bin: when the toggle is on, aggregate every pattern that
+    # falls beyond the top-N cutoff (the "+K NEOs in M rarer patterns"
+    # tail from the subtitle).  Distinct from Mixed: Rare is by RANK
+    # (count outside top-N) while Mixed is by source-pattern TYPE
+    # (n_src in 2..4).  They overlap heavily but neither subsumes the
+    # other -- Rare can include tiny 5/6 or 1/6 patterns; Mixed
+    # includes top-N 2-4 patterns.
+    rare_count = other_total
+    add_rare_col = bool(show_rare) and rare_count > 0
+    # Pre-compute the per-row mask for Rare (rows whose pattern is in
+    # pat_counts.iloc[top_n:].index) so overlay-mode stacking can split
+    # them by category.
+    if add_rare_col:
+        rare_patterns = set(pat_counts.iloc[top_n:].index)
+        rare_mask = df[bool_cols].apply(tuple, axis=1).isin(rare_patterns)
+    else:
+        rare_mask = None
+
+    extras = (1 if add_mixed_col else 0) + (1 if add_rare_col else 0)
+    n_cols = n + extras
     mixed_x = n  # x-position of the Mixed column (right of top-N)
+    rare_x = n + (1 if add_mixed_col else 0)  # right of Mixed
 
     fig = make_subplots(
         rows=2, cols=1,
@@ -14667,6 +14705,26 @@ def _build_upset_figure(df, top_n=15, color_by="pattern",
             )
             bar_customdata.append([False] * src_count)
 
+        # Append the Rare aggregate column (right of Mixed, if both
+        # are on; otherwise immediately right of the top-N).
+        # customdata trailing element "rare" distinguishes it from
+        # Mixed in the click handler.
+        if add_rare_col:
+            n_rare_patterns = n_patterns - n
+            bar_x.append(rare_x)
+            bar_y.append(rare_count)
+            bar_colors.append("#5a5a5a")  # slightly darker than Mixed
+            bar_text.append(f"{rare_count:,}")
+            bar_hover.append(
+                f"<b>{rare_count:,} NEOs</b><br>"
+                f"Rare patterns (rank &gt; {top_n})<br>"
+                f"Aggregate of {n_rare_patterns} pattern"
+                f"{'s' if n_rare_patterns != 1 else ''} beyond the "
+                f"top-{top_n}; each is too small to surface "
+                "individually."
+            )
+            bar_customdata.append([False] * src_count + ["rare"])
+
         fig.add_trace(go.Bar(
             x=bar_x,
             y=bar_y,
@@ -14697,14 +14755,20 @@ def _build_upset_figure(df, top_n=15, color_by="pattern",
         palette = _UPSET_PALETTES[color_by]
         order = _UPSET_CATEGORY_ORDER[color_by]
 
-        # Pre-compute the per-category Mixed counts once so the per-
-        # category loop below is one dict lookup per category.
+        # Pre-compute the per-category Mixed + Rare counts so each
+        # category-trace loop is one dict lookup per bin.
         mixed_cat_counts = {}
         if add_mixed_col:
             for cat_label, cnt in (
                 df_cat[mixed_mask]["_cat"].value_counts().items()
             ):
                 mixed_cat_counts[cat_label] = int(cnt)
+        rare_cat_counts = {}
+        if add_rare_col:
+            for cat_label, cnt in (
+                df_cat[rare_mask]["_cat"].value_counts().items()
+            ):
+                rare_cat_counts[cat_label] = int(cnt)
 
         for cat_label in order:
             y_vals = []
@@ -14733,6 +14797,21 @@ def _build_upset_figure(df, top_n=15, color_by="pattern",
                     f"<b>{mc:,}</b> NEOs ({pct:.0f} % of Mixed)<br>"
                     f"Category: <b>{cat_label}</b><br>"
                     f"Aggregate of 2–4-source disagreements"
+                )
+
+            # Append the Rare cell for this category.  customdata's
+            # trailing "rare" element distinguishes it from a regular
+            # overlay segment (length 7) in the click handler.
+            if add_rare_col:
+                rc = rare_cat_counts.get(cat_label, 0)
+                y_vals.append(rc)
+                customdata.append(
+                    [False] * src_count + [cat_label, "rare"])
+                pct = (100.0 * rc / rare_count) if rare_count else 0
+                hover.append(
+                    f"<b>{rc:,}</b> NEOs ({pct:.0f} % of Rare)<br>"
+                    f"Category: <b>{cat_label}</b><br>"
+                    f"Aggregate of patterns ranked &gt; {top_n}"
                 )
 
             if not any(y_vals):
@@ -14793,8 +14872,12 @@ def _build_upset_figure(df, top_n=15, color_by="pattern",
                     f"({base_note}). "
                     "Click a bar to filter the table.")
     if add_mixed_col:
-        subtitle += (f" Mixed bin on the right aggregates the "
+        subtitle += (f" Mixed bin aggregates the "
                      f"{mixed_count:,} multi-source disagreements.")
+    if add_rare_col:
+        n_rare_patterns = n_patterns - n
+        subtitle += (f" Rare bin aggregates {rare_count:,} NEOs across "
+                     f"{n_rare_patterns} patterns beyond top-{top_n}.")
 
     fig.update_xaxes(showticklabels=False, showgrid=False,
                      zeroline=False, range=[-0.6, n_cols - 0.4],
@@ -14803,13 +14886,22 @@ def _build_upset_figure(df, top_n=15, color_by="pattern",
                      zeroline=False, range=[-0.6, n_cols - 0.4],
                      row=2, col=1)
 
-    # Label the Mixed column on the bottom subplot so the otherwise-
-    # dotless column is identifiable at a glance.
+    # Label the Mixed / Rare columns on the bottom subplot so the
+    # otherwise-dotless columns are identifiable at a glance.
     if add_mixed_col:
         fig.add_annotation(
             x=mixed_x, y=src_count - 0.4,
             xref="x2", yref="y2",
             text="Mixed",
+            showarrow=False,
+            yshift=12,
+            font=dict(size=10, color=fg_neutral),
+        )
+    if add_rare_col:
+        fig.add_annotation(
+            x=rare_x, y=src_count - 0.4,
+            xref="x2", yref="y2",
+            text="Rare",
             showarrow=False,
             yshift=12,
             font=dict(size=10, color=fg_neutral),
@@ -15019,16 +15111,26 @@ app.clientside_callback(
             return Array(8).fill(NU);
         }
         const allFalse = cd.slice(0, 6).every(b => !b);
-        const hasCategory = cd.length >= 7 && cd[6];
+        const lastEl = cd[cd.length - 1];
+        const isRare  = allFalse && lastEl === 'rare';
+        const isMixed = allFalse && !isRare;
+        // The category, when present, sits at cd[6] for both kinds of
+        // overlay-mode special-bin click (Mixed length 7, Rare length 8
+        // with the "rare" marker trailing).  In Pattern mode Mixed is
+        // length 6 and Rare is length 7 with the marker -- no category
+        // in either.
+        const hasCategoryRare  = isRare  && cd.length === 8;
+        const hasCategoryMixed = isMixed && cd.length === 7;
+        const hasCategory      = !allFalse && cd.length >= 7 && cd[6];
 
-        // Mixed-bin click: bool tuple is all-False sentinel.  Don't snap
-        // the source radios (that would filter to "in zero sources" =
-        // empty table); instead write a mixed_only filter to the store,
-        // optionally combined with the overlay category if the user
-        // clicked one of the colored Mixed segments.
+        // Special-bin click: bool tuple is all-False sentinel.  Don't
+        // snap the source radios (that would filter to "in zero
+        // sources" = empty table); instead write a mixed_only or
+        // rare_only filter to the store, plus the overlay category if
+        // the user clicked one of the colored stack segments.
         if (allFalse) {
-            const store = {mixed_only: true};
-            if (hasCategory) {
+            const store = isRare ? {rare_only: true} : {mixed_only: true};
+            if (hasCategoryRare || hasCategoryMixed) {
                 store.category = cd[6];
                 store.color_by = colorBy || 'pattern';
             }
@@ -15093,6 +15195,7 @@ app.clientside_callback(
         };
         const parts = [];
         if (data.mixed_only) parts.push('Mixed (2–4 sources)');
+        if (data.rare_only)  parts.push('Rare (rank > 15)');
         if (data.category && data.color_by) {
             const dim = labels[data.color_by] || data.color_by;
             parts.push(dim + ' = ' + data.category);
@@ -15187,6 +15290,7 @@ app.clientside_callback(
     Input("consensus-filter", "value"),
     Input("consensus-upset-color", "value"),
     Input("consensus-upset-mixed", "value"),
+    Input("consensus-upset-rare", "value"),
     Input("consensus-upset-height", "value"),
     Input("consensus-overlay-filter", "data"),
 )
@@ -15197,8 +15301,8 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
                      q_min, q_max, e_min, e_max, i_min, i_max,
                      h_min, h_max, u_min, u_max, nopp_min, nopp_max,
                      first_min, first_max, last_min, last_max,
-                     filter_value, upset_color, upset_mixed, upset_height,
-                     overlay_filter):
+                     filter_value, upset_color, upset_mixed, upset_rare,
+                     upset_height, overlay_filter):
     sources = {
         "mpc": r_mpc, "mpc_orbits": r_mpc_orbits, "cneos": r_cneos,
         "neocc": r_neocc, "neofixer": r_neofixer, "lowell": r_lowell,
@@ -15224,6 +15328,7 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
     }
 
     show_mixed = "show" in (upset_mixed or [])
+    show_rare = "show" in (upset_rare or [])
     try:
         upset_height_px = int(upset_height) if upset_height else 400
     except (TypeError, ValueError):
@@ -15257,6 +15362,7 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
                 _build_breakdown_figure(empty),
                 _build_upset_figure(empty, color_by=upset_color,
                                     show_mixed=show_mixed,
+                                    show_rare=show_rare,
                                     height=upset_height_px))
     print(f"[consensus] -> n_total={n_total} returned_rows={len(df)}",
           flush=True)
@@ -15273,15 +15379,33 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
     #               clear the store on color_by change anyway).
     of = overlay_filter or {}
     filter_mixed = bool(of.get("mixed_only"))
+    filter_rare = bool(of.get("rare_only"))
     filter_cat = of.get("category")
     filter_cb = of.get("color_by")
-    if (filter_mixed or filter_cat) and not df.empty:
+    if (filter_mixed or filter_rare or filter_cat) and not df.empty:
         bool_cols = ["in_mpc", "in_mpc_orbits", "in_cneos",
                      "in_neocc", "in_neofixer", "in_lowell"]
         keep = pd.Series(True, index=df.index)
         if filter_mixed:
             n_src = df[bool_cols].sum(axis=1)
             keep &= (n_src >= 2) & (n_src <= 4)
+        if filter_rare:
+            # Rare = rows whose source pattern is NOT in the top-15 of
+            # the current disagreement view AND not all-six.  Replicate
+            # the same pat_counts / top_n selection the figure builder
+            # uses so the two stay in lockstep.
+            pat_counts = (df.groupby(bool_cols, sort=False)
+                            .size()
+                            .sort_values(ascending=False))
+            pat_counts = pat_counts.drop(
+                index=(True,) * len(bool_cols),
+                errors="ignore")
+            top_patterns = set(pat_counts.head(15).index)
+            row_tuples = df[bool_cols].apply(tuple, axis=1)
+            keep &= ~row_tuples.isin(top_patterns)
+            # Drop the all-six rows too (Rare is a disagreement-set
+            # concept; all-six is reported in the snapshot line).
+            keep &= row_tuples != (True,) * len(bool_cols)
         if filter_cat and filter_cb:
             cats = _upset_overlay_categories(df, filter_cb)
             if cats is not None:
@@ -15290,7 +15414,8 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
         # Recompute the total so the count text reflects the
         # post-filter set instead of the pre-filter SQL count.
         n_total = len(df)
-        print(f"[consensus] overlay filter applied: mixed_only={filter_mixed} "
+        print(f"[consensus] overlay filter applied: "
+              f"mixed={filter_mixed} rare={filter_rare} "
               f"cat={filter_cat!r} cb={filter_cb!r} -> {n_total} rows",
               flush=True)
 
@@ -15310,6 +15435,7 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
             _build_breakdown_figure(df),
             _build_upset_figure(df, color_by=upset_color,
                                 show_mixed=show_mixed,
+                                show_rare=show_rare,
                                 height=upset_height_px))
 
 
