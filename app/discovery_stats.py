@@ -4423,6 +4423,45 @@ app.layout = html.Div(
                                 style={"marginBottom": "12px"},
                             ),
 
+                            # Click-to-filter overlay chip.  Populated
+                            # when the user clicks a colored segment or
+                            # the Mixed bar; cleared by the chip's own
+                            # Clear button, by switching the color
+                            # overlay (categories don't translate), or
+                            # by the snap-any / snap-all banner buttons.
+                            dcc.Store(
+                                id="consensus-overlay-filter",
+                                data=None,
+                            ),
+                            html.Div(
+                                id="consensus-overlay-chip",
+                                style={"display": "none"},
+                                children=[
+                                    html.Span(
+                                        id="consensus-overlay-chip-text",
+                                        style={
+                                            "backgroundColor":
+                                                "rgba(91,141,239,0.18)",
+                                            "border":
+                                                "1px solid #5b8def",
+                                            "padding": "2px 10px",
+                                            "borderRadius": "10px",
+                                            "fontSize": "11px"},
+                                    ),
+                                    html.Button(
+                                        "✕ Clear plot filter",
+                                        id="consensus-overlay-clear",
+                                        n_clicks=0,
+                                        style={
+                                            "padding": "2px 10px",
+                                            "marginLeft": "8px",
+                                            "fontSize": "11px",
+                                            "cursor": "pointer",
+                                            "fontFamily": "sans-serif"},
+                                    ),
+                                ],
+                            ),
+
                             # Download buttons
                             html.Div(
                                 style={"display": "flex", "gap": "10px",
@@ -14967,36 +15006,106 @@ app.clientside_callback(
 # are also written by the buttons clientside_callback.
 app.clientside_callback(
     """
-    function(clickData) {
+    function(clickData, colorBy) {
+        const NU = window.dash_clientside.no_update;
         if (!clickData || !clickData.points || !clickData.points[0]) {
-            return Array(7).fill(window.dash_clientside.no_update);
+            return Array(8).fill(NU);
         }
         const cd = clickData.points[0].customdata;
         // Overlay-mode segments carry [bool_tuple..., category] (length 7);
-        // pattern-mode bars carry the bare bool tuple (length 6).  Accept
-        // both — we only need the first six for the source-radio snap.
+        // pattern-mode bars carry the bare bool tuple (length 6).
         if (!cd || cd.length < 6) {
-            return Array(7).fill(window.dash_clientside.no_update);
+            return Array(8).fill(NU);
         }
-        // Mixed-bin sentinel: customdata[0..5] is all-False, which would
-        // snap every source radio to "exclude" → empty-set filter.  Skip
-        // the snap entirely and leave whatever filter the user has alone.
-        if (cd.slice(0, 6).every(b => !b)) {
-            return Array(7).fill(window.dash_clientside.no_update);
+        const allFalse = cd.slice(0, 6).every(b => !b);
+        const hasCategory = cd.length >= 7 && cd[6];
+
+        // Mixed-bin click: bool tuple is all-False sentinel.  Don't snap
+        // the source radios (that would filter to "in zero sources" =
+        // empty table); instead write a mixed_only filter to the store,
+        // optionally combined with the overlay category if the user
+        // clicked one of the colored Mixed segments.
+        if (allFalse) {
+            const store = {mixed_only: true};
+            if (hasCategory) {
+                store.category = cd[6];
+                store.color_by = colorBy || 'pattern';
+            }
+            return [NU, NU, NU, NU, NU, NU, NU, store];
         }
+
+        // Pattern bar or overlay segment click: snap source radios to
+        // the pattern.  In overlay mode, also write the segment's
+        // category to the store so the table-side filter can use it.
         const radios = cd.slice(0, 6).map(b => b ? 'include' : 'exclude');
-        return [...radios, []];
+        const store = hasCategory
+            ? {category: cd[6], color_by: colorBy || 'pattern'}
+            : null;
+        return [...radios, [], store];
     }
     """,
-    Output("consensus-radio-mpc",        "value", allow_duplicate=True),
-    Output("consensus-radio-mpc_orbits", "value", allow_duplicate=True),
-    Output("consensus-radio-cneos",      "value", allow_duplicate=True),
-    Output("consensus-radio-neocc",      "value", allow_duplicate=True),
-    Output("consensus-radio-neofixer",   "value", allow_duplicate=True),
-    Output("consensus-radio-lowell",     "value", allow_duplicate=True),
-    Output("consensus-filter",           "value", allow_duplicate=True),
-    Input("consensus-upset", "clickData"),
+    Output("consensus-radio-mpc",          "value", allow_duplicate=True),
+    Output("consensus-radio-mpc_orbits",   "value", allow_duplicate=True),
+    Output("consensus-radio-cneos",        "value", allow_duplicate=True),
+    Output("consensus-radio-neocc",        "value", allow_duplicate=True),
+    Output("consensus-radio-neofixer",     "value", allow_duplicate=True),
+    Output("consensus-radio-lowell",       "value", allow_duplicate=True),
+    Output("consensus-filter",             "value", allow_duplicate=True),
+    Output("consensus-overlay-filter",     "data",  allow_duplicate=True),
+    Input("consensus-upset",        "clickData"),
+    State("consensus-upset-color",  "value"),
     prevent_initial_call=True,
+)
+
+
+# Clear the overlay filter when the user switches color overlay
+# (categories from one overlay don't translate to another) or hits the
+# Clear button on the chip.  Both write nulls to the Store.
+app.clientside_callback(
+    "function(_cb) { return null; }",
+    Output("consensus-overlay-filter", "data", allow_duplicate=True),
+    Input("consensus-upset-color", "value"),
+    prevent_initial_call=True,
+)
+app.clientside_callback(
+    "function(_n) { return null; }",
+    Output("consensus-overlay-filter", "data", allow_duplicate=True),
+    Input("consensus-overlay-clear", "n_clicks"),
+    prevent_initial_call=True,
+)
+
+
+# Chip rendering: when the store is non-null, surface a human-readable
+# summary and show the Clear button.  Pure clientside so there's no
+# server round-trip per click.
+app.clientside_callback(
+    """
+    function(data) {
+        if (!data) return ['', {display: 'none'}];
+        const labels = {
+            'pattern':     'Pattern',
+            'disc_site':   'Discovery site',
+            'h_size':      'H mag (size)',
+            'year_disc':   'Discovery decade',
+            'arc_class':   'Arc length',
+            'q_proximity': 'q distance from 1.3',
+        };
+        const parts = [];
+        if (data.mixed_only) parts.push('Mixed (2–4 sources)');
+        if (data.category && data.color_by) {
+            const dim = labels[data.color_by] || data.color_by;
+            parts.push(dim + ' = ' + data.category);
+        }
+        const txt = 'Plot filter: ' + parts.join(' ∩ ');
+        const show = {display: 'flex', alignItems: 'center',
+                      gap: '8px', fontSize: '12px',
+                      marginBottom: '8px', minHeight: '20px'};
+        return [txt, show];
+    }
+    """,
+    Output("consensus-overlay-chip-text", "children"),
+    Output("consensus-overlay-chip",      "style"),
+    Input("consensus-overlay-filter",     "data"),
 )
 
 
@@ -15078,6 +15187,7 @@ app.clientside_callback(
     Input("consensus-upset-color", "value"),
     Input("consensus-upset-mixed", "value"),
     Input("consensus-upset-height", "value"),
+    Input("consensus-overlay-filter", "data"),
 )
 def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
                      r_lowell,
@@ -15086,7 +15196,8 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
                      q_min, q_max, e_min, e_max, i_min, i_max,
                      h_min, h_max, u_min, u_max, nopp_min, nopp_max,
                      first_min, first_max, last_min, last_max,
-                     filter_value, upset_color, upset_mixed, upset_height):
+                     filter_value, upset_color, upset_mixed, upset_height,
+                     overlay_filter):
     sources = {
         "mpc": r_mpc, "mpc_orbits": r_mpc_orbits, "cneos": r_cneos,
         "neocc": r_neocc, "neofixer": r_neofixer, "lowell": r_lowell,
@@ -15148,6 +15259,39 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
                                     height=upset_height_px))
     print(f"[consensus] -> n_total={n_total} returned_rows={len(df)}",
           flush=True)
+
+    # Apply the click-derived overlay filter to the table df (the
+    # plots stay as context — only the table narrows).  Two
+    # dimensions, either or both can be active:
+    #   mixed_only: keep only rows in 2-4 sources (n_src ∈ {2,3,4})
+    #   category:   keep only rows whose overlay-category equals
+    #               filter_category, using the SAME color_by that
+    #               was active when the user clicked (stored in the
+    #               click handler so a later color_by change doesn't
+    #               misinterpret the stored category — though we
+    #               clear the store on color_by change anyway).
+    of = overlay_filter or {}
+    filter_mixed = bool(of.get("mixed_only"))
+    filter_cat = of.get("category")
+    filter_cb = of.get("color_by")
+    if (filter_mixed or filter_cat) and not df.empty:
+        bool_cols = ["in_mpc", "in_mpc_orbits", "in_cneos",
+                     "in_neocc", "in_neofixer", "in_lowell"]
+        keep = pd.Series(True, index=df.index)
+        if filter_mixed:
+            n_src = df[bool_cols].sum(axis=1)
+            keep &= (n_src >= 2) & (n_src <= 4)
+        if filter_cat and filter_cb:
+            cats = _upset_overlay_categories(df, filter_cb)
+            if cats is not None:
+                keep &= (cats == filter_cat)
+        df = df[keep]
+        # Recompute the total so the count text reflects the
+        # post-filter set instead of the pre-filter SQL count.
+        n_total = len(df)
+        print(f"[consensus] overlay filter applied: mixed_only={filter_mixed} "
+              f"cat={filter_cat!r} cb={filter_cb!r} -> {n_total} rows",
+              flush=True)
 
     if n_total == 0:
         count_text = "No NEOs match the selection."
