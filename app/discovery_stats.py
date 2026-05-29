@@ -4363,6 +4363,24 @@ app.layout = html.Div(
                                         inputStyle={
                                             "marginRight": "4px"},
                                     ),
+                                    # Mixed-sources toggle: adds a single
+                                    # aggregated "Mixed (2-4 sources)"
+                                    # column on the right of plot #2.
+                                    # Geometry of the individual columns
+                                    # is unchanged; the Mixed bin is
+                                    # additive / informational.
+                                    dcc.Checklist(
+                                        id="consensus-upset-mixed",
+                                        options=[{
+                                            "label": " Show Mixed (2–4) bin",
+                                            "value": "show",
+                                        }],
+                                        value=[],
+                                        inline=True,
+                                        style={"marginLeft": "12px"},
+                                        labelStyle={"fontSize": "12px"},
+                                        inputStyle={"marginRight": "4px"},
+                                    ),
                                 ],
                             ),
 
@@ -14440,7 +14458,8 @@ def _upset_overlay_categories(df, color_by):
     return None
 
 
-def _build_upset_figure(df, top_n=15, color_by="pattern"):
+def _build_upset_figure(df, top_n=15, color_by="pattern",
+                        show_mixed=False):
     """Render an UpSet plot of source-membership patterns: top
     subplot is intersection sizes (sorted descending, max top_n);
     bottom subplot is the membership matrix with dots indicating
@@ -14514,6 +14533,19 @@ def _build_upset_figure(df, top_n=15, color_by="pattern"):
     src_labels = [_CONSENSUS_SOURCE_LABELS[c[len("in_"):]]
                   for c in bool_cols]
 
+    # Mixed-bin: when the toggle is on AND the current view has
+    # 2-4-source disagreements, an extra column is appended after the
+    # top-N patterns aggregating them all.  Informational -- the
+    # individual 2-4-source patterns are still in the top-N list (with
+    # their own dots in the matrix below).  Mirrors the gray "Mixed
+    # (2-4 sources)" segment in plot #1.
+    n_src_per_row = df[bool_cols].sum(axis=1)
+    mixed_mask = (n_src_per_row >= 2) & (n_src_per_row <= 4)
+    mixed_count = int(mixed_mask.sum())
+    add_mixed_col = bool(show_mixed) and mixed_count > 0
+    n_cols = n + (1 if add_mixed_col else 0)
+    mixed_x = n  # x-position of the Mixed column (right of top-N)
+
     fig = make_subplots(
         rows=2, cols=1,
         row_heights=[0.65, 0.35],
@@ -14549,10 +14581,29 @@ def _build_upset_figure(df, top_n=15, color_by="pattern"):
             for i, (pat, cnt) in enumerate(top.items())
         ]
         bar_customdata = [[bool(v) for v in pat] for pat in top.index]
+        bar_x = list(range(n))
+        bar_y = list(top.values)
+
+        # Append the Mixed aggregate column (right of the top-N).
+        # customdata = bool tuple of all False, which the click handler
+        # uses as the "no-op" sentinel (clicking Mixed shouldn't snap
+        # the source radios to an empty pattern).
+        if add_mixed_col:
+            bar_x.append(mixed_x)
+            bar_y.append(mixed_count)
+            bar_colors.append("#7f7f7f")  # matches plot #1 Mixed gray
+            bar_text.append(f"{mixed_count:,}")
+            bar_hover.append(
+                f"<b>{mixed_count:,} NEOs</b><br>"
+                "Mixed (2–4 sources)<br>"
+                "Aggregate of all multi-source disagreements; the "
+                "individual columns above show the per-pattern breakdown."
+            )
+            bar_customdata.append([False] * src_count)
 
         fig.add_trace(go.Bar(
-            x=list(range(n)),
-            y=top.values,
+            x=bar_x,
+            y=bar_y,
             text=bar_text,
             textposition="outside",
             textfont=dict(color=fg_neutral, size=10),
@@ -14580,6 +14631,15 @@ def _build_upset_figure(df, top_n=15, color_by="pattern"):
         palette = _UPSET_PALETTES[color_by]
         order = _UPSET_CATEGORY_ORDER[color_by]
 
+        # Pre-compute the per-category Mixed counts once so the per-
+        # category loop below is one dict lookup per category.
+        mixed_cat_counts = {}
+        if add_mixed_col:
+            for cat_label, cnt in (
+                df_cat[mixed_mask]["_cat"].value_counts().items()
+            ):
+                mixed_cat_counts[cat_label] = int(cnt)
+
         for cat_label in order:
             y_vals = []
             customdata = []
@@ -14595,11 +14655,25 @@ def _build_upset_figure(df, top_n=15, color_by="pattern"):
                     f"Category: <b>{cat_label}</b><br>"
                     f"Pattern: {included_per_pat[i]}"
                 )
+
+            # Append the Mixed cell for this category.  Click sentinel
+            # (all-False bool tuple) is consistent with the pattern path.
+            if add_mixed_col:
+                mc = mixed_cat_counts.get(cat_label, 0)
+                y_vals.append(mc)
+                customdata.append([False] * src_count + [cat_label])
+                pct = (100.0 * mc / mixed_count) if mixed_count else 0
+                hover.append(
+                    f"<b>{mc:,}</b> NEOs ({pct:.0f} % of Mixed)<br>"
+                    f"Category: <b>{cat_label}</b><br>"
+                    f"Aggregate of 2–4-source disagreements"
+                )
+
             if not any(y_vals):
                 continue
             fig.add_trace(go.Bar(
                 name=cat_label,
-                x=list(range(n)),
+                x=list(range(n_cols)),
                 y=y_vals,
                 marker=dict(color=palette.get(cat_label, "#888888"),
                             line=dict(width=0)),
@@ -14652,13 +14726,28 @@ def _build_upset_figure(df, top_n=15, color_by="pattern"):
         subtitle = (f"All {n_patterns} disagreement patterns "
                     f"({base_note}). "
                     "Click a bar to filter the table.")
+    if add_mixed_col:
+        subtitle += (f" Mixed bin on the right aggregates the "
+                     f"{mixed_count:,} multi-source disagreements.")
 
     fig.update_xaxes(showticklabels=False, showgrid=False,
-                     zeroline=False, range=[-0.6, n - 0.4],
+                     zeroline=False, range=[-0.6, n_cols - 0.4],
                      row=1, col=1)
     fig.update_xaxes(showticklabels=False, showgrid=False,
-                     zeroline=False, range=[-0.6, n - 0.4],
+                     zeroline=False, range=[-0.6, n_cols - 0.4],
                      row=2, col=1)
+
+    # Label the Mixed column on the bottom subplot so the otherwise-
+    # dotless column is identifiable at a glance.
+    if add_mixed_col:
+        fig.add_annotation(
+            x=mixed_x, y=src_count - 0.4,
+            xref="x2", yref="y2",
+            text="Mixed",
+            showarrow=False,
+            yshift=12,
+            font=dict(size=10, color=fg_neutral),
+        )
     fig.update_yaxes(title_text="NEOs",
                      title_font=dict(color=fg_neutral),
                      tickfont=dict(color=fg_neutral),
@@ -14851,6 +14940,12 @@ app.clientside_callback(
         if (!cd || cd.length < 6) {
             return Array(7).fill(window.dash_clientside.no_update);
         }
+        // Mixed-bin sentinel: customdata[0..5] is all-False, which would
+        // snap every source radio to "exclude" → empty-set filter.  Skip
+        // the snap entirely and leave whatever filter the user has alone.
+        if (cd.slice(0, 6).every(b => !b)) {
+            return Array(7).fill(window.dash_clientside.no_update);
+        }
         const radios = cd.slice(0, 6).map(b => b ? 'include' : 'exclude');
         return [...radios, []];
     }
@@ -14943,6 +15038,7 @@ app.clientside_callback(
     Input("consensus-last_obs-max", "value"),
     Input("consensus-filter", "value"),
     Input("consensus-upset-color", "value"),
+    Input("consensus-upset-mixed", "value"),
 )
 def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
                      r_lowell,
@@ -14951,7 +15047,7 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
                      q_min, q_max, e_min, e_max, i_min, i_max,
                      h_min, h_max, u_min, u_max, nopp_min, nopp_max,
                      first_min, first_max, last_min, last_max,
-                     filter_value, upset_color):
+                     filter_value, upset_color, upset_mixed):
     sources = {
         "mpc": r_mpc, "mpc_orbits": r_mpc_orbits, "cneos": r_cneos,
         "neocc": r_neocc, "neofixer": r_neofixer, "lowell": r_lowell,
@@ -14976,10 +15072,13 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
         "last_obs":  (last_min, last_max),
     }
 
+    show_mixed = "show" in (upset_mixed or [])
+
     print(f"[consensus] inc={include!r} exc={exclude!r} "
           f"cinc={class_includes!r} cexc={class_excludes!r} "
           f"num={numbered!r} named={named!r} "
-          f"hide_all={hide_all_agree} trig={ctx.triggered_id}",
+          f"hide_all={hide_all_agree} upset_color={upset_color!r} "
+          f"show_mixed={show_mixed} trig={ctx.triggered_id}",
           flush=True)
 
     try:
@@ -14997,7 +15096,8 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
         empty = pd.DataFrame()
         return (f"Query failed: {type(e).__name__}: {e}", [], 0,
                 _build_breakdown_figure(empty),
-                _build_upset_figure(empty, color_by=upset_color))
+                _build_upset_figure(empty, color_by=upset_color,
+                                    show_mixed=show_mixed))
     print(f"[consensus] -> n_total={n_total} returned_rows={len(df)}",
           flush=True)
 
@@ -15015,7 +15115,8 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
 
     return (count_text, _format_table_rows(df), 0,
             _build_breakdown_figure(df),
-            _build_upset_figure(df, color_by=upset_color))
+            _build_upset_figure(df, color_by=upset_color,
+                                show_mixed=show_mixed))
 
 
 def _load_nea_txt_lookup():
