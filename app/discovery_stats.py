@@ -4395,12 +4395,11 @@ app.layout = html.Div(
                                     dcc.RadioItems(
                                         id="consensus-upset-height",
                                         options=[
-                                            {"label": " S", "value": "220"},
-                                            {"label": " M", "value": "280"},
-                                            {"label": " L", "value": "400"},
-                                            {"label": " XL", "value": "560"},
+                                            {"label": " S", "value": "280"},
+                                            {"label": " M", "value": "400"},
+                                            {"label": " L", "value": "560"},
                                         ],
-                                        value="280",
+                                        value="400",
                                         inline=True,
                                         labelStyle={
                                             "marginRight": "6px",
@@ -14791,9 +14790,19 @@ def _build_upset_figure(df, top_n=15, color_by="pattern",
         range=[-0.6, src_count - 0.4],
         row=2, col=1,
     )
+    # In overlay mode we need ~3 stacked elements above the plot area:
+    # the legend (top), the subtitle, and a small gap.  margin.top has
+    # to grow enough so the right-anchored legend can't overlap the
+    # centered subtitle, which was the issue on the cramped 22-px
+    # margin we shipped in commit 2.
+    margin_top = 56 if is_overlay else 22
+    legend_y   = 1.18 if is_overlay else 1.04
+    title_y    = 1.04 if is_overlay else 0.98
+    title_yanchor = "bottom" if is_overlay else "top"
+
     fig.update_layout(
         height=int(height),
-        margin=dict(l=8, r=8, t=22, b=8),
+        margin=dict(l=8, r=8, t=margin_top, b=8),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         # Show the legend only in overlay mode -- the default "Pattern"
@@ -14801,7 +14810,7 @@ def _build_upset_figure(df, top_n=15, color_by="pattern",
         showlegend=is_overlay,
         legend=dict(
             orientation="h",
-            yanchor="bottom", y=1.04,
+            yanchor="bottom", y=legend_y,
             xanchor="right",  x=1.0,
             font=dict(size=9, color=fg_neutral),
             bgcolor="rgba(0,0,0,0)",
@@ -14813,7 +14822,8 @@ def _build_upset_figure(df, top_n=15, color_by="pattern",
         barmode="stack" if is_overlay else "group",
         title=dict(text=subtitle,
                    font=dict(color=fg_neutral, size=11),
-                   x=0.5, xanchor="center", y=0.98, yanchor="top"),
+                   x=0.5, xanchor="center",
+                   y=title_y, yanchor=title_yanchor),
     )
     return fig
 
@@ -15103,13 +15113,13 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
 
     show_mixed = "show" in (upset_mixed or [])
     try:
-        upset_height_px = int(upset_height) if upset_height else 280
+        upset_height_px = int(upset_height) if upset_height else 400
     except (TypeError, ValueError):
-        upset_height_px = 280
+        upset_height_px = 400
     # Whitelist guard so a bad cookie / hand-edited URL can't blow
     # up the figure with absurd values.
     if not 120 <= upset_height_px <= 1200:
-        upset_height_px = 280
+        upset_height_px = 400
 
     print(f"[consensus] inc={include!r} exc={exclude!r} "
           f"cinc={class_includes!r} cexc={class_excludes!r} "
