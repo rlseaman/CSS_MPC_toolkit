@@ -3287,9 +3287,14 @@ def _consensus_external_url(designation, packed_desig, permid, target):
     if target == "neocc":
         # Prefer permid for numbered NEOs (NEOCC's allneo.lst indexes
         # them by number).  Fall back to no-space compact provisional
-        # for unnumbered.
-        if permid:
-            key = str(permid)
+        # for unnumbered.  Defensive check: pandas read_sql returns
+        # NaN for SQL NULL on object columns, and bool(NaN) is True,
+        # so a bare truthy test would route unnumbered NEOs through
+        # "?des=nan".
+        if (permid is not None
+                and not (isinstance(permid, float) and permid != permid)
+                and str(permid).strip() not in ("", "nan", "None")):
+            key = str(permid).strip()
         else:
             key = str(designation).replace(" ", "")
         return (f"https://neo.ssa.esa.int/search-for-asteroids"
