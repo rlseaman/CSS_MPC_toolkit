@@ -3252,10 +3252,17 @@ _EXTERNAL_TARGETS_VALID = {t for t, _ in _EXTERNAL_TARGETS}
 _EXTERNAL_TARGETS_DEFAULT = "sbdb"
 
 
-def _consensus_external_url(designation, packed_desig, target):
+def _consensus_external_url(designation, packed_desig, permid, target):
     """Build the external-service URL for one row given the chosen
     target.  Returns None when the row is missing the field that
-    target needs (e.g., NEOfixer with no packed_desig)."""
+    target needs (e.g., NEOfixer with no packed_desig).
+
+    NEOCC indexes numbered NEOs by integer permid (allneo.lst) and
+    unnumbered ones by the no-space compact provisional, so the
+    permid-when-present routing keeps numbered NEOs from landing on
+    "object not found".  Other services accept either form
+    transparently and just use the primary designation.
+    """
     import urllib.parse as _up
     if not designation:
         return None
@@ -3278,9 +3285,15 @@ def _consensus_external_url(designation, packed_desig, target):
         return (f"https://neofixer.arizona.edu/site/500/"
                 f"{_up.quote(str(packed_desig), safe='')}")
     if target == "neocc":
-        nospace = str(designation).replace(" ", "")
+        # Prefer permid for numbered NEOs (NEOCC's allneo.lst indexes
+        # them by number).  Fall back to no-space compact provisional
+        # for unnumbered.
+        if permid:
+            key = str(permid)
+        else:
+            key = str(designation).replace(" ", "")
         return (f"https://neo.ssa.esa.int/search-for-asteroids"
-                f"?sum=1&des={_up.quote(nospace, safe='')}")
+                f"?sum=1&des={_up.quote(key, safe='')}")
     return None
 
 # UpSet plot color-overlay configuration.  The radio above plot #2 picks
@@ -4638,19 +4651,41 @@ app.layout = html.Div(
                             ),
                             dcc.Download(id="consensus-download"),
 
-                            # Global "Open external in:" picker.  Drives
-                            # the per-row "↗" markdown link column.
-                            # Default = JPL SBDB.
+                            # Above-the-table controls: navigation
+                            # search + global "Open external in:" picker.
+                            # The search box narrows the table to rows
+                            # whose primary_desig / permid / iau_name
+                            # match the typed string (case-insensitive,
+                            # space-tolerant).  The picker drives the
+                            # per-row "↗" markdown link column.
                             html.Div(
-                                style={"display": "flex", "gap": "8px",
+                                style={"display": "flex", "gap": "16px",
                                        "alignItems": "center",
                                        "marginBottom": "8px",
-                                       "fontSize": "12px"},
+                                       "fontSize": "12px",
+                                       "flexWrap": "wrap"},
                                 children=[
+                                    html.Span(
+                                        "Find:",
+                                        className="subtext",
+                                        style={"fontWeight": "600"}),
+                                    dcc.Input(
+                                        id="consensus-search",
+                                        type="text",
+                                        placeholder=(
+                                            "designation / number / "
+                                            "name (e.g. 2004 MN4, "
+                                            "99942, Apophis)"),
+                                        debounce=True,
+                                        style={"width": "320px",
+                                               "fontSize": "12px",
+                                               "padding": "3px 8px"},
+                                    ),
                                     html.Span(
                                         "Open external links in:",
                                         className="subtext",
-                                        style={"fontWeight": "600"}),
+                                        style={"fontWeight": "600",
+                                               "marginLeft": "12px"}),
                                     dcc.Dropdown(
                                         id="consensus-external-target",
                                         options=[
@@ -14320,6 +14355,10 @@ def update_survey_dropdown(group_mode, current_value):
 
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+# Navigation-search whitelist: alphanumerics + space + designation
+# decorations.  Anything else gets rejected (whole filter skipped) so
+# the interpolation downstream can't be turned into SQL injection.
+_re_search_term = re.compile(r"^[A-Za-z0-9 ./\-()]+$")
 _CONSENSUS_NUM_FIELD_SQL = {
     "q":       "mo.q::float",
     "e":       "mo.e::float",
@@ -14339,7 +14378,7 @@ def _consensus_query(include, exclude, hide_all_agree=False,
                      class_includes=None, class_excludes=None,
                      numbered="any", named="any",
                      num_ranges=None, date_ranges=None,
-                     alias="any",
+                     alias="any", search=None,
                      limit=_CONSENSUS_TABLE_LIMIT):
     """Query the consensus view + mpc_orbits + obs_summary, filtered
     by the dashboard's full set of controls.
@@ -14433,6 +14472,24 @@ def _consensus_query(include, exclude, hide_all_agree=False,
                      "  WHERE ci_h.packed_primary_provisional_designation"
                      "     <> ci_h.packed_secondary_provisional_designation"
                      ")")
+
+    # Navigation search.  Matches primary_desig (case-insensitive,
+    # space-tolerant), permid (exact), iau_name (case-insensitive).
+    # Whitelist-sanitised: only alphanumerics, space, slash, hyphen,
+    # period, and parens are allowed -- enough to express any MPC
+    # designation form including A/2019 Q2 and (433) Eros, without
+    # opening room for SQL injection via single-quote interpolation.
+    if search and str(search).strip():
+        term = str(search).strip()
+        if _re_search_term.match(term):
+            esc = term.replace("\\", "\\\\").replace("'", "''")
+            esc_ns = term.replace(" ", "").replace("\\", "\\\\").replace("'", "''")
+            parts.append(
+                "(v.primary_desig ILIKE '%" + esc + "%'"
+                " OR REGEXP_REPLACE(v.primary_desig, '\\s+', '', 'g')"
+                "    ILIKE '%" + esc_ns + "%'"
+                " OR v.permid = '" + esc + "'"
+                " OR mpn.name ILIKE '%" + esc + "%')")
 
     for field, bounds in num_ranges.items():
         if field not in _CONSENSUS_NUM_FIELD_SQL or not bounds:
@@ -14557,6 +14614,7 @@ def _format_table_rows(df, external_target=_EXTERNAL_TARGETS_DEFAULT):
     def _ext_link(row):
         url = _consensus_external_url(row.get("primary_desig"),
                                       row.get("packed_desig"),
+                                      row.get("permid"),
                                       external_target)
         return f"[↗]({url})" if url else ""
     display_df["external_link"] = display_df.apply(_ext_link, axis=1)
@@ -15498,6 +15556,7 @@ app.clientside_callback(
     Input("consensus-last_obs-max", "value"),
     Input("consensus-filter", "value"),
     Input("consensus-alias-filter", "value"),
+    Input("consensus-search", "value"),
     Input("consensus-external-target", "value"),
     Input("consensus-upset-color", "value"),
     Input("consensus-upset-mixed", "value"),
@@ -15512,7 +15571,8 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
                      q_min, q_max, e_min, e_max, i_min, i_max,
                      h_min, h_max, u_min, u_max, nopp_min, nopp_max,
                      first_min, first_max, last_min, last_max,
-                     filter_value, alias_filter, external_target,
+                     filter_value, alias_filter, search_term,
+                     external_target,
                      upset_color, upset_mixed, upset_rare,
                      upset_height, overlay_filter):
     sources = {
@@ -15572,6 +15632,7 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
             num_ranges=num_ranges,
             date_ranges=date_ranges,
             alias=alias_val,
+            search=search_term,
         )
     except Exception as e:
         empty = pd.DataFrame()
