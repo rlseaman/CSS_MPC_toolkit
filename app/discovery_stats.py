@@ -4405,6 +4405,109 @@ app.layout = html.Div(
                                                     ),
                                                 ],
                                             ),
+                                            # Discovery-station filter:
+                                            # exact match on the MPC
+                                            # obscode (e.g. "G45",
+                                            # "C51", "X05").  Empty
+                                            # means "any station".
+                                            html.Div(
+                                                style={
+                                                    "display": "flex",
+                                                    "alignItems":
+                                                        "center",
+                                                    "gap": "10px",
+                                                    "marginBottom":
+                                                        "3px",
+                                                    "flexWrap":
+                                                        "nowrap",
+                                                    "whiteSpace":
+                                                        "nowrap"},
+                                                children=[
+                                                    html.Span(
+                                                        "Disc by",
+                                                        style={
+                                                            **LABEL_STYLE,
+                                                            "minWidth":
+                                                                "85px",
+                                                            "flexShrink":
+                                                                "0"}),
+                                                    dcc.Input(
+                                                        id="consensus-"
+                                                           "disc-by",
+                                                        type="text",
+                                                        placeholder=(
+                                                            "G45, C51, "
+                                                            "X05, …"),
+                                                        debounce=True,
+                                                        style={
+                                                            "width":
+                                                                "110px",
+                                                            "fontSize":
+                                                                "12px",
+                                                            "padding":
+                                                                "3px 6px"},
+                                                    ),
+                                                ],
+                                            ),
+                                            # Arc-length class filter,
+                                            # matched to the upset
+                                            # overlay's bins.
+                                            html.Div(
+                                                style={
+                                                    "display": "flex",
+                                                    "alignItems":
+                                                        "center",
+                                                    "gap": "10px",
+                                                    "marginBottom":
+                                                        "3px",
+                                                    "flexWrap":
+                                                        "nowrap",
+                                                    "whiteSpace":
+                                                        "nowrap"},
+                                                children=[
+                                                    html.Span(
+                                                        "Arc",
+                                                        style={
+                                                            **LABEL_STYLE,
+                                                            "minWidth":
+                                                                "85px",
+                                                            "flexShrink":
+                                                                "0"}),
+                                                    dcc.Dropdown(
+                                                        id="consensus-"
+                                                           "arc-class",
+                                                        options=[
+                                                            {"label":
+                                                                "Any",
+                                                             "value":
+                                                                "any"},
+                                                            {"label":
+                                                                "Single-night (<1 d)",
+                                                             "value":
+                                                                "single"},
+                                                            {"label":
+                                                                "<30 d",
+                                                             "value":
+                                                                "short"},
+                                                            {"label":
+                                                                "30 d – 1 yr",
+                                                             "value":
+                                                                "mid"},
+                                                            {"label":
+                                                                "≥ 1 yr",
+                                                             "value":
+                                                                "long"},
+                                                        ],
+                                                        value="any",
+                                                        clearable=False,
+                                                        style={
+                                                            "width":
+                                                                "180px",
+                                                            "fontSize":
+                                                                "12px"},
+                                                    ),
+                                                ],
+                                            ),
                                         ],
                                     ),
                                 ],
@@ -14364,6 +14467,9 @@ _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # decorations.  Anything else gets rejected (whole filter skipped) so
 # the interpolation downstream can't be turned into SQL injection.
 _re_search_term = re.compile(r"^[A-Za-z0-9 ./\-()]+$")
+# MPC observatory codes: 3 chars (numeric or alphanumeric) or 4 chars
+# for the newer extended set (e.g. F51, F52, T08, G45, C51, X05).
+_re_obscode = re.compile(r"^[A-Z0-9]{3,4}$")
 _CONSENSUS_NUM_FIELD_SQL = {
     "q":       "mo.q::float",
     "e":       "mo.e::float",
@@ -14384,6 +14490,7 @@ def _consensus_query(include, exclude, hide_all_agree=False,
                      numbered="any", named="any",
                      num_ranges=None, date_ranges=None,
                      alias="any", search=None,
+                     disc_by=None, arc_class="any",
                      limit=_CONSENSUS_TABLE_LIMIT):
     """Query the consensus view + mpc_orbits + obs_summary, filtered
     by the dashboard's full set of controls.
@@ -14477,6 +14584,24 @@ def _consensus_query(include, exclude, hide_all_agree=False,
                      "  WHERE ci_h.packed_primary_provisional_designation"
                      "     <> ci_h.packed_secondary_provisional_designation"
                      ")")
+
+    # Discovery-station filter.  Whitelist-validate: MPC obscodes are
+    # 3 or 4 chars from [A-Z0-9].  Exact match on obs.disc_by.
+    if disc_by and str(disc_by).strip():
+        code = str(disc_by).strip().upper()
+        if _re_obscode.match(code):
+            parts.append(f"obs.disc_by = '{code}'")
+
+    # Arc-class filter.  Same bins as the upset overlay; "any" is
+    # the no-op default.  arc_days is INTEGER in obs_summary.
+    if arc_class == "single":
+        parts.append("obs.arc_days < 1")
+    elif arc_class == "short":
+        parts.append("obs.arc_days < 30")
+    elif arc_class == "mid":
+        parts.append("obs.arc_days >= 30 AND obs.arc_days < 365")
+    elif arc_class == "long":
+        parts.append("obs.arc_days >= 365")
 
     # Navigation search.  Matches primary_desig (case-insensitive,
     # space-tolerant), permid (exact), iau_name (case-insensitive).
@@ -15561,6 +15686,8 @@ app.clientside_callback(
     Input("consensus-last_obs-max", "value"),
     Input("consensus-filter", "value"),
     Input("consensus-alias-filter", "value"),
+    Input("consensus-disc-by", "value"),
+    Input("consensus-arc-class", "value"),
     Input("consensus-search", "value"),
     Input("consensus-external-target", "value"),
     Input("consensus-upset-color", "value"),
@@ -15576,8 +15703,9 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
                      q_min, q_max, e_min, e_max, i_min, i_max,
                      h_min, h_max, u_min, u_max, nopp_min, nopp_max,
                      first_min, first_max, last_min, last_max,
-                     filter_value, alias_filter, search_term,
-                     external_target,
+                     filter_value, alias_filter,
+                     disc_by_val, arc_class_val,
+                     search_term, external_target,
                      upset_color, upset_mixed, upset_rare,
                      upset_height, overlay_filter):
     sources = {
@@ -15625,6 +15753,9 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
     # Whitelist-validate the alias value so a bad cookie can't
     # interpolate arbitrary text into the SQL.
     alias_val = alias_filter if alias_filter in ("is", "has") else "any"
+    arc_class_safe = (arc_class_val
+                      if arc_class_val in ("single", "short", "mid", "long")
+                      else "any")
 
     try:
         df, n_total = _consensus_query(
@@ -15638,6 +15769,8 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
             date_ranges=date_ranges,
             alias=alias_val,
             search=search_term,
+            disc_by=disc_by_val,
+            arc_class=arc_class_safe,
         )
     except Exception as e:
         empty = pd.DataFrame()
