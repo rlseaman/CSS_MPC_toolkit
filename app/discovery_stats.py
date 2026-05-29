@@ -4260,6 +4260,78 @@ app.layout = html.Div(
                                             ),
                                         ],
                                     ),
+                                    # ── Col 5: misc filters that don't
+                                    # fit into source / class / range /
+                                    # date.  Currently the alias radio
+                                    # (3-state any / is alias / has
+                                    # alias); future additions like a
+                                    # disc_by free-text or single-site
+                                    # toggle would land here.
+                                    html.Div(
+                                        style={"flex": "0 1 240px",
+                                               "minWidth": "230px",
+                                               "display": "flex",
+                                               "flexDirection": "column"},
+                                        children=[
+                                            html.Label(
+                                                "Misc. filters",
+                                                style={**LABEL_STYLE,
+                                                       "fontWeight":
+                                                           "600"}),
+                                            html.Div(
+                                                style={
+                                                    "display": "flex",
+                                                    "alignItems":
+                                                        "center",
+                                                    "gap": "10px",
+                                                    "marginBottom":
+                                                        "3px",
+                                                    "flexWrap":
+                                                        "nowrap",
+                                                    "whiteSpace":
+                                                        "nowrap"},
+                                                children=[
+                                                    html.Span(
+                                                        "Alias",
+                                                        style={
+                                                            **LABEL_STYLE,
+                                                            "minWidth":
+                                                                "85px",
+                                                            "flexShrink":
+                                                                "0"}),
+                                                    dcc.RadioItems(
+                                                        id="consensus-"
+                                                           "alias-"
+                                                           "filter",
+                                                        options=[
+                                                            {"label":
+                                                                " Any",
+                                                             "value":
+                                                                "any"},
+                                                            {"label":
+                                                                " Is alias",
+                                                             "value":
+                                                                "is"},
+                                                            {"label":
+                                                                " Has alias",
+                                                             "value":
+                                                                "has"},
+                                                        ],
+                                                        value="any",
+                                                        inline=True,
+                                                        labelStyle={
+                                                            "marginRight":
+                                                                "8px",
+                                                            "fontSize":
+                                                                "12px"},
+                                                        inputStyle={
+                                                            "marginRight":
+                                                                "2px"},
+                                                    ),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
                                 ],
                             ),
 
@@ -14177,6 +14249,7 @@ def _consensus_query(include, exclude, hide_all_agree=False,
                      class_includes=None, class_excludes=None,
                      numbered="any", named="any",
                      num_ranges=None, date_ranges=None,
+                     alias="any",
                      limit=_CONSENSUS_TABLE_LIMIT):
     """Query the consensus view + mpc_orbits + obs_summary, filtered
     by the dashboard's full set of controls.
@@ -14238,6 +14311,28 @@ def _consensus_query(include, exclude, hide_all_agree=False,
         parts.append("mpn.name IS NOT NULL")
     elif named == "exclude":
         parts.append("mpn.name IS NULL")
+
+    # Alias filter — three states:
+    #   "is"  -> this row's primary_desig is itself a secondary in
+    #           current_identifications (re-uses the same join that
+    #           populates the is_alias column).
+    #   "has" -> this row's primary_desig is a true primary that some
+    #           OTHER row in current_identifications points to via a
+    #           secondary.  EXISTS subquery against the indexed
+    #           packed_primary column; ~42K rows × one index lookup
+    #           each is fast.
+    if alias == "is":
+        parts.append(
+            "(ci.id IS NOT NULL"
+            " AND ci.packed_primary_provisional_designation"
+            "  <> ci.packed_secondary_provisional_designation)")
+    elif alias == "has":
+        parts.append(
+            "EXISTS (SELECT 1 FROM public.current_identifications ci_h"
+            " WHERE ci_h.packed_primary_provisional_designation"
+            "     = v.packed_desig"
+            "   AND ci_h.packed_primary_provisional_designation"
+            "    <> ci_h.packed_secondary_provisional_designation)")
 
     for field, bounds in num_ranges.items():
         if field not in _CONSENSUS_NUM_FIELD_SQL or not bounds:
@@ -15288,6 +15383,7 @@ app.clientside_callback(
     Input("consensus-last_obs-min", "value"),
     Input("consensus-last_obs-max", "value"),
     Input("consensus-filter", "value"),
+    Input("consensus-alias-filter", "value"),
     Input("consensus-upset-color", "value"),
     Input("consensus-upset-mixed", "value"),
     Input("consensus-upset-rare", "value"),
@@ -15301,7 +15397,8 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
                      q_min, q_max, e_min, e_max, i_min, i_max,
                      h_min, h_max, u_min, u_max, nopp_min, nopp_max,
                      first_min, first_max, last_min, last_max,
-                     filter_value, upset_color, upset_mixed, upset_rare,
+                     filter_value, alias_filter,
+                     upset_color, upset_mixed, upset_rare,
                      upset_height, overlay_filter):
     sources = {
         "mpc": r_mpc, "mpc_orbits": r_mpc_orbits, "cneos": r_cneos,
@@ -15345,6 +15442,10 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
           f"show_mixed={show_mixed} trig={ctx.triggered_id}",
           flush=True)
 
+    # Whitelist-validate the alias value so a bad cookie can't
+    # interpolate arbitrary text into the SQL.
+    alias_val = alias_filter if alias_filter in ("is", "has") else "any"
+
     try:
         df, n_total = _consensus_query(
             include, exclude,
@@ -15355,6 +15456,7 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
             named=named,
             num_ranges=num_ranges,
             date_ranges=date_ranges,
+            alias=alias_val,
         )
     except Exception as e:
         empty = pd.DataFrame()
