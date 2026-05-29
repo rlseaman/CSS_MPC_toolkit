@@ -3192,6 +3192,12 @@ _CONSENSUS_TABLE_COLUMNS = [
     {"name": "Designation",   "id": "primary_desig"},
     {"name": "Permid",        "id": "permid"},
     {"name": "Name",          "id": "iau_name"},
+    # Alias resolution against MPC's current_identifications: shows
+    # whether the row's primary_desig is itself a secondary of some
+    # other primary (15 such rows today), so the six split-primary
+    # consensus cases are visible without leaving the tab.
+    {"name": "Alias?",        "id": "is_alias"},
+    {"name": "True primary",  "id": "true_primary"},
     {"name": "MPC",           "id": "in_mpc"},
     {"name": "mpc_orbits",    "id": "in_mpc_orbits"},
     {"name": "CNEOS",         "id": "in_cneos"},
@@ -3215,6 +3221,7 @@ _CONSENSUS_TABLE_COLUMNS = [
     {"name": "n_obs",         "id": "nobs"},
 ]
 _CONSENSUS_TABLE_BOOL_COLS = [
+    "is_alias",
     "in_mpc", "in_mpc_orbits", "in_cneos",
     "in_neocc", "in_neofixer", "in_lowell",
 ]
@@ -14076,7 +14083,25 @@ def _consensus_query(include, exclude, hide_all_agree=False,
                 obs.arc_days::int AS arc,
                 obs.nobs::int     AS nobs,
                 obs.disc_by       AS disc_by,
-                mpn.name          AS iau_name
+                mpn.name          AS iau_name,
+                -- Alias resolution: is this row's primary_desig actually a
+                -- secondary per current_identifications?  Yes when ci has a
+                -- row keyed on it AS secondary, AND that row's primary
+                -- differs.  For non-aliased rows (the vast majority), ci's
+                -- self-row matches with primary == secondary, so is_alias
+                -- is FALSE.  For rows ci has no row for at all (e.g. brand-
+                -- new designations not yet in the snapshot), is_alias is
+                -- also FALSE (treat unknown as primary).
+                (ci.id IS NOT NULL
+                 AND ci.packed_primary_provisional_designation
+                    <> ci.packed_secondary_provisional_designation)
+                                                              AS is_alias,
+                CASE WHEN ci.id IS NOT NULL
+                          AND ci.packed_primary_provisional_designation
+                             <> ci.packed_secondary_provisional_designation
+                     THEN ci.unpacked_primary_provisional_designation
+                     ELSE NULL
+                END                                           AS true_primary
               FROM css_neo_consensus.v_membership_wide v
               LEFT JOIN public.mpc_orbits mo
                 ON mo.packed_primary_provisional_designation = v.packed_desig
@@ -14086,6 +14111,9 @@ def _consensus_query(include, exclude, hide_all_agree=False,
                 ON ni.packed_primary_provisional_designation = v.packed_desig
               LEFT JOIN public.minor_planet_names mpn
                 ON mpn.mp_number = ni.permid
+              LEFT JOIN public.current_identifications ci
+                ON ci.packed_secondary_provisional_designation
+                 = v.packed_desig
              WHERE {where_clause}
         )
     """
@@ -14126,7 +14154,8 @@ def _format_table_rows(df):
     display_df["class"] = display_df["orbit_type_int"].map(
         _ORBIT_TYPE_LABELS).fillna("")
     # Replace NaN with empty string so the table doesn't render "nan".
-    for col in ["iau_name", "permid", "u_param", "nopp", "arc", "nobs",
+    for col in ["iau_name", "permid", "true_primary",
+                "u_param", "nopp", "arc", "nobs",
                 "first_obs", "last_obs", "disc_by"]:
         display_df[col] = display_df[col].fillna("").astype(object)
         if col in ("u_param", "nopp", "arc", "nobs"):
