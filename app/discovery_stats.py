@@ -14829,15 +14829,16 @@ def _build_upset_figure(df, top_n=15, color_by="pattern",
         range=[-0.6, src_count - 0.4],
         row=2, col=1,
     )
-    # In overlay mode we need ~3 stacked elements above the plot area:
-    # the legend (top), the subtitle, and a small gap.  margin.top has
-    # to grow enough so the right-anchored legend can't overlap the
-    # centered subtitle, which was the issue on the cramped 22-px
-    # margin we shipped in commit 2.
-    margin_top = 56 if is_overlay else 22
-    legend_y   = 1.18 if is_overlay else 1.04
-    title_y    = 1.04 if is_overlay else 0.98
-    title_yanchor = "bottom" if is_overlay else "top"
+    # In overlay mode we need vertical space for both the right-anchored
+    # legend and the centered subtitle above the plot area.  Plotly
+    # enforces layout.title.y in [0, 1] (paper coordinates inside the
+    # plot area), so the trick is to keep the subtitle just below the
+    # top edge of the plot area (y=0.98) and push the legend up into
+    # the top margin instead.  margin.top grows in overlay mode to make
+    # room for the legend; in Pattern mode we keep the original tight
+    # 22-px margin.
+    margin_top = 70 if is_overlay else 22
+    legend_y   = 1.22 if is_overlay else 1.04
 
     fig.update_layout(
         height=int(height),
@@ -14862,7 +14863,7 @@ def _build_upset_figure(df, top_n=15, color_by="pattern",
         title=dict(text=subtitle,
                    font=dict(color=fg_neutral, size=11),
                    x=0.5, xanchor="center",
-                   y=title_y, yanchor=title_yanchor),
+                   y=0.98, yanchor="top"),
     )
     return fig
 
