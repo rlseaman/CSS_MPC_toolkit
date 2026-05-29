@@ -14312,27 +14312,37 @@ def _consensus_query(include, exclude, hide_all_agree=False,
     elif named == "exclude":
         parts.append("mpn.name IS NULL")
 
-    # Alias filter — three states:
+    # Alias filter — three states.  Both "is" and "has" are scoped to
+    # the consensus table itself (v_membership_wide), NOT to MPC's full
+    # current_identifications: the question we want to answer is
+    # "where in *this* table does the aliasing show up", which forms a
+    # tight 1-to-1 pairing whose other half is also in the table.
+    #
     #   "is"  -> this row's primary_desig is itself a secondary in
-    #           current_identifications (re-uses the same join that
-    #           populates the is_alias column).
-    #   "has" -> this row's primary_desig is a true primary that some
-    #           OTHER row in current_identifications points to via a
-    #           secondary.  EXISTS subquery against the indexed
-    #           packed_primary column; ~42K rows × one index lookup
-    #           each is fast.
+    #           current_identifications (reuses the same LEFT JOIN
+    #           that populates the is_alias display column).
+    #   "has" -> this row's primary_desig IS the true_primary that some
+    #           OTHER is-alias row in v_membership_wide points to.
+    #           The match set is a small subquery -- today's 9 is_alias
+    #           rows resolve to 9 distinct true primaries, 7 of which
+    #           are themselves NEAs in v_membership_wide (the other 2
+    #           resolve to comets, which the NOT is_comet filter on
+    #           v_membership_wide excludes by design).
     if alias == "is":
         parts.append(
             "(ci.id IS NOT NULL"
             " AND ci.packed_primary_provisional_designation"
             "  <> ci.packed_secondary_provisional_designation)")
     elif alias == "has":
-        parts.append(
-            "EXISTS (SELECT 1 FROM public.current_identifications ci_h"
-            " WHERE ci_h.packed_primary_provisional_designation"
-            "     = v.packed_desig"
-            "   AND ci_h.packed_primary_provisional_designation"
-            "    <> ci_h.packed_secondary_provisional_designation)")
+        parts.append("v.primary_desig IN ("
+                     "  SELECT DISTINCT ci_h.unpacked_primary_provisional_designation"
+                     "  FROM css_neo_consensus.v_membership_wide v_h"
+                     "  JOIN public.current_identifications ci_h"
+                     "    ON ci_h.packed_secondary_provisional_designation"
+                     "     = v_h.packed_desig"
+                     "  WHERE ci_h.packed_primary_provisional_designation"
+                     "     <> ci_h.packed_secondary_provisional_designation"
+                     ")")
 
     for field, bounds in num_ranges.items():
         if field not in _CONSENSUS_NUM_FIELD_SQL or not bounds:
