@@ -4944,6 +4944,34 @@ app.layout = html.Div(
                                     ),
                                 ],
                             ),
+
+                            # Heatmap: discovery station × source-
+                            # membership pattern.  Same patterns as
+                            # plot #2's columns (P1..PN); rows are the
+                            # top-N disc_by stations + Other +
+                            # (unknown).  Cell color = count of NEOs
+                            # at that intersection.  Surfaces the audit
+                            # story at a glance (G45 row heavy on the
+                            # missing-only-NF column, C51 heavy on the
+                            # mpc_orbits-only column, etc.).
+                            html.Div(
+                                style={"marginTop": "12px",
+                                       "fontSize": "11px"},
+                                children=[
+                                    html.Span(
+                                        "Discovery station × source-"
+                                        "membership pattern:",
+                                        className="subtext",
+                                        style={"display": "block",
+                                               "marginBottom": "4px",
+                                               "fontWeight": "600"}),
+                                    dcc.Graph(
+                                        id="consensus-pattern-heatmap",
+                                        config={"displayModeBar": False},
+                                        style={"marginBottom": "8px"},
+                                    ),
+                                ],
+                            ),
                         ]),
                     ],
                 )] if _RND else []),
@@ -15114,6 +15142,135 @@ def _build_histograms_figure(df, theme="dark"):
     return fig
 
 
+def _build_pattern_heatmap_figure(df, theme="dark",
+                                  top_patterns=12, top_stations=10):
+    """Heatmap of disc_by × source-membership pattern for the current
+    filtered df.  Pairs with the histograms above and the upset above
+    them: where the upset's color overlays slice each pattern column
+    by overlay dimension, this heatmap slices it by discovery station.
+
+    Rows: top-N stations + Other + (unknown), sorted by total count
+          descending (with (unknown) pinned to the bottom).
+    Cols: top-N source-membership patterns from v_membership_wide,
+          mirroring the upset's bar selection.  Labeled P1..PN; the
+          full pattern surfaces on hover.
+    Cell: count of NEOs at that (station, pattern) intersection.
+    """
+    bool_cols = ["in_mpc", "in_mpc_orbits", "in_cneos",
+                 "in_neocc", "in_neofixer", "in_lowell"]
+    fg_neutral = "rgba(150,150,150,1)"
+    src_labels = [_CONSENSUS_SOURCE_LABELS[c[len("in_"):]]
+                  for c in bool_cols]
+
+    def _empty(msg):
+        return go.Figure(layout={
+            "height": 280,
+            "paper_bgcolor": "rgba(0,0,0,0)",
+            "plot_bgcolor": "rgba(0,0,0,0)",
+            "margin": {"l": 8, "r": 8, "t": 8, "b": 8},
+            "xaxis": {"visible": False},
+            "yaxis": {"visible": False},
+            "annotations": [{
+                "text": msg, "xref": "paper", "yref": "paper",
+                "x": 0.5, "y": 0.5, "showarrow": False,
+                "font": {"color": fg_neutral, "size": 12},
+            }],
+        })
+
+    if (df is None or df.empty
+            or "disc_by" not in df.columns):
+        return _empty("No matches in current filter.")
+
+    # Top patterns: same selection rule as _build_upset_figure
+    # (drop all-six, take top N by count).
+    pat_counts = (df.groupby(bool_cols, sort=False).size()
+                    .sort_values(ascending=False))
+    all_six_key = (True,) * len(bool_cols)
+    pat_counts = pat_counts.drop(index=all_six_key, errors="ignore")
+    if pat_counts.empty:
+        return _empty("No disagreements in current view.")
+    pat_keys = list(pat_counts.head(top_patterns).index)
+
+    # Stations: bin disc_by into top-N + Other + (unknown).
+    stn_series = df["disc_by"].fillna("(unknown)").astype(str)
+    stn_series = stn_series.where(stn_series != "", "(unknown)")
+    stn_counts = stn_series.value_counts()
+    explicit = [s for s in stn_counts.head(top_stations).index
+                if s != "(unknown)"]
+    other_total = int(stn_counts.drop(explicit, errors="ignore")
+                                 .drop("(unknown)", errors="ignore").sum())
+    unknown_total = int(stn_counts.get("(unknown)", 0))
+    station_labels = list(explicit)
+    if other_total > 0:
+        station_labels.append("Other")
+    if unknown_total > 0:
+        station_labels.append("(unknown)")
+
+    def _map_stn(s):
+        if s == "(unknown)":
+            return "(unknown)"
+        if s in explicit:
+            return s
+        return "Other"
+
+    df_cat = df.assign(_stn=stn_series.map(_map_stn))
+
+    # One groupby keyed on bools + station so each cell is a dict
+    # lookup -- O(rows) once, cells indexed in O(1) below.
+    gb = (df_cat.groupby(bool_cols + ["_stn"], sort=False).size())
+    gb_dict = {tuple(k): int(v) for k, v in gb.items()}
+
+    # Cross-tab matrix in canonical row / column order.  Plotly's
+    # Heatmap renders y top-down with y[0] at the bottom, so we
+    # reverse the rows so the busiest station ends up at the top.
+    z = []
+    hover = []
+    for stn in reversed(station_labels):
+        z_row = []
+        hover_row = []
+        for j, pat_key in enumerate(pat_keys):
+            cnt = gb_dict.get(tuple(pat_key) + (stn,), 0)
+            z_row.append(cnt)
+            included = [src_labels[k]
+                        for k, inc in enumerate(pat_key) if inc]
+            n_in = len(included)
+            hover_row.append(
+                f"<b>{cnt:,} NEOs</b><br>"
+                f"Station: {stn}<br>"
+                f"Pattern P{j+1}: in {n_in} source"
+                f"{'s' if n_in != 1 else ''}: "
+                + (", ".join(included) if included else "(none)")
+            )
+        z.append(z_row)
+        hover.append(hover_row)
+
+    x_labels = [f"P{i+1}" for i in range(len(pat_keys))]
+    y_labels = list(reversed(station_labels))
+
+    fig = go.Figure(go.Heatmap(
+        z=z, x=x_labels, y=y_labels,
+        colorscale="Viridis",
+        hoverinfo="text",
+        text=hover,
+        colorbar=dict(thickness=10, len=0.85,
+                      tickfont=dict(color=fg_neutral, size=9)),
+    ))
+    fig.update_layout(
+        height=320,
+        margin=dict(l=8, r=8, t=24, b=24),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(showgrid=False, zeroline=False,
+                   tickfont=dict(color=fg_neutral, size=10),
+                   title=dict(text="pattern index "
+                                   "(see hover for membership)",
+                              font=dict(color=fg_neutral, size=10))),
+        yaxis=dict(showgrid=False, zeroline=False, automargin=True,
+                   tickfont=dict(color=fg_neutral, size=10)),
+    )
+    return fig
+
+
 def _build_upset_figure(df, top_n=15, color_by="pattern",
                         show_mixed=False, show_rare=False, height=280):
     """Render an UpSet plot of source-membership patterns: top
@@ -15870,6 +16027,7 @@ app.clientside_callback(
     Output("consensus-breakdown", "figure"),
     Output("consensus-upset", "figure"),
     Output("consensus-histograms", "figure"),
+    Output("consensus-pattern-heatmap", "figure"),
     Input("consensus-radio-mpc", "value"),
     Input("consensus-radio-mpc_orbits", "value"),
     Input("consensus-radio-cneos", "value"),
@@ -16000,7 +16158,8 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
                                     show_mixed=show_mixed,
                                     show_rare=show_rare,
                                     height=upset_height_px),
-                _build_histograms_figure(empty))
+                _build_histograms_figure(empty),
+                _build_pattern_heatmap_figure(empty))
     print(f"[consensus] -> n_total={n_total} returned_rows={len(df)}",
           flush=True)
 
@@ -16076,7 +16235,8 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
                                 show_mixed=show_mixed,
                                 show_rare=show_rare,
                                 height=upset_height_px),
-            _build_histograms_figure(df))
+            _build_histograms_figure(df),
+            _build_pattern_heatmap_figure(df))
 
 
 def _load_nea_txt_lookup():
