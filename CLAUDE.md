@@ -114,16 +114,88 @@ Observation history — are live on prod.
   per-NEO booleans across MPC NEA.txt, `mpc_orbits` (q ≤ 1.3), JPL
   CNEOS, ESA NEOCC, CSS NEOfixer, Lowell `astorb`. Highlights
   agreements / disagreements among the six sources.
-- Filter rows by per-source include / exclude / any, by orbit class,
-  numbered/named status, and several numeric / date ranges. "Reset"
-  and "All-six-agree preset" buttons are clientside.
-- Disagreement-breakdown bar (which source pattern, how many objects)
-  and an UpSet plot beneath the breakdown make pairwise / triple
-  intersections legible at a glance.
-- Snapshot stats card surfaces total / all-six / disagreements counts
-  at a glance.
-- Data: live join on `css_neo_consensus.v_membership_wide` joined
-  against `obs_summary` for first/last/arc/nobs columns.
+- **Filter panel** (five columns):
+  - Per-source 3-state radios (Inc / Exc / Any) + a `hide_all_six`
+    checklist (the "show only disagreements" toggle).
+  - Class radios (Atira / Aten / Apollo / Amor / Mars-x) with
+    auto-Only/Exc switching.
+  - Numbered / Named bool rows.
+  - "Filter by range" column: q / e / i / H / U / Nopp min-max
+    inputs; first_obs / last_obs date ranges.
+  - **"Misc. filters" column** (added 2026-05-29):
+    Alias (Any / Is alias / Has alias — scoped to the table's own
+    pairing, NOT MPC's full `current_identifications` catalogue);
+    `Disc by` free-text obscode filter (whitelist-validated against
+    MPC obscode shape); 7-bin Arc dropdown with sub-day bins
+    (`< 3 h`, `3–6 h`, `6–12 h`, `12 h – 1 d`, `1–30 d`, `30 d – 1 yr`,
+    `≥ 1 yr`); precise `Arc (hr)` min/max numeric range; Sites
+    3-state (Any / Single-site ≤ 2 / Multi ≥ 3) backed by the new
+    `obs_summary.n_stns` column.
+- **Above-the-table controls**: `Find:` navigation search box
+  (matches primary_desig / permid / iau_name, case-insensitive +
+  space-tolerant via `REGEXP_REPLACE`; whitelist guard against SQL
+  injection); `Open external links in:` dropdown (JPL SBDB /
+  Sentry / MPC Explorer / MPC DB / NEOfixer / ESA NEOCC -- NEOCC
+  routes through permid for numbered NEOs so it lands on their
+  records).
+- **Per-row `↗` column** is a markdown link to whichever target the
+  Open-in dropdown picked. All links open in a new tab
+  (`markdown_options={"link_target": "_blank"}` on the DataTable).
+- **Table identity columns**: Designation (= primary_desig =
+  unpacked primary provisional, NEVER a number); Permid; Name;
+  Alias? + True primary (populated when the row's primary_desig is
+  itself a secondary in `current_identifications` -- nine rows
+  today, the Rubin-tracklet-was-actually-a-comet pair plus seven
+  asteroidal case-B aliases).
+- **Plot #1**: horizontal disagreement-breakdown bar (one segment
+  per "Missing from X" / "Only in X" pattern + a single gray
+  "Mixed (2-4 sources)" catch-all).
+- **Plot #2 (UpSet)**: top bars per source-membership pattern,
+  dot matrix below. Controls just above the plot:
+  - **Color overlay** radio: Pattern (default consensus gradient)
+    / Discovery site / H mag (size, with 19.25 and 24.25 thresholds
+    for ≈ 500 m and ≈ 50 m) / Discovery decade / Arc length / q
+    distance from 1.3. Non-Pattern options stack each column by
+    overlay category, horizontal legend at the top.
+  - **Show Mixed (2-4) bin** checkbox: appends a single aggregated
+    column on the right for the 2-3-4-source disagreement set.
+  - **Show Rare (rank > 15) bin** checkbox: appends another column
+    aggregating patterns beyond the top-15 cutoff. Distinct from
+    Mixed -- Rare is by *rank*, Mixed is by source-pattern *type*.
+  - **Height** S / M / L radio (280 / 400 / 560 px). Default M.
+- **Click-to-filter** on plot #2: clicking a pattern bar snaps the
+  source radios to that pattern; clicking an overlay segment ALSO
+  writes a `{category, color_by}` filter to a Store; clicking the
+  Mixed or Rare aggregate bars writes `mixed_only` or `rare_only`.
+  A chip below plot #2 surfaces the active overlay/aggregate filter
+  with a Clear button. Auto-cleared on color-overlay change.
+- **Histogram strip below the table**: five small bar charts
+  (Discovery site / H / Decade / Arc / q distance) reflecting the
+  current filtered df with the same palettes as the upset overlay.
+- **Heatmap below the histograms**: discovery station × source-
+  membership pattern grid (rows: top-10 stations + Other +
+  (unknown); cols: top-12 patterns labelled P1..P12 with full
+  hover). Cell color = count of NEOs at that intersection. Pairs
+  with the upset above and the histograms in between: where the
+  upset slices each pattern column by overlay-as-color and the
+  histograms slice by overlay-as-x, this heatmap slices by
+  station-as-y.
+- **Downloads**: "Download designations" (one designation per
+  line; checkbox toggles packed format for numbered NEOs ->
+  packed permanent like `00433` / `~0fr6`, unnumbered -> packed
+  provisional from the row); "Download NEA.txt subset" (original
+  MPCORB lines for displayed objects on MPC's NEA.txt).
+- **Reset button** (in the tab header alongside the all-six
+  preset) covers every control on the page -- 44 outputs spanning
+  filters, display radios, download toggle, and the click-filter
+  Store. Preset preserves display choices via `no_update`.
+- Snapshot stats card surfaces total / all-six / disagreements
+  counts at a glance.
+- Data: live join on `css_neo_consensus.v_membership_wide` against
+  `obs_summary` (per-NEO `first_obs` / `last_obs` / `arc_days` /
+  `nobs` / `n_stns` / `disc_by`) and `current_identifications` for
+  alias resolution. `n_stns` was added to the `obs_summary` matview
+  on 2026-05-29 -- the previous schema had to compute it per render.
 
 ### Tab 2: Discoveries by Year
 - Stacked bar chart of NEO discoveries by year/survey
