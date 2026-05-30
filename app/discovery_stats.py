@@ -4919,6 +4919,31 @@ app.layout = html.Div(
                                     for col in _CONSENSUS_TABLE_BOOL_COLS
                                 ],
                             ),
+
+                            # Histogram strip below the table — one per
+                            # upset-overlay dimension.  Same bins, same
+                            # palettes; the histograms reflect the
+                            # current filtered df so they always agree
+                            # with the table contents.
+                            html.Div(
+                                style={"marginTop": "16px",
+                                       "fontSize": "11px"},
+                                children=[
+                                    html.Span(
+                                        "Distribution of the current "
+                                        "selection across the upset "
+                                        "overlay dimensions:",
+                                        className="subtext",
+                                        style={"display": "block",
+                                               "marginBottom": "4px",
+                                               "fontWeight": "600"}),
+                                    dcc.Graph(
+                                        id="consensus-histograms",
+                                        config={"displayModeBar": False},
+                                        style={"marginBottom": "8px"},
+                                    ),
+                                ],
+                            ),
                         ]),
                     ],
                 )] if _RND else []),
@@ -15007,6 +15032,88 @@ def _upset_overlay_categories(df, color_by):
     return None
 
 
+def _build_histograms_figure(df, theme="dark"):
+    """Five small histograms in a row, one per overlay dimension, that
+    reflect the current filtered df.  Reuses the same bin definitions
+    and palettes as `_build_upset_figure`'s overlay options so the
+    histograms and the upset stacks tell the same story in different
+    geometric form.  Categories with zero rows in the current view are
+    omitted from each subplot so empty filter states stay legible.
+    """
+    fg_neutral = "rgba(150,150,150,1)"
+    dims = [
+        ("disc_site",   "Discovery site"),
+        ("h_size",      "H mag (size)"),
+        ("year_disc",   "Decade"),
+        ("arc_class",   "Arc length"),
+        ("q_proximity", "q distance from 1.3"),
+    ]
+
+    fig = make_subplots(
+        rows=1, cols=len(dims),
+        subplot_titles=[label for _, label in dims],
+        horizontal_spacing=0.04,
+    )
+
+    if df is None or df.empty:
+        fig.update_layout(
+            height=200,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            margin=dict(l=8, r=8, t=28, b=24),
+            annotations=[*fig.layout.annotations, {
+                "text": "No matches in current filter.",
+                "xref": "paper", "yref": "paper",
+                "x": 0.5, "y": 0.5, "showarrow": False,
+                "font": {"color": fg_neutral, "size": 12},
+            }],
+        )
+        return fig
+
+    for col_idx, (dim_id, _) in enumerate(dims, start=1):
+        cats = _upset_overlay_categories(df, dim_id)
+        if cats is None:
+            continue
+        counts = cats.value_counts()
+        order = _UPSET_CATEGORY_ORDER[dim_id]
+        palette = _UPSET_PALETTES[dim_id]
+        # Keep only categories that actually appear in this view, in
+        # the canonical sort order so the bars line up across renders.
+        labels = [c for c in order if counts.get(c, 0) > 0]
+        values = [int(counts.get(c, 0)) for c in labels]
+        colors = [palette.get(c, "#888888") for c in labels]
+        fig.add_trace(go.Bar(
+            x=labels, y=values,
+            text=values,
+            textposition="outside",
+            textfont=dict(color=fg_neutral, size=9),
+            marker=dict(color=colors, line=dict(width=0)),
+            hovertext=[f"<b>{c}</b><br>{v:,} NEOs"
+                       for c, v in zip(labels, values)],
+            hoverinfo="text",
+            showlegend=False,
+        ), row=1, col=col_idx)
+        fig.update_xaxes(tickangle=-30, tickfont=dict(size=9,
+                                                     color=fg_neutral),
+                         row=1, col=col_idx)
+        fig.update_yaxes(showticklabels=False, showgrid=False,
+                         zeroline=False, row=1, col=col_idx)
+
+    # Subplot titles inherit color from the figure font.
+    for ann in fig.layout.annotations:
+        ann.font = dict(color=fg_neutral, size=11)
+
+    fig.update_layout(
+        height=220,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=8, r=8, t=28, b=60),
+        showlegend=False,
+        bargap=0.18,
+    )
+    return fig
+
+
 def _build_upset_figure(df, top_n=15, color_by="pattern",
                         show_mixed=False, show_rare=False, height=280):
     """Render an UpSet plot of source-membership patterns: top
@@ -15724,6 +15831,7 @@ app.clientside_callback(
     Output("consensus-table", "page_current"),
     Output("consensus-breakdown", "figure"),
     Output("consensus-upset", "figure"),
+    Output("consensus-histograms", "figure"),
     Input("consensus-radio-mpc", "value"),
     Input("consensus-radio-mpc_orbits", "value"),
     Input("consensus-radio-cneos", "value"),
@@ -15853,7 +15961,8 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
                 _build_upset_figure(empty, color_by=upset_color,
                                     show_mixed=show_mixed,
                                     show_rare=show_rare,
-                                    height=upset_height_px))
+                                    height=upset_height_px),
+                _build_histograms_figure(empty))
     print(f"[consensus] -> n_total={n_total} returned_rows={len(df)}",
           flush=True)
 
@@ -15928,7 +16037,8 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
             _build_upset_figure(df, color_by=upset_color,
                                 show_mixed=show_mixed,
                                 show_rare=show_rare,
-                                height=upset_height_px))
+                                height=upset_height_px),
+            _build_histograms_figure(df))
 
 
 def _load_nea_txt_lookup():
