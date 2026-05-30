@@ -15546,14 +15546,23 @@ def _build_upset_figure(df, top_n=15, color_by="pattern",
 #          hide_all off (so the all-six-agree set surfaces).
 #
 # Outputs in this order: 6 source radios, 5 class radios, numbered,
-# named, 6 numeric ranges × 2, 2 date ranges × 2, hide_all checklist.
-# Total: 6 + 5 + 1 + 1 + 12 + 4 + 1 = 30 outputs.
+# named, 6 numeric ranges × 2, 2 date ranges × 2, hide_all checklist,
+# then the 11 additions from commits 2/3/4/6/7/9/10/11/13 (alias,
+# disc_by, arc_class, site_class, search, external_target, upset_color,
+# upset_mixed, upset_rare, upset_height, overlay_filter Store).
+# Total: 30 + 11 = 41 outputs.
+#
+# Reset = everything back to defaults including the display radios.
+# Preset = the consensus set, with display radios preserved -- the
+# user might be exploring the all-six bucket and we shouldn't undo
+# their overlay / color / height choices.
 app.clientside_callback(
     """
     function(reset_clicks, preset_clicks) {
+        const NU = window.dash_clientside.no_update;
         const ctx = window.dash_clientside.callback_context;
         if (!ctx.triggered || ctx.triggered.length === 0) {
-            return Array(30).fill(window.dash_clientside.no_update);
+            return Array(41).fill(NU);
         }
         const trig = ctx.triggered[0].prop_id.split('.')[0];
         const empty_ranges = Array(16).fill(null);
@@ -15564,7 +15573,18 @@ app.clientside_callback(
                 'any',                                          // numbered
                 'any',                                          // named
                 ...empty_ranges,                                // 12 num + 4 date
-                ['hide_all']
+                ['hide_all'],                                   // consensus-filter
+                'any',                                          // alias filter
+                '',                                             // disc-by
+                'any',                                          // arc-class
+                'any',                                          // site-class
+                '',                                             // search
+                'sbdb',                                         // external target
+                'pattern',                                      // upset color
+                [],                                             // upset mixed
+                [],                                             // upset rare
+                '400',                                          // upset height
+                null,                                           // overlay store
             ];
         }
         if (trig === 'consensus-preset-all') {
@@ -15574,10 +15594,17 @@ app.clientside_callback(
                 'any',
                 'any',
                 ...empty_ranges,
-                []
+                [],                                             // consensus-filter
+                'any',                                          // alias filter
+                '',                                             // disc-by
+                'any',                                          // arc-class
+                'any',                                          // site-class
+                '',                                             // search
+                NU, NU, NU, NU, NU,                             // display radios
+                null,                                           // overlay store
             ];
         }
-        return Array(30).fill(window.dash_clientside.no_update);
+        return Array(41).fill(NU);
     }
     """,
     Output("consensus-radio-mpc", "value"),
@@ -15610,6 +15637,17 @@ app.clientside_callback(
     Output("consensus-last_obs-min", "value"),
     Output("consensus-last_obs-max", "value"),
     Output("consensus-filter", "value"),
+    Output("consensus-alias-filter", "value"),
+    Output("consensus-disc-by", "value"),
+    Output("consensus-arc-class", "value"),
+    Output("consensus-site-class", "value"),
+    Output("consensus-search", "value"),
+    Output("consensus-external-target", "value"),
+    Output("consensus-upset-color", "value"),
+    Output("consensus-upset-mixed", "value"),
+    Output("consensus-upset-rare", "value"),
+    Output("consensus-upset-height", "value"),
+    Output("consensus-overlay-filter", "data", allow_duplicate=True),
     Input("consensus-reset", "n_clicks"),
     Input("consensus-preset-all", "n_clicks"),
     prevent_initial_call=True,
