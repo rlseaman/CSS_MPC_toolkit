@@ -4508,6 +4508,65 @@ app.layout = html.Div(
                                                     ),
                                                 ],
                                             ),
+                                            # Site-class (n_stns) filter:
+                                            # ≤2 = effectively single-
+                                            # site detection; ≥3 = a
+                                            # multi-facility confirmed
+                                            # track.  Filter powered by
+                                            # obs_summary.n_stns (added
+                                            # to the matview alongside
+                                            # this commit).
+                                            html.Div(
+                                                style={
+                                                    "display": "flex",
+                                                    "alignItems":
+                                                        "center",
+                                                    "gap": "10px",
+                                                    "marginBottom":
+                                                        "3px",
+                                                    "flexWrap":
+                                                        "nowrap",
+                                                    "whiteSpace":
+                                                        "nowrap"},
+                                                children=[
+                                                    html.Span(
+                                                        "Sites",
+                                                        style={
+                                                            **LABEL_STYLE,
+                                                            "minWidth":
+                                                                "85px",
+                                                            "flexShrink":
+                                                                "0"}),
+                                                    dcc.RadioItems(
+                                                        id="consensus-"
+                                                           "site-class",
+                                                        options=[
+                                                            {"label":
+                                                                " Any",
+                                                             "value":
+                                                                "any"},
+                                                            {"label":
+                                                                " Single-site (≤2)",
+                                                             "value":
+                                                                "single"},
+                                                            {"label":
+                                                                " Multi (≥3)",
+                                                             "value":
+                                                                "multi"},
+                                                        ],
+                                                        value="any",
+                                                        inline=True,
+                                                        labelStyle={
+                                                            "marginRight":
+                                                                "8px",
+                                                            "fontSize":
+                                                                "12px"},
+                                                        inputStyle={
+                                                            "marginRight":
+                                                                "2px"},
+                                                    ),
+                                                ],
+                                            ),
                                         ],
                                     ),
                                 ],
@@ -14490,7 +14549,7 @@ def _consensus_query(include, exclude, hide_all_agree=False,
                      numbered="any", named="any",
                      num_ranges=None, date_ranges=None,
                      alias="any", search=None,
-                     disc_by=None, arc_class="any",
+                     disc_by=None, arc_class="any", site_class="any",
                      limit=_CONSENSUS_TABLE_LIMIT):
     """Query the consensus view + mpc_orbits + obs_summary, filtered
     by the dashboard's full set of controls.
@@ -14603,6 +14662,15 @@ def _consensus_query(include, exclude, hide_all_agree=False,
     elif arc_class == "long":
         parts.append("obs.arc_days >= 365")
 
+    # Site-class filter (n_stns from the obs_summary matview).  The
+    # ≤2 threshold matches the audit's "single-site detection" line:
+    # 1–2 stations means the object was effectively observed by one
+    # facility (a single-night track plus maybe one follow-up).
+    if site_class == "single":
+        parts.append("obs.n_stns <= 2")
+    elif site_class == "multi":
+        parts.append("obs.n_stns >= 3")
+
     # Navigation search.  Matches primary_desig (case-insensitive,
     # space-tolerant), permid (exact), iau_name (case-insensitive).
     # Whitelist-sanitised: only alphanumerics, space, slash, hyphen,
@@ -14677,6 +14745,7 @@ def _consensus_query(include, exclude, hide_all_agree=False,
                 obs.last_obs,
                 obs.arc_days::int AS arc,
                 obs.nobs::int     AS nobs,
+                obs.n_stns::int   AS n_stns,
                 obs.disc_by       AS disc_by,
                 mpn.name          AS iau_name,
                 -- Alias resolution: is this row's primary_desig actually a
@@ -15688,6 +15757,7 @@ app.clientside_callback(
     Input("consensus-alias-filter", "value"),
     Input("consensus-disc-by", "value"),
     Input("consensus-arc-class", "value"),
+    Input("consensus-site-class", "value"),
     Input("consensus-search", "value"),
     Input("consensus-external-target", "value"),
     Input("consensus-upset-color", "value"),
@@ -15704,7 +15774,7 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
                      h_min, h_max, u_min, u_max, nopp_min, nopp_max,
                      first_min, first_max, last_min, last_max,
                      filter_value, alias_filter,
-                     disc_by_val, arc_class_val,
+                     disc_by_val, arc_class_val, site_class_val,
                      search_term, external_target,
                      upset_color, upset_mixed, upset_rare,
                      upset_height, overlay_filter):
@@ -15756,6 +15826,9 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
     arc_class_safe = (arc_class_val
                       if arc_class_val in ("single", "short", "mid", "long")
                       else "any")
+    site_class_safe = (site_class_val
+                       if site_class_val in ("single", "multi")
+                       else "any")
 
     try:
         df, n_total = _consensus_query(
@@ -15771,6 +15844,7 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
             search=search_term,
             disc_by=disc_by_val,
             arc_class=arc_class_safe,
+            site_class=site_class_safe,
         )
     except Exception as e:
         empty = pd.DataFrame()

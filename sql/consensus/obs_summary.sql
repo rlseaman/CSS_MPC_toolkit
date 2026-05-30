@@ -30,6 +30,10 @@ SELECT
     EXTRACT(EPOCH FROM (max(o.obstime)
                       - min(o.obstime))) / 86400.0    AS arc_days,
     count(*)                                          AS nobs,
+    -- Distinct-station count.  Powers the "single-site detection"
+    -- filter on the Consensus tab.  count(DISTINCT) on an integer
+    -- column is cheap; the GROUP BY already iterates the rows.
+    count(DISTINCT o.stn)                             AS n_stns,
     -- Discovery station: first stn (by obstime) on a discovery row
     -- (obs_sbn.disc='*'). Tracklets normally carry 2-4 disc='*' rows
     -- from the same station; min(...) FILTER picks one
@@ -48,6 +52,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS obs_summary_primary_desig_idx
     ON css_neo_consensus.obs_summary (primary_desig);
 
 COMMENT ON MATERIALIZED VIEW css_neo_consensus.obs_summary IS
-    'Per-NEO obs aggregates (first_obs, last_obs, arc_days, nobs) from obs_sbn, keyed on primary_desig from v_membership_wide. Daily refresh; LEFT JOIN target for the NEO Consensus dashboard tab.';
+    'Per-NEO obs aggregates (first_obs, last_obs, arc_days, nobs, n_stns, disc_by) from obs_sbn, keyed on primary_desig from v_membership_wide. Daily refresh; LEFT JOIN target for the NEO Consensus dashboard tab.';
 
 GRANT SELECT ON css_neo_consensus.obs_summary TO claude_ro;
