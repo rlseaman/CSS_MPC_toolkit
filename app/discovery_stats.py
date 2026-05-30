@@ -4482,21 +4482,33 @@ app.layout = html.Div(
                                                              "value":
                                                                 "any"},
                                                             {"label":
-                                                                "Single-night (<1 d)",
+                                                                "< 3 h",
                                                              "value":
-                                                                "single"},
+                                                                "lt3h"},
                                                             {"label":
-                                                                "<30 d",
+                                                                "3–6 h",
                                                              "value":
-                                                                "short"},
+                                                                "3to6h"},
+                                                            {"label":
+                                                                "6–12 h",
+                                                             "value":
+                                                                "6to12h"},
+                                                            {"label":
+                                                                "12 h – 1 d",
+                                                             "value":
+                                                                "12hto1d"},
+                                                            {"label":
+                                                                "1–30 d",
+                                                             "value":
+                                                                "1to30d"},
                                                             {"label":
                                                                 "30 d – 1 yr",
                                                              "value":
-                                                                "mid"},
+                                                                "30dto1y"},
                                                             {"label":
                                                                 "≥ 1 yr",
                                                              "value":
-                                                                "long"},
+                                                                "ge1y"},
                                                         ],
                                                         value="any",
                                                         clearable=False,
@@ -4505,6 +4517,71 @@ app.layout = html.Div(
                                                                 "180px",
                                                             "fontSize":
                                                                 "12px"},
+                                                    ),
+                                                ],
+                                            ),
+                                            # Precise arc range in hours.
+                                            # Power-user lever for the
+                                            # sub-day discoveries the
+                                            # dropdown bins above only
+                                            # approximate.  Empty min /
+                                            # max means "no constraint
+                                            # on that side"; both empty
+                                            # leaves the filter off.
+                                            html.Div(
+                                                style={
+                                                    "display": "flex",
+                                                    "alignItems":
+                                                        "center",
+                                                    "gap": "10px",
+                                                    "marginBottom":
+                                                        "3px",
+                                                    "flexWrap":
+                                                        "nowrap",
+                                                    "whiteSpace":
+                                                        "nowrap"},
+                                                children=[
+                                                    html.Span(
+                                                        "Arc (hr)",
+                                                        style={
+                                                            **LABEL_STYLE,
+                                                            "minWidth":
+                                                                "85px",
+                                                            "flexShrink":
+                                                                "0"}),
+                                                    dcc.Input(
+                                                        id="consensus-"
+                                                           "arc-hr-min",
+                                                        type="number",
+                                                        placeholder="min",
+                                                        min=0,
+                                                        step=0.1,
+                                                        debounce=True,
+                                                        style={
+                                                            "width": "70px",
+                                                            "fontSize":
+                                                                "12px",
+                                                            "padding":
+                                                                "3px 6px"},
+                                                    ),
+                                                    html.Span("to",
+                                                              style={
+                                                                "fontSize":
+                                                                  "12px"}),
+                                                    dcc.Input(
+                                                        id="consensus-"
+                                                           "arc-hr-max",
+                                                        type="number",
+                                                        placeholder="max",
+                                                        min=0,
+                                                        step=0.1,
+                                                        debounce=True,
+                                                        style={
+                                                            "width": "70px",
+                                                            "fontSize":
+                                                                "12px",
+                                                            "padding":
+                                                                "3px 6px"},
                                                     ),
                                                 ],
                                             ),
@@ -14628,6 +14705,7 @@ def _consensus_query(include, exclude, hide_all_agree=False,
                      num_ranges=None, date_ranges=None,
                      alias="any", search=None,
                      disc_by=None, arc_class="any", site_class="any",
+                     arc_hr_min=None, arc_hr_max=None,
                      limit=_CONSENSUS_TABLE_LIMIT):
     """Query the consensus view + mpc_orbits + obs_summary, filtered
     by the dashboard's full set of controls.
@@ -14729,16 +14807,34 @@ def _consensus_query(include, exclude, hide_all_agree=False,
         if _re_obscode.match(code):
             parts.append(f"obs.disc_by = '{code}'")
 
-    # Arc-class filter.  Same bins as the upset overlay; "any" is
-    # the no-op default.  arc_days is INTEGER in obs_summary.
-    if arc_class == "single":
-        parts.append("obs.arc_days < 1")
-    elif arc_class == "short":
-        parts.append("obs.arc_days < 30")
-    elif arc_class == "mid":
-        parts.append("obs.arc_days >= 30 AND obs.arc_days < 365")
-    elif arc_class == "long":
-        parts.append("obs.arc_days >= 365")
+    # Arc-class filter.  Seven sub-day-aware bins, matching what the
+    # 2026-05-29 G45-missing-NF audit needed (every one of those 50
+    # NEAs sits in 1.3-7.3 h).  "any" is the no-op default.  The
+    # obs_summary matview keeps arc_days as numeric, so sub-day arcs
+    # carry full precision down to seconds.
+    _arc_class_sql = {
+        "lt3h":     "obs.arc_days * 24 < 3",
+        "3to6h":    "obs.arc_days * 24 >= 3  AND obs.arc_days * 24 < 6",
+        "6to12h":   "obs.arc_days * 24 >= 6  AND obs.arc_days * 24 < 12",
+        "12hto1d":  "obs.arc_days >= 0.5     AND obs.arc_days < 1",
+        "1to30d":   "obs.arc_days >= 1       AND obs.arc_days < 30",
+        "30dto1y":  "obs.arc_days >= 30      AND obs.arc_days < 365",
+        "ge1y":     "obs.arc_days >= 365",
+    }
+    if arc_class in _arc_class_sql:
+        parts.append(_arc_class_sql[arc_class])
+
+    # Arc range in hours -- power-user lever in the Misc. column for
+    # precise queries beneath the dropdown's bin granularity.
+    for bound, op in [(arc_hr_min, ">="), (arc_hr_max, "<=")]:
+        if bound is None or bound == "":
+            continue
+        try:
+            hrs = float(bound)
+        except (TypeError, ValueError):
+            continue
+        if hrs >= 0:
+            parts.append(f"obs.arc_days * 24 {op} {hrs}")
 
     # Site-class filter (n_stns from the obs_summary matview).  The
     # ≤2 threshold matches the audit's "single-site detection" line:
@@ -15732,7 +15828,8 @@ def _build_upset_figure(df, top_n=15, color_by="pattern",
 # then the 11 additions from commits 2/3/4/6/7/9/10/11/13 (alias,
 # disc_by, arc_class, site_class, search, external_target, upset_color,
 # upset_mixed, upset_rare, upset_height, overlay_filter Store).
-# Total: 30 + 12 = 42 outputs.
+# Total: 30 + 14 = 44 outputs (12 from commits 2-13 + the
+# packed-download toggle + the two arc-hr range inputs).
 #
 # Reset = everything back to defaults including the display radios.
 # Preset = the consensus set, with display radios preserved -- the
@@ -15744,7 +15841,7 @@ app.clientside_callback(
         const NU = window.dash_clientside.no_update;
         const ctx = window.dash_clientside.callback_context;
         if (!ctx.triggered || ctx.triggered.length === 0) {
-            return Array(42).fill(NU);
+            return Array(44).fill(NU);
         }
         const trig = ctx.triggered[0].prop_id.split('.')[0];
         const empty_ranges = Array(16).fill(null);
@@ -15768,6 +15865,7 @@ app.clientside_callback(
                 '400',                                          // upset height
                 null,                                           // overlay store
                 [],                                             // packed download toggle
+                null, null,                                     // arc-hr min/max
             ];
         }
         if (trig === 'consensus-preset-all') {
@@ -15786,6 +15884,7 @@ app.clientside_callback(
                 NU, NU, NU, NU, NU,                             // display radios
                 null,                                           // overlay store
                 NU,                                             // packed download toggle (display choice)
+                null, null,                                     // arc-hr min/max
             ];
         }
         return Array(41).fill(NU);
@@ -15833,6 +15932,8 @@ app.clientside_callback(
     Output("consensus-upset-height", "value"),
     Output("consensus-overlay-filter", "data", allow_duplicate=True),
     Output("consensus-dl-packed", "value"),
+    Output("consensus-arc-hr-min", "value"),
+    Output("consensus-arc-hr-max", "value"),
     Input("consensus-reset", "n_clicks"),
     Input("consensus-preset-all", "n_clicks"),
     prevent_initial_call=True,
@@ -16089,6 +16190,8 @@ app.clientside_callback(
     Input("consensus-alias-filter", "value"),
     Input("consensus-disc-by", "value"),
     Input("consensus-arc-class", "value"),
+    Input("consensus-arc-hr-min", "value"),
+    Input("consensus-arc-hr-max", "value"),
     Input("consensus-site-class", "value"),
     Input("consensus-search", "value"),
     Input("consensus-external-target", "value"),
@@ -16106,7 +16209,9 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
                      h_min, h_max, u_min, u_max, nopp_min, nopp_max,
                      first_min, first_max, last_min, last_max,
                      filter_value, alias_filter,
-                     disc_by_val, arc_class_val, site_class_val,
+                     disc_by_val, arc_class_val,
+                     arc_hr_min_val, arc_hr_max_val,
+                     site_class_val,
                      search_term, external_target,
                      upset_color, upset_mixed, upset_rare,
                      upset_height, overlay_filter):
@@ -16156,7 +16261,9 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
     # interpolate arbitrary text into the SQL.
     alias_val = alias_filter if alias_filter in ("is", "has") else "any"
     arc_class_safe = (arc_class_val
-                      if arc_class_val in ("single", "short", "mid", "long")
+                      if arc_class_val in ("lt3h", "3to6h", "6to12h",
+                                           "12hto1d", "1to30d",
+                                           "30dto1y", "ge1y")
                       else "any")
     site_class_safe = (site_class_val
                        if site_class_val in ("single", "multi")
@@ -16176,6 +16283,8 @@ def update_consensus(r_mpc, r_mpc_orbits, r_cneos, r_neocc, r_neofixer,
             search=search_term,
             disc_by=disc_by_val,
             arc_class=arc_class_safe,
+            arc_hr_min=arc_hr_min_val,
+            arc_hr_max=arc_hr_max_val,
             site_class=site_class_safe,
         )
     except Exception as e:
