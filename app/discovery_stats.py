@@ -4791,7 +4791,9 @@ app.layout = html.Div(
                             # Download buttons
                             html.Div(
                                 style={"display": "flex", "gap": "10px",
-                                       "marginBottom": "12px"},
+                                       "alignItems": "center",
+                                       "marginBottom": "12px",
+                                       "flexWrap": "wrap"},
                                 children=[
                                     html.Button(
                                         "Download designations",
@@ -4801,6 +4803,29 @@ app.layout = html.Div(
                                         title=("Plain text, one primary "
                                                "designation per line, "
                                                "for the current table.")),
+                                    # Packed-form toggle for the
+                                    # designation download.  Default
+                                    # off = unpacked primary
+                                    # provisional (the canonical form
+                                    # used everywhere in the schema).
+                                    # On = packed permanent for
+                                    # numbered NEOs (e.g. "00433" for
+                                    # Eros, "~0fr6" for permid >=
+                                    # 620000) and packed provisional
+                                    # for unnumbered (e.g. "K24Y04R"
+                                    # for 2024 YR4).
+                                    dcc.Checklist(
+                                        id="consensus-dl-packed",
+                                        options=[{"label":
+                                                    " packed format",
+                                                  "value": "packed"}],
+                                        value=[],
+                                        inline=True,
+                                        style={"fontSize": "12px"},
+                                        labelStyle={"fontSize": "12px"},
+                                        inputStyle={
+                                            "marginRight": "3px"},
+                                    ),
                                     html.Button(
                                         "Download NEA.txt subset",
                                         id="consensus-btn-download-nea",
@@ -15707,7 +15732,7 @@ def _build_upset_figure(df, top_n=15, color_by="pattern",
 # then the 11 additions from commits 2/3/4/6/7/9/10/11/13 (alias,
 # disc_by, arc_class, site_class, search, external_target, upset_color,
 # upset_mixed, upset_rare, upset_height, overlay_filter Store).
-# Total: 30 + 11 = 41 outputs.
+# Total: 30 + 12 = 42 outputs.
 #
 # Reset = everything back to defaults including the display radios.
 # Preset = the consensus set, with display radios preserved -- the
@@ -15719,7 +15744,7 @@ app.clientside_callback(
         const NU = window.dash_clientside.no_update;
         const ctx = window.dash_clientside.callback_context;
         if (!ctx.triggered || ctx.triggered.length === 0) {
-            return Array(41).fill(NU);
+            return Array(42).fill(NU);
         }
         const trig = ctx.triggered[0].prop_id.split('.')[0];
         const empty_ranges = Array(16).fill(null);
@@ -15742,6 +15767,7 @@ app.clientside_callback(
                 [],                                             // upset rare
                 '400',                                          // upset height
                 null,                                           // overlay store
+                [],                                             // packed download toggle
             ];
         }
         if (trig === 'consensus-preset-all') {
@@ -15759,6 +15785,7 @@ app.clientside_callback(
                 '',                                             // search
                 NU, NU, NU, NU, NU,                             // display radios
                 null,                                           // overlay store
+                NU,                                             // packed download toggle (display choice)
             ];
         }
         return Array(41).fill(NU);
@@ -15805,6 +15832,7 @@ app.clientside_callback(
     Output("consensus-upset-rare", "value"),
     Output("consensus-upset-height", "value"),
     Output("consensus-overlay-filter", "data", allow_duplicate=True),
+    Output("consensus-dl-packed", "value"),
     Input("consensus-reset", "n_clicks"),
     Input("consensus-preset-all", "n_clicks"),
     prevent_initial_call=True,
@@ -16283,13 +16311,35 @@ def _nea_txt_line(primary_desig, permid):
     Output("consensus-download", "data", allow_duplicate=True),
     Input("consensus-btn-download-desigs", "n_clicks"),
     State("consensus-table", "data"),
+    State("consensus-dl-packed", "value"),
     prevent_initial_call=True,
 )
-def download_consensus_designations(_n, rows):
+def download_consensus_designations(_n, rows, packed_choice):
     if not rows:
         raise PreventUpdate
-    text = "\n".join(r.get("primary_desig", "") for r in rows) + "\n"
-    return dict(content=text, filename="neo_consensus_designations.txt")
+    packed = bool(packed_choice) and "packed" in packed_choice
+    if not packed:
+        text = "\n".join(r.get("primary_desig", "") for r in rows) + "\n"
+        filename = "neo_consensus_designations.txt"
+    else:
+        # Packed form: packed-permanent for numbered NEOs, packed-
+        # provisional for unnumbered.  permid in the table data is
+        # already a string ("99942") or ""; pack_designation handles
+        # the encoding (zero-pad up to 99999, base62-style for
+        # 100000-619999, tilde-encoded for >= 620000).  Fall back to
+        # the row's packed_desig when no permid is present.
+        from lib.mpc_convert import pack_designation
+        out_lines = []
+        for r in rows:
+            permid = (r.get("permid") or "").strip()
+            if permid:
+                out_lines.append(pack_designation(permid))
+            else:
+                # Unnumbered -> packed provisional from the cached row.
+                out_lines.append((r.get("packed_desig") or "").strip())
+        text = "\n".join(out_lines) + "\n"
+        filename = "neo_consensus_designations_packed.txt"
+    return dict(content=text, filename=filename)
 
 
 @app.callback(
