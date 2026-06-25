@@ -17,7 +17,7 @@ University of Arizona.
 
 ### Critical Performance Rules
 
-- **obs_sbn has 526M+ rows (239 GB)** — NEVER run unfiltered COUNT,
+- **obs_sbn has 540M+ rows (286 GB)** — NEVER run unfiltered COUNT,
   COUNT(DISTINCT), or full-table scans. Always use indexed lookups.
 - **Indexed columns on obs_sbn:** obsid, permid, provid, stn, trkid,
   trksub, trkmpc, obstime, created_at, updated_at, submission_block_id
@@ -26,12 +26,15 @@ University of Arizona.
 
 ### Key Data Quirks
 
-- **mpc_orbits** (1.51M rows): cometary elements (q,e,i) for ALL rows,
-  but Keplerian (a, period) for only 43%. Always derive
-  `a = q/(1-e)` when e<1. See `lib/orbits.py` DERIVED_COLUMNS.
-- **orbit_type_int is NULL for 35%** — use `classify_from_elements()`
+- **mpc_orbits** (1.56M rows): cometary elements (q,e,i) for ALL rows,
+  but Keplerian (a, period) for only ~55%. Always derive
+  `a = q/(1-e)` when e<1. See `lib/orbits.py` DERIVED_COLUMNS. The
+  legacy 2025-08-29 cohort (~41% of rows, ~78% of NEOs) is still
+  un-refit and drives most of the holes — see latest audit
+  `docs/2026-06-25_mpc_orbits_state.md`.
+- **orbit_type_int is NULL for ~30%** — use `classify_from_elements()`
   in `lib/orbit_classes.py` to recover 99.2%
-- **earth_moid NULL for 70%** of mpc_orbits
+- **earth_moid NULL for ~56%** of mpc_orbits
 - **CAST(jsonb_text AS numeric)** returns Python Decimal — use
   `::double precision` in SQL for pandas compatibility
 - **`orbit_quality` in JSONB is text** ("good", etc.) — don't CAST to
