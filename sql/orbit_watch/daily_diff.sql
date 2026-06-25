@@ -42,22 +42,22 @@ j AS (
 events AS (
     SELECT event_date, prev_date, primary_desig, permid, disc_by,
            'NEO_ENTER' AS event_type, pq, cq, pa, ca, pe, ce, pmoid, cmoid, ph, ch, psub, csub,
-           format('q %.4f -> %.4f AU (entered NEO region)', pq, cq) AS detail
+           format('q %s -> %s AU (entered NEO region)', round(pq::numeric,4), round(cq::numeric,4)) AS detail
     FROM j WHERE cneo AND NOT pneo
     UNION ALL
     SELECT event_date, prev_date, primary_desig, permid, disc_by,
            'NEO_EXIT', pq, cq, pa, ca, pe, ce, pmoid, cmoid, ph, ch, psub, csub,
-           format('q %.4f -> %.4f AU (left NEO region)', pq, cq)
+           format('q %s -> %s AU (left NEO region)', round(pq::numeric,4), round(cq::numeric,4))
     FROM j WHERE pneo AND NOT cneo
     UNION ALL
     SELECT event_date, prev_date, primary_desig, permid, disc_by,
            'PHA_ENTER', pq, cq, pa, ca, pe, ce, pmoid, cmoid, ph, ch, psub, csub,
-           format('Earth MOID %.4f -> %.4f AU, H %.1f (now PHA)', pmoid, cmoid, ch)
+           format('Earth MOID %s -> %s AU, H %s (now PHA)', round(pmoid::numeric,4), round(cmoid::numeric,4), round(ch::numeric,1))
     FROM j WHERE cpha AND NOT ppha
     UNION ALL
     SELECT event_date, prev_date, primary_desig, permid, disc_by,
            'PHA_EXIT', pq, cq, pa, ca, pe, ce, pmoid, cmoid, ph, ch, psub, csub,
-           format('Earth MOID %.4f -> %.4f AU (no longer PHA)', pmoid, cmoid)
+           format('Earth MOID %s -> %s AU (no longer PHA)', round(pmoid::numeric,4), round(cmoid::numeric,4))
     FROM j WHERE ppha AND NOT cpha
     UNION ALL
     SELECT event_date, prev_date, primary_desig, permid, disc_by,
@@ -67,12 +67,12 @@ events AS (
     UNION ALL
     SELECT event_date, prev_date, primary_desig, permid, disc_by,
            'H_REVISION', pq, cq, pa, ca, pe, ce, pmoid, cmoid, ph, ch, psub, csub,
-           format('H %.2f -> %.2f', ph, ch)
+           format('H %s -> %s', round(ph::numeric,2), round(ch::numeric,2))
     FROM j WHERE ph IS NOT NULL AND ch IS NOT NULL AND abs(ch - ph) >= 0.30
     UNION ALL
     SELECT event_date, prev_date, primary_desig, permid, disc_by,
            'ORBIT_SHIFT', pq, cq, pa, ca, pe, ce, pmoid, cmoid, ph, ch, psub, csub,
-           format('dq=%.4f da=%.4f de=%.4f', cq - pq, ca - pa, ce - pe)
+           format('dq=%s da=%s de=%s', round((cq-pq)::numeric,4), round((ca-pa)::numeric,4), round((ce-pe)::numeric,4))
     FROM j
     WHERE abs(cq - pq) >= 0.02
        OR abs(COALESCE(ca,0) - COALESCE(pa,0)) >= 0.05
