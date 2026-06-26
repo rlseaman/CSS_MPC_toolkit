@@ -67,8 +67,21 @@ Thresholds are parameters, tuned once on real output.
 ## Data model (`sql/orbit_watch/`)
 
 - **`css_orbit_watch.orbit_snapshot`** — the watch set's element state, one row
-  per (object, day). ~50 K rows/day → ~18 M rows/yr, ~2 GB/yr; prune to a
-  rolling window (e.g. 60 days) since the *events* table is the durable record.
+  per (object, day). ~50 K rows/day → ~18 M rows/yr, ~2 GB/yr.
+  **Retention rule:** the rolling-window prune (e.g. 60 days) applies *only to
+  objects outside the any-of-six NEO cohort* — i.e. watch-set margin objects
+  (q ≤ 1.5 but called a NEO by none of the six sources, mostly q ∈ (1.3, 1.5]).
+  Any-of-six members (every row in `css_neo_consensus.v_membership_wide`,
+  ~42 K objects) keep their **full** snapshot history, so the longitudinal
+  orbit-convergence record is preserved for real NEOs. Sketch:
+  `DELETE FROM css_orbit_watch.orbit_snapshot s
+     WHERE s.snapshot_date < CURRENT_DATE - INTERVAL '60 days'
+       AND NOT EXISTS (SELECT 1 FROM css_neo_consensus.v_membership_wide w
+                       WHERE w.primary_desig = s.primary_desig);`
+  (Membership is evaluated at prune time; an object that was a NEO but has since
+  dropped out of all six sources becomes prune-eligible — acceptable, but note
+  it if "ever-a-NEO" retention is wanted instead.) The *events* table is the
+  durable record regardless.
 - **`css_orbit_watch.orbit_event`** — append-only log of detected events
   (event_date, primary_desig, disc_by, event_type, prev/new element columns).
   This is simultaneously the daily news feed **and** the longitudinal record of
