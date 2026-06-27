@@ -167,3 +167,42 @@ BEGIN
   RETURN n_inserted;
 END
 $fn$;
+
+-- ------------------------------------------------------------------------------
+-- v_epoch_migration: standard-epoch migration monitor (see
+--   docs/2026-06-27_dou_orbit_logistics.md and sql/epoch_migration.sql).
+--   One row per standard-epoch grid point (MJD multiples of 200), newest first,
+--   with the current-epoch flag, the catalog/NEO migration shares, and the
+--   lost-NEO signal (single-opposition % per bucket). Headline figures are
+--   derivable as the is_current row's pct_all / pct_neo.
+-- ------------------------------------------------------------------------------
+CREATE OR REPLACE VIEW css_orbit_watch.v_epoch_migration AS
+WITH cur AS (   -- current standard epoch = the grid epoch fresh fits get
+  SELECT round(epoch_mjd)::int AS cur_epoch
+  FROM mpc_orbits
+  WHERE epoch_mjd IS NOT NULL AND updated_at >= CURRENT_DATE - 7
+  GROUP BY 1 ORDER BY count(*) DESC LIMIT 1
+),
+g AS (
+  SELECT round(epoch_mjd)::int AS epoch_mjd,
+         count(*)                                                   AS objects,
+         count(*) FILTER (WHERE q <= 1.3 AND e < 1)                 AS neos,
+         count(*) FILTER (WHERE q <= 1.3 AND e < 1 AND nopp <= 1)   AS neo_single_opp
+  FROM mpc_orbits
+  WHERE epoch_mjd IS NOT NULL
+  GROUP BY 1
+)
+SELECT g.epoch_mjd,
+       (DATE '1858-11-17' + g.epoch_mjd)               AS epoch_date,
+       (g.epoch_mjd = c.cur_epoch)                     AS is_current,
+       (c.cur_epoch - g.epoch_mjd) / 200               AS epochs_behind,
+       g.objects,
+       round(100.0*g.objects/sum(g.objects) OVER (),1) AS pct_all,
+       g.neos,
+       round(100.0*g.neos/NULLIF(sum(g.neos) OVER (),0),1) AS pct_neo,
+       CASE WHEN g.neos > 0 THEN round(100.0*g.neo_single_opp/g.neos,0) END AS neo_pct_single_opp
+FROM g CROSS JOIN cur c
+WHERE g.epoch_mjd % 200 = 0          -- standard-epoch grid only (drop off-grid singletons)
+ORDER BY g.epoch_mjd DESC;
+
+GRANT SELECT ON css_orbit_watch.v_epoch_migration TO claude_ro;
