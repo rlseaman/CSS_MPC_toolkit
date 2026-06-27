@@ -78,3 +78,92 @@ CREATE INDEX IF NOT EXISTS orbit_event_type_idx  ON css_orbit_watch.orbit_event 
 GRANT USAGE ON SCHEMA css_orbit_watch TO claude_ro;
 GRANT SELECT ON ALL TABLES IN SCHEMA css_orbit_watch TO claude_ro;
 ALTER DEFAULT PRIVILEGES IN SCHEMA css_orbit_watch GRANT SELECT ON TABLES TO claude_ro;
+
+-- ------------------------------------------------------------------------------
+-- compute_events(p_cur, p_prev): diff one snapshot pair into orbit_event.
+--   Idempotent for p_cur (clears that event_date first). Returns rows inserted.
+--   Called by daily_diff.sql for the latest pair, and by rebuild_events.sql /
+--   any backfill for arbitrary historical pairs (e.g. DOU-derived snapshots).
+--
+--   Boundary GAINS distinguish a genuine threshold crossing from a FIRST
+--   DETERMINATION: if the prior snapshot lacked the deciding input (q NULL for
+--   NEO; Earth MOID or H NULL for PHA) the object could not be classified
+--   before, so the flip reflects new characterization (a fresh discovery
+--   getting its first full orbit), NOT dynamical motion. These fire as
+--   NEO_FIRST_DETERMINED / PHA_FIRST_DETERMINED rather than NEO_ENTER / PHA_ENTER.
+-- ------------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION css_orbit_watch.compute_events(p_cur date, p_prev date)
+RETURNS integer
+LANGUAGE plpgsql AS $fn$
+DECLARE n_inserted integer;
+BEGIN
+  DELETE FROM css_orbit_watch.orbit_event WHERE event_date = p_cur;
+
+  WITH j AS (
+    SELECT c.snapshot_date AS event_date, p.snapshot_date AS prev_date,
+           c.primary_desig, c.permid, c.disc_by,
+           p.q AS pq, c.q AS cq, p.a AS pa, c.a AS ca, p.e AS pe, c.e AS ce,
+           p.earth_moid AS pmoid, c.earth_moid AS cmoid, p.h AS ph, c.h AS ch,
+           p.is_neo AS pneo, c.is_neo AS cneo, p.is_pha AS ppha, c.is_pha AS cpha,
+           p.neo_subclass AS psub, c.neo_subclass AS csub
+    FROM css_orbit_watch.orbit_snapshot c
+    JOIN css_orbit_watch.orbit_snapshot p ON p.primary_desig = c.primary_desig
+    WHERE c.snapshot_date = p_cur AND p.snapshot_date = p_prev
+  ),
+  ev AS (
+    -- NEO gained: first determination (prev q absent) vs genuine crossing
+    SELECT event_date, prev_date, primary_desig, permid, disc_by,
+           CASE WHEN pq IS NULL THEN 'NEO_FIRST_DETERMINED' ELSE 'NEO_ENTER' END AS event_type,
+           pq,cq,pa,ca,pe,ce,pmoid,cmoid,ph,ch,psub,csub,
+           CASE WHEN pq IS NULL
+                THEN format('first NEO determination: q %s AU', round(cq::numeric,4))
+                ELSE format('q %s -> %s AU (entered NEO region)', round(pq::numeric,4), round(cq::numeric,4)) END AS detail
+    FROM j WHERE cneo IS TRUE AND pneo IS NOT TRUE
+    UNION ALL
+    SELECT event_date, prev_date, primary_desig, permid, disc_by, 'NEO_EXIT',
+           pq,cq,pa,ca,pe,ce,pmoid,cmoid,ph,ch,psub,csub,
+           format('q %s -> %s AU (left NEO region)', round(pq::numeric,4), round(cq::numeric,4))
+    FROM j WHERE pneo IS TRUE AND cneo IS NOT TRUE AND pq IS NOT NULL
+    UNION ALL
+    -- PHA gained: first determination (prev MOID or H absent) vs genuine crossing
+    SELECT event_date, prev_date, primary_desig, permid, disc_by,
+           CASE WHEN pmoid IS NULL OR ph IS NULL THEN 'PHA_FIRST_DETERMINED' ELSE 'PHA_ENTER' END,
+           pq,cq,pa,ca,pe,ce,pmoid,cmoid,ph,ch,psub,csub,
+           CASE WHEN pmoid IS NULL OR ph IS NULL
+                THEN format('first PHA determination: MOID %s AU, H %s', round(cmoid::numeric,4), round(ch::numeric,1))
+                ELSE format('Earth MOID %s -> %s AU, H %s (now PHA)', round(pmoid::numeric,4), round(cmoid::numeric,4), round(ch::numeric,1)) END
+    FROM j WHERE cpha AND NOT ppha
+    UNION ALL
+    SELECT event_date, prev_date, primary_desig, permid, disc_by, 'PHA_EXIT',
+           pq,cq,pa,ca,pe,ce,pmoid,cmoid,ph,ch,psub,csub,
+           format('Earth MOID %s -> %s AU (no longer PHA)', round(pmoid::numeric,4), round(cmoid::numeric,4))
+    FROM j WHERE ppha AND NOT cpha
+    UNION ALL
+    SELECT event_date, prev_date, primary_desig, permid, disc_by, 'SUBCLASS_CHANGE',
+           pq,cq,pa,ca,pe,ce,pmoid,cmoid,ph,ch,psub,csub,
+           format('%s -> %s', psub, csub)
+    FROM j WHERE cneo IS TRUE AND pneo IS TRUE AND psub IS DISTINCT FROM csub
+    UNION ALL
+    SELECT event_date, prev_date, primary_desig, permid, disc_by, 'H_REVISION',
+           pq,cq,pa,ca,pe,ce,pmoid,cmoid,ph,ch,psub,csub,
+           format('H %s -> %s', round(ph::numeric,2), round(ch::numeric,2))
+    FROM j WHERE ph IS NOT NULL AND ch IS NOT NULL AND abs(ch - ph) >= 0.30
+    UNION ALL
+    SELECT event_date, prev_date, primary_desig, permid, disc_by, 'ORBIT_SHIFT',
+           pq,cq,pa,ca,pe,ce,pmoid,cmoid,ph,ch,psub,csub,
+           format('dq=%s da=%s de=%s', round((cq-pq)::numeric,4), round((ca-pa)::numeric,4), round((ce-pe)::numeric,4))
+    FROM j
+    WHERE pq IS NOT NULL AND cq IS NOT NULL
+      AND (abs(cq - pq) >= 0.02 OR abs(COALESCE(ca,0)-COALESCE(pa,0)) >= 0.05 OR abs(ce - pe) >= 0.02)
+  )
+  INSERT INTO css_orbit_watch.orbit_event
+    (event_date, primary_desig, permid, disc_by, event_type, prev_date,
+     prev_q,new_q,prev_a,new_a,prev_e,new_e,prev_moid,new_moid,prev_h,new_h,prev_subclass,new_subclass,detail)
+  SELECT event_date, primary_desig, permid, disc_by, event_type, prev_date,
+         pq,cq,pa,ca,pe,ce,pmoid,cmoid,ph,ch,psub,csub,detail
+  FROM ev;
+
+  GET DIAGNOSTICS n_inserted = ROW_COUNT;
+  RETURN n_inserted;
+END
+$fn$;

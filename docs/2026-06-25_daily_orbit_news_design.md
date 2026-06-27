@@ -57,6 +57,7 @@ A diff between an object's two most recent snapshots emits zero or more events:
 |---|---|---|
 | `NEO_ENTER` / `NEO_EXIT` | q crosses 1.3 | object entered/left the NEO population — the exact churn the Consensus tab reconciles |
 | `PHA_ENTER` / `PHA_EXIT` | (earth_moid ≤ 0.05 AND H ≤ 22) flips | PHA status change — highest planetary-defense salience |
+| `NEO_FIRST_DETERMINED` / `PHA_FIRST_DETERMINED` | classification became *evaluable* (prior snapshot lacked q / MOID / H) | a fresh discovery getting its first full orbit characterization — **not** dynamical motion; kept distinct from a real crossing so the feed isn't misleading (added 2026-06-27 after the live feed surfaced 2026 LZ2 with a NULL→0.0338 MOID) |
 | `SUBCLASS_CHANGE` | Atira/Aten/Apollo/Amor label changes | dynamical reclassification |
 | `H_REVISION` | \|ΔH\| ≥ 0.3 mag | size estimate moved — feeds the size-distribution / completeness tabs |
 | `ORBIT_SHIFT` | \|Δq\| ≥ 0.02 AU or \|Δa\| ≥ 0.05 AU or \|Δe\| ≥ 0.02 | refinement or instability; repeated daily shifts ⇒ poorly-constrained orbit needing follow-up |

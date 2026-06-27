@@ -46,7 +46,7 @@ SELECT
     w.primary_desig, w.permid,
     os.disc_by,
     w.q, w.e, w.i, w.a, w.earth_moid, w.h, w.u_param, w.nobs_total,
-    (w.q <= 1.3)                                       AS is_neo,
+    (w.q IS NOT NULL AND w.q <= 1.3)                   AS is_neo,
     (w.earth_moid IS NOT NULL AND w.earth_moid <= 0.05
        AND w.h IS NOT NULL AND w.h <= 22.0)            AS is_pha,
     -- element-derived NEO subclass (boundaries per memory/NEO classes);
