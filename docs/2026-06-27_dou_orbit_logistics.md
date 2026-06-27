@@ -73,6 +73,32 @@ ones missing `a` / `orbit_type_int` / `earth_moid` (see
 `docs/2026-06-25_mpc_orbits_state.md` and `memory/mpc_orbits_is_scattershot.md`):
 the epoch lens and the data-completeness lens show the same un-refit population.
 
+## NEO epoch-staleness is the lost-object population
+
+Slicing the migration monitor (`sql/epoch_migration.sql`) by NEOs (q ≤ 1.3)
+shows NEOs are far more epoch-stale than the catalog: only **2.3%** at the
+current standard epoch (vs 11.6% catalog-wide), and the single largest NEO
+cohort — **27%** — sits at the *oldest* epoch (2020-05-31). The cause is not
+neglect; it's the single-apparition "lost" NEO population. The single-opposition
+fraction rises monotonically with staleness:
+
+| epoch         | NEOs   | % single-opp (nopp ≤ 1) | avg nopp |
+|---------------|-------:|------------------------:|---------:|
+| 2026-06-09 (current) |    953 | 36 | 7.0 |
+| 2025-11-21    |  7,969 | 49 | 3.7 |
+| 2025-05-05    |  2,708 | 73 | 2.0 |
+| … steadily rising … | | | |
+| 2020-12-17    |  2,332 | 95 | 1.1 |
+| 2020-05-31 (oldest)  | 11,461 | 94 | 1.1 |
+
+So old-epoch NEOs are overwhelmingly objects seen at one apparition and never
+recovered — with no new astrometry, MPC leaves them frozen at their last-fit
+standard epoch. Well-observed (multi-opposition) NEOs track the current epoch;
+the lost ones pile up at old epochs. Takeaways: (1) `mpc_orbits` epoch/elements
+are current only for well-observed NEOs — keep using NEA.txt + consensus for the
+rest; (2) the monitor's NEO line doubles as a **lost-NEO census**, which is
+itself planetary-defense-relevant.
+
 ## Implications for the toolkit
 
 - **For the Daily Orbit News MBA stream** (see
