@@ -145,6 +145,50 @@ unreachable.
    Standing up a replacement dashboard host is a multi-hour project
    (Dash + tunnel + DNS), not a single-command recovery.
 
+### D) PostgreSQL down from external NVMe disconnect (Thunderbolt)
+
+**Symptom:** `psql` fails "Connection refused" on the `/tmp` socket; no
+`postgres` processes; PG log shows `could not write to log file:
+Input/output error`. The DB lives on an external Thunderbolt NVMe (OWC
+Express 1M2) at `/Volumes/data1`; the drive momentarily dropped — kernel
+logs a Thunderbolt HPD unplug (`plug = 0`) → APFS `cluster_push() failed
+with 6` (errno 6 = ENXIO) → PG writes fail and the postmaster dies.
+
+**First seen 2026-06-27:** plugging *and* unplugging a USB-C device in
+the **rear port adjacent** to the NVMe's Thunderbolt port dropped the
+drive (caught live in the kernel log). A properly seated cable should not
+do this — treat a recurrence as a loose/marginal Thunderbolt cable or a
+bumped enclosure, and keep other devices off the adjacent ports.
+
+**Recovery (≈1 min; ran cleanly 2026-06-27):**
+1. Confirm the drive is back and writable *before* starting PG:
+   ```bash
+   diskutil info /Volumes/data1 | grep -E 'SMART|Mounted|Read-Only'
+   touch /Volumes/data1/.wtest && rm /Volumes/data1/.wtest   # must succeed
+   ```
+   If unmounted: reseat the Thunderbolt cable at both ends (re-enumerates
+   in seconds).
+2. Start PostgreSQL — crash recovery replays the little WAL since the last
+   checkpoint (~2 s):
+   ```bash
+   brew services start postgresql@18
+   pg_isready -h /tmp        # wait for "accepting connections"
+   ```
+3. Verify replication resumed + data intact:
+   ```bash
+   psql -h /tmp -d mpc_sbn -c "SELECT subname, last_msg_receipt_time FROM pg_stat_subscription;"
+   psql -h /tmp -d mpc_sbn -c "SELECT matviewname, ispopulated FROM pg_matviews;"
+   ```
+4. Restart the dashboards so they drop stale DB connections:
+   ```bash
+   launchctl kickstart -k gui/$(id -u)/com.rlseaman.dashboard
+   launchctl kickstart -k gui/$(id -u)/com.rlseaman.dashboard-rnd
+   ```
+
+**Prevention / durable fix:** the off-host replica in
+`docs/server_provisioning.md` — a production DB should not hang off a
+bus-attached external drive this sensitive to a desk bump.
+
 ## Retained assets
 
 These are kept in-repo and on-disk even though they're no longer
