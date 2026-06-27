@@ -109,17 +109,32 @@ slicing dimensions argue for **its own tab**:
 
 The tab gates behind `--dev-tabs` until it has run long enough to trust.
 
-## Longitudinal extension (phase 2+)
+## Phase 2: the DOU is an *MBA-monitoring* play, not a NEO backfill
 
-- **Snapshot forward cheaply** (this design already does, via `orbit_snapshot`
-  + `orbit_event`) — start accumulating history tonight, no MPEC parsing.
-- **Backfill from the DOU archive** only for history *before* we started.
-  The DOU's tabular orbit block parses far more easily than prose MPEC bodies;
-  plumbing exists in `lib/mpec_parser.py` + `app/.mpec_cache/`. **Read
-  `docs/mpec_access.md` first** — the historical-MPEC-corpus landscape is
-  already scoped there (MPEC Watch, ADS metadata-only, `obs_sbn.ref` unusable).
-- Derived views: orbit convergence curves (elements + uncertainties vs arc),
-  classification-churn stats, orbit-instability early-warning.
+Reframed 2026-06-27 after parsing a real DOU and mining `epoch_mjd` — see
+`docs/2026-06-27_dou_orbit_logistics.md`. Key facts that change the plan:
+
+- **The DOU is ~23,750 *numbered main-belt* objects/day, no NEOs, and no MOID.**
+  So it is **not** a source of NEO history (NEOs stay on the forward-snapshot
+  track) — but it **is** the natural event-driven stream for the slow-cadence
+  numbered population we deliberately don't snapshot.
+- **Forward for NEOs, DOU for MBAs.** Ingest each DOU's 1-line element blocks
+  into an MBA element-history table; reuse `css_orbit_watch.compute_events`
+  (generalized to "object's previous recorded elements") for update-cadence,
+  element evolution, and the planetary-defense-relevant case of a **numbered MBA
+  whose re-fit drops q toward/below 1.3** (a newly-recognized NEO we'd otherwise
+  miss). q is derivable as `a(1−e)`; MOID absence is fine — MBAs aren't PHAs.
+- **Heavyweight option:** a parser that **computes MOIDs from the orbits**
+  (numerical Earth–orbit minimum distance) would restore PHA-style events for
+  the MBA stream and cross-check `mpc_orbits.earth_moid` for NEOs.
+- **Standard-epoch / migration monitor:** trivially derivable from `epoch_mjd`
+  (% of catalog migrated to the current standard epoch + the 200-day-stepped
+  backlog histogram) — a one-query logistics/health panel.
+- **Backfill** ~3 weeks of DOUs to seed an MBA-cadence baseline (≈20 fetches,
+  ~50 K orbit lines; existing throttle). **Read `docs/mpec_access.md` first** —
+  the historical-MPEC-corpus landscape is scoped there.
+- For NEOs (forward stream): orbit convergence curves, classification-churn
+  stats, orbit-instability early-warning.
 
 ## Open questions
 
