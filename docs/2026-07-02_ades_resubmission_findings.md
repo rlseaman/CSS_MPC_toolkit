@@ -145,7 +145,17 @@ with none of the resubmitted ADES quality metrics.
 
 ## Reproducing
 
-`CSS_MPC_toolkit/venv/bin/python` parses the tarball (tarfile + ElementTree) to
-select/parse files and emit per-file match SQL; queries run read-only as
-`claude_ro` against Gizmo. Scripts in the session scratchpad; can be promoted to
-`scripts/` if this becomes a recurring check.
+```bash
+setenv PGHOST <replica-host>     # a replica with the full ADES obs_sbn schema
+./venv/bin/python scripts/ades_resubmission_check.py \
+    CSS_ADES_resubmissions_24Nov29.tar.gz
+```
+
+`scripts/ades_resubmission_check.py` parses the tarball read-only (never extracts
+or modifies it), extracts every observation's `(stn, trkSub)`, and joins the
+distinct tracklets to `obs_sbn` — read-only as `claude_ro`, forced onto the
+`trksub` index (`enable_seqscan/hashjoin/mergejoin=off`) so it never scans the
+full table. It prints the archive stats and the by-year ADES-field population
+table above. `--max-files N` runs a quick subset. Re-run after any future MPC
+reprocessing to see whether the picture has changed. ~2 min for the full archive
+on NVMe.
