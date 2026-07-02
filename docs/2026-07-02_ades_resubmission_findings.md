@@ -66,6 +66,34 @@ a different `trkSub` form; its winter night crosses UTC midnight).
 ADES-only quality field.** 100% carry `obs80` and `astCat` (both obs80-derivable —
 `astCat` from the obs80 catalog flag).
 
+## Full-archive pass (all 3,215 files — exact)
+
+Parsing every file (8 s) confirms the archive is exactly **1,622,363
+observations**, all keyed by `trkSub` (703: 268,637; G96: 1,326,515; I52:
+7,802; V06: 1,524; V00: 17,885; 96.7% carry `rmsRA` in the files). The 413,559
+distinct `(stn, trkSub)` pairs were joined to `obs_sbn` on `(stn, trkSub)`
+(session `TEMP` table, `enable_seqscan=off` to force the `trksub` index; ~1m52s):
+
+| obstime year | obs_sbn rows | with rmsRA | with obs80 |
+|--------------|-------------:|-----------:|-----------:|
+| **2020**     | **1,605,711** | **916 (0.06%)** | 100% |
+| 2021         | 140          | 103        | 100% |
+| other (2016–19, 2022–26) | ~224 | ~95   | 100% |
+
+**Of the ~1.606 M `obs_sbn` rows matched to the resubmitted 2020 tracklets,
+only 916 — 0.06% — carry any ADES quality field.** Archive-wide, the 2020 CSS
+survey observations are obs80-only; the resubmission changed nothing. (The 916
+are negligible edge cases, likely obs with a native-ADES origin.)
+
+Two notes: (1) ~16 K archive observations — essentially all of V00 — did not
+match on `(stn, trkSub)` because V00's ADES `trkSub` form differs from obs_sbn's
+stored `trksub`; V00 is characterized separately below and *does* carry ADES
+fields, from its **original 2021** submission. (2) The tiny cross-year tails are
+`trkSub`-string collisions with unrelated tracklets in other years.
+
+The original tarball was opened read-only and is byte-identical after the run
+(SHA-256 `ac35e5f8…bffbd264`).
+
 ## The anchor observation (worked example)
 
 ADES file `20Aug01.G96.FYQR62.1.1.ades`, obs of trkSub `C2YQR62`:
