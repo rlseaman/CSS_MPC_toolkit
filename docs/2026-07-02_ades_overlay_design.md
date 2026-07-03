@@ -155,6 +155,32 @@ override — we never resurrect astrometry MPC has since rejected.
 - Ingest is **incremental** — each reprocessing batch appends assertions; no
   rebuild.
 
+**Measured on the full 2020 archive (2026-07-02).** 3,215 files / 1,622,353 obs
+→ 413,559 tracklets (408,914 `supersede`, 4,645 `add`, 20,809 new-detection obs,
+**0% review**):
+
+| stage | time | note |
+|---|---|---|
+| parse | 14 s | |
+| **match** | **1,782 s** (**910 obs/s**) | the bottleneck — per-obs loop + Sibyl-HDD station-night pulls |
+| emit COPY | (in match) | 335 MB file |
+| scp + `COPY` apply | 6 s + 27 s | linear |
+| storage | 349 MB obs + 145 MB tracklet + idx | ≈ 0.5 GB |
+| filtered `v_effective` query | ~5 ms | with the GIN + `(stn,trksub)` indexes |
+
+Per-night ≈ 19.5 K obs → ~21 s match; 2021 (V00, 17.9 K obs) ~20 s.
+**Extrapolating to the ~100 M-row 2003–2019 backlog:** `COPY`/storage scale
+linearly (~28 min apply, ~30 GB), but **match at 910 obs/s ⇒ ~30 h** — a naive
+upper bound. It is trivially **parallelizable** (station-nights are independent)
+and **vectorizable** (batch a night's obs into one numpy pass instead of the
+per-obs loop), and running against Gizmo NVMe rather than Sibyl HDD removes the
+pull cost — together plausibly 10–50×. And the campaign arrives as **deltas**, so
+per-batch reconciliation is small regardless.
+
+**One scale caveat for 100 M:** at ~25 M tracklets the GIN-array anti-join will
+tire; materialize a normalized `superseded(obsid)` btree table (expand
+`original_obsids`) so `v_effective`'s exclusion is an O(log n) probe.
+
 ## Pilot (live on Gizmo)
 
 `css_ades_overlay` with 2 real superseded tracklets from G96 2020-08-01.

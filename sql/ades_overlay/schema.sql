@@ -40,6 +40,10 @@ CREATE TABLE IF NOT EXISTS css_ades_overlay.tracklet (
 );
 CREATE INDEX IF NOT EXISTS tracklet_active_idx
     ON css_ades_overlay.tracklet (status) WHERE status = 'active';
+-- GIN on original_obsids so v_effective's NOT EXISTS anti-join is an index probe,
+-- not a scan of every tracklet (took a filtered query 84ms -> 5ms at 413K tracklets).
+CREATE INDEX IF NOT EXISTS tracklet_origobs_gin
+    ON css_ades_overlay.tracklet USING gin (original_obsids);
 
 -- ------------------------------------------------------------------------------
 -- obs: the reprocessed observations (payload for 'supersede' / 'add')
@@ -56,6 +60,7 @@ CREATE TABLE IF NOT EXISTS css_ades_overlay.obs (
     logsnr   numeric, rmsfit numeric, nstars integer
 );
 CREATE INDEX IF NOT EXISTS obs_trk_idx ON css_ades_overlay.obs (overlay_trk_id);
+CREATE INDEX IF NOT EXISTS obs_stn_trksub_idx ON css_ades_overlay.obs (stn, trksub);
 
 -- ------------------------------------------------------------------------------
 -- v_effective: obs_sbn with active overlays substituted.
