@@ -182,7 +182,16 @@ makes the `obs_sbn` original transparently reappear. Read access granted to
 - ~~Coarse-timing edge-case test~~ **done** (above): review tail < 1% realistic,
   ≤ 0.4% silent-wrong; fails safe. Dense-*field* axis still needs a real
   low-latitude 2003–2019 batch (the 2020 survey data is too sparse).
-- Generalize the reconciler (extends `scripts/ades_resubmission_check.py`'s
-  parser) into a batch loader: parse → proximity-match → classify op → emit
-  assertions, with the confidence gate.
+- ~~Generalize the reconciler into a batch loader~~ **done**:
+  `scripts/ades_overlay_loader.py` — parse → proximity-match (2× gate) →
+  classify `supersede`/`add`, `auto`/`review` → emit SQL assertions
+  (`original_obsids` resolved in-memory with whole-original-tracklet expansion;
+  read-only match, writes emitted for owner apply). Validated end-to-end on a
+  40-file subset (1,271 tracklets, 0% review) → `v_effective` substitutes
+  correctly. Ops note: emit uses per-row `INSERT`; for full-archive-scale
+  batches switch to `COPY`. Running the loader against the **same** replica it
+  writes to avoids the cross-replica obsid assumption.
+- Ingest a real 2003–2019 batch (ideally a low-latitude field) to close the
+  dense-field question and exercise `suppress` (needs an explicit removal signal,
+  not inferable from the adds alone).
 - Wire an ingest of the first real 2003–2019 batch when available.
