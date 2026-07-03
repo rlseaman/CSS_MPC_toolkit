@@ -106,10 +106,31 @@ against):
 
 **Reconciler policy:** auto-accept a match only when the nearest source is
 **≥ 2× closer than the runner-up**; route the rest to a **review queue**. Carry a
-**match-confidence** on each supersession record. The residual risk concentrates
-in dense/galactic fields, the follow-up scopes (I52/V06, where a target may sit
-near a field asteroid), and coarse-timing pre-2013 epochs — all bounded and
-absorbed by the review queue.
+**match-confidence** on each supersession record.
+
+3. **Coarse timing / density.** CSS objects move ~3.4″ between exposures spaced
+   ~7.5 min apart. Degrading the usable `obs_sbn` time precision (forcing a wider
+   match window, which also grows the candidate set) at a 1″ shift:
+
+   | obs_sbn time known to | clean | ambiguous→review | silent-wrong |
+   |---|---:|---:|---:|
+   | ≤ 30 s | 100.0% | 0.0% | 0.0% |
+   | ~2 min | 99.6% | 0.3% | 0.1% |
+   | ≥ 10 min | ~81% | ~19% | ~0.4% |
+
+   The threshold is the **exposure cadence**: while time is known to ≤ ~2 min
+   (obs80 encodes it to ≪ 1 min, so real data is here), matching is ~perfect.
+   Past the cadence it **fails safe** — ~19% become ambiguous (→review) but
+   silent-wrong stays ≤ 0.4%. The coarse-timing failure mode is **self-confusion**
+   (matching a slow mover to its adjacent exposure), caught by the confidence gate.
+   **Review-queue tail: < 1% realistic, ~19% worst-case; silent-wrong ≤ 0.4%.**
+
+**Residual risk:** genuine dense fields (galactic plane / near-ecliptic, smaller
+inter-*object* spacing) and the follow-up scopes (I52/V06, a target on a field
+asteroid). The 2020 survey archive is too sparse to exercise this (`diff-obj`
+confusion stayed ~0.2% even with a whole night as candidates); it needs a real
+low-latitude 2003–2019 batch to test — all bounded and absorbed by the review
+queue regardless.
 
 ## Precedence when MPC updates underneath (f)
 
@@ -158,8 +179,9 @@ makes the `obs_sbn` original transparently reappear. Read access granted to
 
 ## Next steps
 
-- Coarse-timing / dense-field edge-case test (wider time window; a follow-up
-  scope) to size the review-queue tail.
+- ~~Coarse-timing edge-case test~~ **done** (above): review tail < 1% realistic,
+  ≤ 0.4% silent-wrong; fails safe. Dense-*field* axis still needs a real
+  low-latitude 2003–2019 batch (the 2020 survey data is too sparse).
 - Generalize the reconciler (extends `scripts/ades_resubmission_check.py`'s
   parser) into a batch loader: parse → proximity-match → classify op → emit
   assertions, with the confidence gate.
