@@ -1,10 +1,17 @@
 #!/bin/bash
 # Deploy dashboard caches from MBP/Sibyl to Gizmo.
 #
+# *** STATUS (2026-04-24): DISASTER-RECOVERY ONLY. ***
+# The nightly refresh is now Gizmo-native (org.seaman.gizmo-refresh
+# running scripts/refresh_matview_gizmo.sh); the MBP launchd agent
+# org.seaman.css-refresh has been booted out.  Keep this script for
+# the Sibyl-sourced fallback path described in docs/disaster_recovery.md
+# — do not re-schedule it while the Gizmo pipeline is healthy.
+#
 # Runs on the MBP (which has Sibyl access).  Dual-purpose:
 #   - Manual: user runs it directly when they want a fresh deploy.
-#   - Automated: wrapped by scripts/refresh_cron.sh on a nightly launchd
-#     schedule (see ~/Library/LaunchAgents/org.seaman.css-refresh.plist).
+#   - Automated (retired): was wrapped by scripts/refresh_cron.sh on a
+#     nightly launchd schedule (org.seaman.css-refresh.plist, now unloaded).
 #
 #   1. Rebuilds all Parquet caches on the MBP against Sibyl via
 #      --refresh-only (also refreshes the MBP's own caches).
