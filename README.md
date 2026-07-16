@@ -288,8 +288,9 @@ Data products are distributed in two ways:
 
 These scripts are designed to run against a PostgreSQL replica of the MPC/SBN
 database. See [docs/source_tables.md](docs/source_tables.md) for the required
-tables and columns. The database is a PostgreSQL 15.2 replica receiving
-logical replication from MPC.
+tables and columns. The project runs against two replicas receiving logical
+replication from MPC: the production/dev host (PostgreSQL 18.x, NVMe) and a
+campus server (PostgreSQL 15.x, HDD). PostgreSQL 15 or later is sufficient.
 
 ## License
 

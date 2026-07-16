@@ -152,11 +152,16 @@ project.
 
 ## Hardening Backlog
 
-Three items deliberately deferred.  None are urgent given the threat
-model, but each is worth doing when time allows.  Ordered by
-effort-per-risk-reduction.
+Three items originally deferred.  **Status update 2026-07-16: items 1
+and 2 are DONE** (launchd 2026-04-26, waitress 2026-04-27); item 3 is
+a recurring chore whose first pass ran 2026-04-27 (lxml bumped to
+6.1.0 for CVE-2026-41066; pip CVE-2026-3219 had no fix) — the next
+audit is due ~July 2026.  The original problem/fix write-ups are kept
+below for context.
 
-### 1. Put Dash under launchd on the Mini
+### 1. Put Dash under launchd on the Mini — DONE 2026-04-26
+(`com.rlseaman.dashboard` / `com.rlseaman.dashboard-rnd`; the nightly
+refresh restarts Dash via `launchctl kickstart -k`, not nohup/PID files.)
 
 **Problem:** `cloudflared` already runs under `launchd` (agent
 `com.cloudflare.tunnel`, survives reboots), but the Dash process does
@@ -177,7 +182,8 @@ instead of killing the PID file and `nohup`-ing anew.
 **Risk reduction:** restores availability automatically after any
 reboot, not just after a manual deploy.  Small but real.
 
-### 2. Swap Flask dev server for gunicorn or waitress
+### 2. Swap Flask dev server for gunicorn or waitress — DONE 2026-04-27
+(waitress serves both prod and dev instances under launchd.)
 
 **Problem:** the app runs on Flask's built-in development server.
 `app/dash.log` on the Mini shows:
@@ -214,7 +220,7 @@ single-threaded access — there shouldn't be any, but worth verifying).
 stack.  Also improves concurrent-user responsiveness, which may
 matter if the dashboard ever gets modest traffic.
 
-### 3. Periodic dependency audit
+### 3. Periodic dependency audit — RECURRING (first pass 2026-04-27, next due ~2026-07)
 
 **Problem:** pandas 3.0, Dash 4.1, Flask 3.1, etc. all receive security
 updates.  Not urgent for a read-only data app where the realistic

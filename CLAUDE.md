@@ -9,9 +9,15 @@ University of Arizona.
 
 ## Database Access
 
-- **Host:** `$PGHOST` (set in environment; RHEL 8.6, 251 GB RAM, HDD)
-- **Database:** `mpc_sbn` — PostgreSQL 15.2, logical replication from MPC
-- **Connect:** `psql -h $PGHOST -U claude_ro mpc_sbn`
+Two live replicas of `mpc_sbn` (logical replication from MPC):
+
+- **Gizmo** (M4 Mac mini — production host and dev platform):
+  PostgreSQL 18.x on 4 TB NVMe, 16 GB RAM. On Gizmo connect via Unix
+  socket: `PGHOST=/tmp psql -U claude_ro mpc_sbn` (TCP listen is
+  localhost-only).
+- **Sibyl** (campus server): PostgreSQL 15.x on RHEL 8.6, 251 GB RAM,
+  HDD. From the MBP: `psql -h $PGHOST -U claude_ro mpc_sbn`
+  (`PGHOST=sibyl` in the environment).
 - **Python:** `from lib.db import connect, timed_query`
 - **Credentials:** `~/.pgpass` (readonly role `claude_ro`)
 
@@ -44,7 +50,7 @@ University of Arizona.
 
 ```
 app/                          # Interactive Dash web application
-  discovery_stats.py          #   NEO discovery explorer (13 tabs, ~15,500 lines)
+  discovery_stats.py          #   NEO discovery explorer (12 tabs prod / 13 dev, ~17,700 lines)
   assets/                     #   CSS, theme, custom JS (finding_chart.js,
                               #     slider_linked.js, keyboard.js)
   .horizons_cache/            #   Per-object Horizons ephemeris parquet

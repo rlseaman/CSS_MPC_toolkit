@@ -1,7 +1,12 @@
 #!/bin/bash
 # refresh_cron.sh — robustness wrapper around deploy_to_mini.sh.
 #
-# Scheduled via ~/Library/LaunchAgents/org.seaman.css-refresh.plist at
+# *** STATUS (2026-04-24): DISASTER-RECOVERY ONLY. ***
+# The org.seaman.css-refresh launchd agent has been booted out; the
+# nightly refresh is Gizmo-native (org.seaman.gizmo-refresh).  Retained
+# as the Sibyl-sourced fallback — see docs/disaster_recovery.md.
+#
+# Was scheduled via ~/Library/LaunchAgents/org.seaman.css-refresh.plist at
 # 05:30 MST daily. Can also be run manually.
 #
 # Adds to the plain deploy:
