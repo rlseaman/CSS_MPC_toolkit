@@ -385,3 +385,41 @@ These are noted but not implemented:
   `css_utilities` function generally — Sitarski (1968) or Gronchi
   (2002) iterative methods are the standard references. Not present
   in the codebase today.
+
+## Export bridge (offline consumers)
+
+Some consumers need the consensus but cannot reach this database or the
+upstream sources. The motivating case is the **CSS reprocessing V&V**
+(sikhote): JPL CNEOS and NEOfixer are firewalled there and Gizmo is not
+routable, so a live query or a local six-source rebuild are both
+impossible. For those consumers the consensus is published as a flat CSV
+snapshot.
+
+`scripts/export_neo_consensus.py` dumps membership to CSV:
+
+- `--mode aliases` (default) — one row per known designation alias
+  (primary / secondary provisional / permid) from `v_member_designations`,
+  each carrying the per-source flags from `v_membership_wide`. An
+  observation reported under any alias resolves to NEO.
+- `--mode wide` — one row per object (`primary_desig`).
+- `--min-sources N` — consensus strength (1 = union, 6 = unanimous).
+
+Publish as a GitHub Release asset on the `latest` tag (same path as the
+other snapshots):
+
+    python scripts/export_neo_consensus.py --out neo_consensus.csv
+    ./scripts/upload_release.sh neo_consensus.csv
+
+The reprocessing host pulls it with `gh release download latest -R
+rlseaman/CSS_MPC_toolkit -p 'neo_consensus*.csv'` and looks designations
+up locally (`tools/neo_membership.py::load_from_consensus_csv` consumes
+the `permid` / `primary_desig` / `packed_desig` / `designation` columns).
+
+**Follow-on (not in this change): per-night NEO obs export.** The
+reprocessing V&V can report total/new NEOs but not *missing* NEOs (NEOs
+the original night reported that the reprocessing dropped), because the
+archived CSS `.mpcd.mrpt` carries temporary IDs, not designations.
+Resolving that needs MPC's obs-DB record of which NEO designations a
+station reported on a given night — an `obs_sbn` query keyed on (stn,
+obs date) joined to `v_member_designations`. A second exporter
+(`export_station_night_neos.py`) is the natural home for it.
