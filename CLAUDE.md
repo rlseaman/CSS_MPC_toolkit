@@ -583,6 +583,13 @@ waitress WSGI server. A daily launchd agent
      effort; no alerts in week 1 (alert block commented in the script,
      enable after a baseline). See `docs/dashboard_security.md` →
      "Cloudflare protection refinements" #5.
+  7. Public-URL check: fetch `https://hotwireduniverse.org/` from
+     Gizmo (exercises DNS + Cloudflare tunnel + the restarted Dash)
+     and ping the `site-up` heartbeat on 200. The job's own
+     `gizmo-refresh` heartbeat fires on success; `/fail` on any
+     failure exit. Dead-man's switches on healthchecks.io via
+     `scripts/heartbeat.sh`; URLs in `~/Claude/mpc_sbn/heartbeat.env`
+     (not in git). Added 2026-09-09.
 Total elapsed ~16–19 min in normal operation. See `docs/disaster_recovery.md`
 for what to do if a stage fails.
 A second agent (`org.seaman.pg-backup`, 07:30 MST) runs
@@ -590,7 +597,8 @@ A second agent (`org.seaman.pg-backup`, 07:30 MST) runs
 plus globals to the boot volume under `~/Claude/mpc_sbn/backups/`
 (~265 MB, ~22 s; 14 daily + 12 monthly retained; verified with
 `pg_restore -l`). The replicated MPC tables are not dumped. Restore
-runbook: `docs/disaster_recovery.md` §F.
+runbook: `docs/disaster_recovery.md` §F. Pings the `pg-backup` heartbeat
+on start / success / fail.
 
 ### Dev surface
 A second Dash instance runs alongside prod for staging in-flight

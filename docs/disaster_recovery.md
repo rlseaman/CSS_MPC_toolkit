@@ -60,6 +60,18 @@ All three data paths are native to **Gizmo**:
   SBN. Restore procedure in §F. No off-host copy yet; the plan is an
   external drive (Time Machine for the boot volume, which will sweep
   the dumps along with it).
+- **Heartbeats (added 2026-09-09):** three dead-man's-switch checks on
+  healthchecks.io — `gizmo-refresh`, `pg-backup`, `site-up` — each
+  with period 1 day, grace 2 h. The refresh and backup scripts ping
+  `/start` on entry, the bare URL on success, and `/fail` (with a
+  reason in the body) on any failure exit, via `scripts/heartbeat.sh`.
+  Refresh stage 7 fetches `https://hotwireduniverse.org/` from Gizmo —
+  which goes out to the Cloudflare edge and back through the tunnel —
+  and pings `site-up` only on a 200. A missed ping or a `/fail` emails
+  the maintainer. Ping URLs live in `~/Claude/mpc_sbn/heartbeat.env`
+  (mode 600, not in git); if that file is missing the scripts log a
+  line and carry on. Gizmo dark → all three checks go "down" within
+  ~2 h of their windows, which is the alert the July outage lacked.
 
 The stage-3 restart is a deliberate bridge: Dash holds caches in memory
 once loaded, so without it the on-disk refresh has no effect on what
@@ -405,3 +417,16 @@ backlog load will step it up), `n_tables` equal to the live count of
 `css_*` tables, `retained_dumps` ≤ 27, `free_gb` comfortably above the
 5 GB pre-flight floor. A FAIL status names the reason; the per-run log
 is under `~/Claude/mpc_sbn/backups/logs/`.
+
+Or, without SSH: the healthchecks.io dashboard shows all three checks
+green with the last ping time and the body of the last ping (the
+refresh sends its stage timings; the backup sends dump name and size).
+Since 2026-09-09 the refresh status JSON also carries `site_check`
+(`ok` or `http_<code>`) and `stage7_s` from the public-URL probe.
+
+Heartbeat failure modes: a check that is *down* with no `/fail` event
+means the job never ran or never finished (host dark, launchd agent
+unloaded, script hung — see §E). A `/fail` event names the stage.
+`site-up` down while `gizmo-refresh` is fine means Dash restarted but
+the public path (tunnel / DNS / Cloudflare) did not come back — check
+`com.cloudflare.tunnel` and `~/.cloudflared/tunnel.log`.
