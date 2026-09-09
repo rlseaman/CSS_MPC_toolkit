@@ -10,7 +10,10 @@ numpy>=1.26
 pyarrow>=15.0
 
 # MPC designation pack/unpack (github.com/rlseaman/MPC_designations)
-mpc-designation @ git+https://github.com/rlseaman/MPC_designations.git#subdirectory=python
+# Pinned to the 1.0.1 commit (same Python source as the 1.0.0 prod
+# install; upstream 1.1.0 tightens packed-provisional validation and
+# needs its own tested upgrade). Bump the SHA deliberately.
+mpc-designation @ git+https://github.com/rlseaman/MPC_designations.git@9196621803dce9d6bdc3e3b9d89db130281653ca#subdirectory=python
 
 # Web application framework
 dash>=2.14
@@ -33,3 +36,11 @@ jupyterlab>=4.0
 # resolve_entities by default, mitigating CVE-2026-41066 (XXE) for any
 # future code path that might parse untrusted XML.
 lxml>=6.1.0
+
+# Security floors for transitive dependencies flagged by pip-audit on
+# 2026-09-09 (tornado via jupyterlab; urllib3 via requests; soupsieve
+# via beautifulsoup4). None are on the dashboard's request path, but
+# they are in the venv. Re-run `pip-audit` quarterly.
+tornado>=6.5.8
+urllib3>=2.7.0
+soupsieve>=2.8.4

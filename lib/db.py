@@ -21,13 +21,45 @@ import pandas as pd
 import psycopg2
 import psycopg2.extras
 
+# Seconds before psycopg2.connect() gives up on an unreachable server.
+# Override per call or via $PGCONNECT_TIMEOUT.
+DEFAULT_CONNECT_TIMEOUT = 10
+
 
 # ---------------------------------------------------------------------------
 # Connection
 # ---------------------------------------------------------------------------
 
 @contextmanager
-def connect(host=None, dbname="mpc_sbn", user="claude_ro"):
+def connect(host=None, dbname="mpc_sbn", user="claude_ro",
+            connect_timeout=None):
+    """
+    Context manager for a read-only database connection.
+
+    Uses ~/.pgpass for password lookup.  Sets the connection to readonly
+    mode to prevent accidental writes.
+
+    Parameters
+    ----------
+    host : str
+        Database server hostname (or socket directory).  Defaults to
+        $PGHOST; raises if neither is set.
+    dbname : str
+        Database name.
+    user : str
+        Database role (should be read-only).
+    connect_timeout : int, optional
+        Seconds to wait for the server before giving up.  Defaults to
+        $PGCONNECT_TIMEOUT, else DEFAULT_CONNECT_TIMEOUT.  Without a
+        bound, a TCP host that is down (or a Gizmo whose NVMe has
+        dropped) blocks the caller for the OS's SYN-retry window —
+        minutes — which is what stalled the dashboard's cache-refresh
+        checks during the 2026-06-27 outage.
+
+    Yields
+    ------
+    psycopg2.connection
+    """
     # Default host from $PGHOST environment variable (no hardcoded hostname)
     if host is None:
         host = os.environ.get("PGHOST")
@@ -38,26 +70,11 @@ def connect(host=None, dbname="mpc_sbn", user="claude_ro"):
                 "  setenv PGHOST <hostname>   (tcsh)\n"
                 "  export PGHOST=<hostname>   (bash)"
             )
-    """
-    Context manager for a read-only database connection.
-
-    Uses ~/.pgpass for password lookup.  Sets the connection to readonly
-    mode to prevent accidental writes.
-
-    Parameters
-    ----------
-    host : str
-        Database server hostname.
-    dbname : str
-        Database name.
-    user : str
-        Database role (should be read-only).
-
-    Yields
-    ------
-    psycopg2.connection
-    """
-    conn = psycopg2.connect(host=host, dbname=dbname, user=user)
+    if connect_timeout is None:
+        connect_timeout = int(os.environ.get("PGCONNECT_TIMEOUT",
+                                             DEFAULT_CONNECT_TIMEOUT))
+    conn = psycopg2.connect(host=host, dbname=dbname, user=user,
+                            connect_timeout=connect_timeout)
     conn.set_session(readonly=True, autocommit=False)
     try:
         yield conn
