@@ -18,6 +18,8 @@
 #   4a. Sweep orphan parquets / metas from prior SQL-hash bumps so the
 #       dashboard's "Caches refreshed …" label isn't back-dated.
 #   5. Restart Dash so it picks up the new caches
+#   7. Public-URL check → site-up heartbeat; success heartbeat for the
+#      job itself (healthchecks.io dead-man's switch; scripts/heartbeat.sh)
 #   6. APIREQ summary (best-effort) — tally yesterday's outbound HTTP
 #      volume by host / outcome into a flat file alongside the dashboard
 #      logs (see scripts/apireq_summary.sh). Week-1 monitoring without
@@ -56,6 +58,10 @@ exec >>"$LOG_FILE" 2>&1
 now_iso() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
 log() { echo "$(now_iso) | $*"; }
 
+# Dead-man's-switch pings (healthchecks.io); see scripts/heartbeat.sh.
+# shellcheck source=heartbeat.sh
+. "$PROJECT_DIR/scripts/heartbeat.sh"
+
 write_status() {
     # $1=OK|FAIL  $2=elapsed_s  $3=extra_json_body (optional)
     local status="$1" elapsed="$2" extra="${3:-}"
@@ -77,6 +83,7 @@ log "=== gizmo refresh start — script_pid=$$ log=$LOG_FILE ==="
 for f in "$VENV_PY" "$PSQL" "$APP_DIR/discovery_stats.py"; do
     if [[ ! -x "$f" && ! -f "$f" ]]; then
         log "FATAL: missing $f"
+        hb_ping REFRESH fail "pre-flight: missing $f"
         write_status FAIL 0 "\"reason\": \"missing $f\""
         exit 2
     fi
@@ -100,6 +107,7 @@ trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
 find "$LOG_ROOT" -maxdepth 1 -name 'refresh_*.log' -mtime +30 -delete 2>/dev/null || true
 
 cd "$PROJECT_DIR" || { log "FATAL: cannot cd $PROJECT_DIR"; exit 2; }
+hb_ping REFRESH start
 export PGHOST=/tmp
 
 START_ALL=$(date +%s)
@@ -115,6 +123,7 @@ log "stage 1: rc=$RC elapsed=${STAGE1_ELAPSED}s"
 if [[ $RC -ne 0 ]]; then
     TOTAL=$(( $(date +%s) - START_ALL ))
     write_status FAIL "$TOTAL" "\"stage\": \"obs_sbn_neo_refresh\", \"last_rc\": $RC, \"stage1_s\": $STAGE1_ELAPSED"
+    hb_ping REFRESH fail "FAIL at stage 1 (obs_sbn_neo refresh) rc=$RC"
     log "=== gizmo refresh end — FAIL at stage 1 ==="
     exit 1
 fi
@@ -214,6 +223,7 @@ if [[ $RC -ne 0 ]]; then
     [[ -n "$TOUCHFILE" ]] && rm -f "$TOUCHFILE"
     TOTAL=$(( $(date +%s) - START_ALL ))
     write_status FAIL "$TOTAL" "\"stage\": \"cache_refresh\", \"last_rc\": $RC, \"stage1_s\": $STAGE1_ELAPSED, \"stage2_s\": $STAGE2_ELAPSED, \"stage3_s\": $STAGE3_ELAPSED, \"stage4_s\": $STAGE4_ELAPSED"
+    hb_ping REFRESH fail "FAIL at stage 4 (cache refresh) rc=$RC"
     log "=== gizmo refresh end — FAIL at stage 4 ==="
     exit 1
 fi
@@ -371,6 +381,32 @@ fi
 STAGE6_ELAPSED=$(( $(date +%s) - START ))
 log "stage 6: elapsed=${STAGE6_ELAPSED}s"
 
+# -- Stage 7: public-URL check → site-up heartbeat --
+# From Gizmo a request to the public hostname leaves the LAN, hits the
+# Cloudflare edge and comes back through the tunnel, so this exercises
+# DNS + tunnel + the freshly-restarted Dash. Stage 5 just rebound the
+# port, so allow up to 60 s for the first 200.
+START=$(date +%s)
+log "--- stage 7: public-URL check (hotwireduniverse.org) ---"
+SITE_URL="${SITE_URL:-https://hotwireduniverse.org/}"
+SITE_CODE=000
+for _try in $(seq 1 12); do
+    SITE_CODE=$(/usr/bin/curl -s -o /dev/null -m 20 -w '%{http_code}' "$SITE_URL" 2>/dev/null)
+    [[ "$SITE_CODE" == "200" ]] && break
+    sleep 5
+done
+if [[ "$SITE_CODE" == "200" ]]; then
+    STAGE7_NOTE="\"site_check\": \"ok\""
+    log "stage 7: $SITE_URL -> 200"
+    hb_ping SITE "" "$SITE_URL 200 after refresh"
+else
+    STAGE7_NOTE="\"site_check\": \"http_$SITE_CODE\""
+    log "stage 7: WARN $SITE_URL -> $SITE_CODE (site-up heartbeat sent as fail)"
+    hb_ping SITE fail "$SITE_URL returned $SITE_CODE after refresh"
+fi
+STAGE7_ELAPSED=$(( $(date +%s) - START ))
+log "stage 7: elapsed=${STAGE7_ELAPSED}s"
+
 TOTAL=$(( $(date +%s) - START_ALL ))
 log "SUCCESS total ${TOTAL}s (stage1=${STAGE1_ELAPSED}s stage2=${STAGE2_ELAPSED}s stage3=${STAGE3_ELAPSED}s stage3b=${STAGE3B_ELAPSED}s stage4=${STAGE4_ELAPSED}s stage5=${STAGE5_ELAPSED}s stage6=${STAGE6_ELAPSED}s)"
 
@@ -391,6 +427,8 @@ EXTRA="\"stage1_s\": $STAGE1_ELAPSED, \"stage2_s\": $STAGE2_ELAPSED, \"stage3_s\
 [[ -n "$STAGE3B_NOTE" ]] && EXTRA+=", $STAGE3B_NOTE"
 [[ -n "$STAGE5_NOTE" ]] && EXTRA+=", $STAGE5_NOTE"
 [[ -n "$STAGE6_NOTE" ]] && EXTRA+=", $STAGE6_NOTE"
+[[ -n "$STAGE7_NOTE" ]] && EXTRA+=", $STAGE7_NOTE, \"stage7_s\": $STAGE7_ELAPSED"
 write_status OK "$TOTAL" "$EXTRA"
 log "=== gizmo refresh end — OK ==="
+hb_ping REFRESH "" "SUCCESS total ${TOTAL}s stage1=${STAGE1_ELAPSED}s stage4=${STAGE4_ELAPSED}s site=$SITE_CODE"
 exit 0

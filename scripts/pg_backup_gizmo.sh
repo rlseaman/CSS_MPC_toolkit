@@ -31,6 +31,9 @@
 # TABLE DATA entry per ordinary table in the dumped schemas.
 #
 # Restore procedure: docs/disaster_recovery.md §F.
+# Heartbeat: pings the pg-backup check on healthchecks.io at start,
+# success, and failure (scripts/heartbeat.sh; URLs in ~/Claude/mpc_sbn/
+# heartbeat.env, not in git).
 #
 # Exit codes:
 #   0 — success (including lock-held: another run is in progress)
@@ -69,6 +72,9 @@ exec >>"$LOG_FILE" 2>&1
 now_iso() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
 log() { echo "$(now_iso) | $*"; }
 
+# Dead-man's-switch pings (healthchecks.io); see scripts/heartbeat.sh.
+. "$(cd "$(dirname "$0")" && pwd)/heartbeat.sh"
+
 write_status() {
     # $1=OK|FAIL  $2=elapsed_s  $3=extra_json_body (optional)
     local status="$1" elapsed="$2" extra="${3:-}"
@@ -86,6 +92,7 @@ write_status() {
 fail() {
     # $1=exit code  $2=reason
     log "FATAL: $2"
+    hb_ping BACKUP fail "$2"
     write_status FAIL $(( $(date +%s) - T0 )) "\"reason\": \"$2\""
     rmdir "$LOCK_DIR" 2>/dev/null
     exit "$1"
@@ -100,6 +107,7 @@ if ! mkdir "$LOCK_DIR" 2>/dev/null; then
     exit 0
 fi
 trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
+hb_ping BACKUP start
 
 # -- Pre-flight --
 for f in "$PG_DUMP" "$PG_DUMPALL" "$PG_RESTORE" "$PSQL"; do
@@ -189,4 +197,5 @@ ELAPSED=$(( $(date +%s) - T0 ))
 write_status OK "$ELAPSED" \
     "\"dump\": \"$DUMP\", \"bytes\": $BYTES, \"sha256\": \"$SHA\", \"dump_s\": $DUMP_S, \"schemas\": \"$SCHEMA_LIST\", \"n_tables\": $N_TABLES, \"retained_dumps\": $n_kept, \"retained_bytes\": $RETAINED_BYTES, \"free_gb\": $free_gb"
 log "SUCCESS total ${ELAPSED}s"
+hb_ping BACKUP "" "SUCCESS $(basename "$DUMP") $BYTES bytes in ${DUMP_S}s; retained $n_kept"
 exit 0
