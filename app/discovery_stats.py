@@ -440,6 +440,26 @@ SIZE_REFS = {
 _140M_IDX = 4
 
 # ---------------------------------------------------------------------------
+# Operations-status badges (About tab). healthchecks.io renders one SVG
+# per dead-man's-switch check: up (green) / late (grey) / down (red).
+# Badge URLs are public by design (badge key != ping key) and carry no
+# write capability. Empty list -> the card is not rendered.
+# See scripts/heartbeat.sh and docs/disaster_recovery.md "Heartbeats".
+# ---------------------------------------------------------------------------
+STATUS_BADGES = [
+    # (label, what it means, badge SVG URL)
+    ("Nightly refresh",
+     "06:00 MST matview + cache rebuild, then Dash restart",
+     "https://healthchecks.io/b/2/0db99bcf-8584-41fc-b9f5-7d5cdd5c3591.svg"),
+    ("Database backup",
+     "07:30 MST pg_dump of the locally-authored schemas",
+     "https://healthchecks.io/b/2/eeb45268-0121-4fa9-90ab-79654197fa57.svg"),
+    ("Public site",
+     "hotwireduniverse.org answered 200 after the refresh",
+     "https://healthchecks.io/b/2/1ec01f13-f73f-44b3-ac66-489958d5ccd9.svg"),
+]
+
+# ---------------------------------------------------------------------------
 # Theme helpers
 # ---------------------------------------------------------------------------
 
@@ -479,6 +499,47 @@ THEMES = {
         row_hover="#eaeaea",
     ),
 }
+
+
+def _status_badge_card():
+    """About-tab card showing the healthchecks.io badges, or None."""
+    if not STATUS_BADGES:
+        return None
+    rows = []
+    for label, meaning, url in STATUS_BADGES:
+        rows.append(html.Div([
+            html.Img(src=url, alt=f"{label} status",
+                     style={"height": "20px", "verticalAlign": "middle",
+                            "marginRight": "10px"}),
+            html.Strong(label + ": "),
+            html.Span(meaning, className="subtext"),
+        ], style={"fontSize": "15px", "lineHeight": "1.8",
+                  "display": "flex", "alignItems": "center",
+                  "gap": "4px"}))
+    return html.Div(
+        style={
+            "border": "1px solid var(--hr-color, #ccc)",
+            "borderRadius": "8px",
+            "padding": "14px 16px",
+            "backgroundColor": "var(--paper-bg, white)",
+        },
+        children=[
+            html.Div(html.Span("Operations status",
+                               style={"fontWeight": "600",
+                                      "fontSize": "16px"}),
+                     style={"marginBottom": "12px"}),
+            *rows,
+            html.Div(
+                "Live badges from healthchecks.io. Each nightly job pings "
+                "its check on success; a missed morning or an explicit "
+                "failure turns the badge red and emails the maintainer. "
+                "\u201cLate\u201d means the ping is inside its 2-hour "
+                "grace window.",
+                className="subtext",
+                style={"fontSize": "13px", "lineHeight": "1.5",
+                       "marginTop": "10px"}),
+        ],
+    )
 
 
 def theme(name):
@@ -7971,6 +8032,8 @@ app.layout = html.Div(
                                                       "lineHeight": "1.6"}),
                                         ],
                                     ),
+                                    # ── Operations status (badges) ──
+                                    *([c] if (c := _status_badge_card()) else []),
                                     # ── Release notes ──
                                     html.Div(
                                         style={
