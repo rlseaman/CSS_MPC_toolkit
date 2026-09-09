@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>org.seaman.pg-backup</string>
+
+    <key>Program</key>
+    <string>/Users/robertseaman/CSS_MPC_toolkit/scripts/pg_backup_gizmo.sh</string>
+
+    <!-- 07:30 local (Arizona = MST year-round): after the 06:00 refresh
+         (~19 min) and the 07:00 orbit-watch capture, so one dump carries
+         both days' work. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>7</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- launchd's own stdout/stderr; the script writes a per-run log
+         under ~/Claude/mpc_sbn/backups/logs/ -->
+    <key>StandardOutPath</key>
+    <string>/Users/robertseaman/Claude/mpc_sbn/backups/launchd.out</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/robertseaman/Claude/mpc_sbn/backups/launchd.err</string>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/robertseaman/CSS_MPC_toolkit</string>
+
+    <key>Nice</key>
+    <integer>10</integer>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>
