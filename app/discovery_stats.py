@@ -9376,7 +9376,7 @@ def update_h_distribution(h_year_range, group_by, h_range, yscale, h_mode,
             comp_140m = min(n_disc_140m / n_model_140m * 100, 100)
             fig.add_annotation(
                 x=h_140m, y=comp_140m, yref="y2",
-                text=f" {comp_140m:.0f}% at H={h_140m}",
+                text=f" {comp_140m:.1f}% at H={h_140m}",
                 showarrow=True, arrowhead=2, arrowcolor=t["text"],
                 ax=45, ay=-28,
                 font=dict(size=12, color=t["text"]),
