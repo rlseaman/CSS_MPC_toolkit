@@ -585,6 +585,12 @@ waitress WSGI server. A daily launchd agent
      "Cloudflare protection refinements" #5.
 Total elapsed ~16–19 min in normal operation. See `docs/disaster_recovery.md`
 for what to do if a stage fails.
+A second agent (`org.seaman.pg-backup`, 07:30 MST) runs
+`scripts/pg_backup_gizmo.sh`: `pg_dump -Fc` of every `css_*` schema
+plus globals to the boot volume under `~/Claude/mpc_sbn/backups/`
+(~265 MB, ~22 s; 14 daily + 12 monthly retained; verified with
+`pg_restore -l`). The replicated MPC tables are not dumped. Restore
+runbook: `docs/disaster_recovery.md` §F.
 
 ### Dev surface
 A second Dash instance runs alongside prod for staging in-flight

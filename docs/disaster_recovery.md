@@ -47,6 +47,19 @@ All three data paths are native to **Gizmo**:
   5. Restarts the Dash process so it loads the freshly-written
      caches into memory (~5 s gap of 502s during rebind).
 - **Dashboard:** `start-dashboard.sh` loads the parquets at startup.
+- **Nightly backup (added 2026-09-09):** launchd agent
+  `org.seaman.pg-backup` at 07:30 MST runs `scripts/pg_backup_gizmo.sh`,
+  a `pg_dump -Fc` (zstd) of every `css_*` schema plus the cluster
+  globals, written to the **boot volume** under
+  `~/Claude/mpc_sbn/backups/dumps/` — deliberately not the external
+  NVMe that holds PGDATA. ~265 MB and ~22 s per run. Retention: every
+  dump from the last 14 days plus the first dump of each month for a
+  year (~7 GB steady state). Each run verifies the archive with
+  `pg_restore -l`, records a sha256, and updates `latest.dump`. The
+  replicated MPC tables are not dumped — path A/B re-seeds them from
+  SBN. Restore procedure in §F. No off-host copy yet; the plan is an
+  external drive (Time Machine for the boot volume, which will sweep
+  the dumps along with it).
 
 The stage-3 restart is a deliberate bridge: Dash holds caches in memory
 once loaded, so without it the on-disk refresh has no effect on what
@@ -261,6 +274,69 @@ failure" is also the only safe way to test the full power-loss path
 (don't yank the plug — see D for why abrupt drops on this drive are risky).
 Not yet purchased as of 2026-07-15.
 
+### F) Local schemas lost or corrupted — restore from the nightly pg_dump
+
+Applies when `css_neo_consensus`, `css_orbit_watch`, `css_ades_overlay`
+or `css_utilities` are gone or damaged but the cluster itself is
+running (e.g. after an NVMe drop that took the data directory, or a
+re-seeded replica that only carries the MPC tables). These schemas are
+the only data in the cluster that cannot be rebuilt from upstream.
+
+**1. Pick a dump.** Newest is `latest.dump`; the directory also holds
+14 daily and up to 12 monthly-first archives:
+
+```bash
+ls -la ~/Claude/mpc_sbn/backups/dumps/
+cat ~/Claude/mpc_sbn/backups/last_backup_status.json     # last run OK?
+shasum -a 256 -c ~/Claude/mpc_sbn/backups/dumps/<name>.dump.sha256
+```
+
+**2. Roles first** if the cluster was rebuilt from scratch (skip if
+`claude_ro` and `robertseaman` already exist):
+
+```bash
+psql -h /tmp -d postgres -f ~/Claude/mpc_sbn/backups/dumps/globals_<stamp>.sql
+```
+
+**3. Restore into `mpc_sbn`.** The archive is custom format, so you can
+restore everything or one schema. Drop the damaged schema first if it
+half-exists, otherwise `pg_restore` errors on every existing object:
+
+```bash
+psql -h /tmp -d mpc_sbn -c 'DROP SCHEMA IF EXISTS css_orbit_watch CASCADE'
+pg_restore -h /tmp -d mpc_sbn -j 4 -n css_orbit_watch \
+    ~/Claude/mpc_sbn/backups/dumps/latest.dump
+# all four schemas: omit -n
+```
+
+The MPC tables in `public` must already be present:
+`css_ades_overlay.v_effective` and the `css_neo_consensus.obs_summary`
+matview reference `public.obs_sbn`, so restoring into a database
+without them reports two errors and skips those objects. That is the
+expected result of the scratch-database restore test, not a corrupt
+archive. In a real recovery restore the schemas after replication has
+re-seeded `public`, or re-run the dump's `CREATE VIEW` / `REFRESH
+MATERIALIZED VIEW` afterwards.
+
+**4. Verify** row counts against the status JSON's era (they only need
+to be plausible — the dump is from 07:30 that morning):
+
+```sql
+SELECT count(*) FROM css_orbit_watch.orbit_snapshot;
+SELECT css_utilities.classify_orbit_label(0.9, 0.2, 5.0);   -- 'Apollo'
+```
+
+Then re-enable the daily jobs that write to these schemas
+(`org.seaman.gizmo-refresh` stage 2 for consensus,
+`org.seaman.orbit-watch` for snapshots) — they are idempotent per day
+but the gap between the dump and the failure is lost.
+
+**Restore test record.** 2026-09-09: the first dump was restored into
+a scratch database on Gizmo; all six tables matched live counts
+exactly (`source_membership` 254,213 · `orbit_snapshot` 3,686,601 ·
+`ades_overlay.obs` 1,622,353 …), all 11 functions and 17 of 18 indexes
+came back, the two `public`-dependent objects errored as described.
+
 ## Retained assets
 
 These are kept in-repo and on-disk even though they're no longer
@@ -316,3 +392,16 @@ failed silently; check `launchd.err` and the dashboard log under
 An OK status with `elapsed_s` well outside that range (say >900 s) is a
 soft warning — probably a cache-cold stage 1 or a replication-catchup
 spike, worth investigating.
+
+After the 07:30 MST backup:
+
+```bash
+ssh robertseaman@192.168.0.157 cat ~/Claude/mpc_sbn/backups/last_backup_status.json
+```
+
+Expected: `"status": "OK"`, `bytes` in the few-hundred-MB range and
+growing slowly (orbit snapshots add a few MB a month; the ADES-overlay
+backlog load will step it up), `n_tables` equal to the live count of
+`css_*` tables, `retained_dumps` ≤ 27, `free_gb` comfortably above the
+5 GB pre-flight floor. A FAIL status names the reason; the per-run log
+is under `~/Claude/mpc_sbn/backups/logs/`.
