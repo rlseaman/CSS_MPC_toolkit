@@ -286,6 +286,20 @@ failure" is also the only safe way to test the full power-loss path
 (don't yank the plug — see D for why abrupt drops on this drive are risky).
 Not yet purchased as of 2026-07-15.
 
+**Verified 2026-09-09** by a deliberate `sudo reboot` (uptime 9 days
+before). Timeline from the reboot command: SSH answering at +45 s
+(auto-login worked — 7 user sessions present); PostgreSQL clean
+shutdown (smart shutdown + final checkpoint) at +2 s and back at
++33 s with "database system was shut down at …", i.e. no crash
+recovery; both logical-replication apply workers started within the
+same second; the Cloudflare tunnel registered at +34 s and logged
+"unable to reach origin" for ~2 s until Dash bound its ports; prod and
+dev dashboards 200 at ~+45 s; public URL 200 and a real callback at
++60 s. Load average peaked ~63 while both dashboards loaded caches.
+Nothing needed a hand. Remaining gap is the UPS: this exercised a
+clean restart, not a power cut, which would skip the checkpoint and
+put PostgreSQL through crash recovery on the external NVMe.
+
 ### F) Local schemas lost or corrupted — restore from the nightly pg_dump
 
 Applies when `css_neo_consensus`, `css_orbit_watch`, `css_ades_overlay`
