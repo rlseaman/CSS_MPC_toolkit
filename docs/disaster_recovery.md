@@ -408,6 +408,13 @@ overall job — stage 4 is best-effort. Inspect
 `css_neo_consensus.source_runs` for details when a source's status is
 `fail`, and watch `v_source_health.time_since_last_ok` for staleness.
 
+Where the logs actually are: the refresh script redirects its own
+output to `~/Claude/mpc_sbn/matview/logs/refresh_<stamp>.log` (the
+backup script likewise to `~/Claude/mpc_sbn/backups/logs/`), so the
+`launchd.out` / `launchd.err` files named in the plists stay empty in
+normal operation. Do not read an empty `launchd.out` as "the job
+stopped logging".
+
 Spot-check the dashboard's actual freshness by visiting
 hotwireduniverse.org and reading the "Caches refreshed" label in the
 upper left — it should match the stage-2 cache mtime, i.e. last
