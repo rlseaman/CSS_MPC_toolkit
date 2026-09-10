@@ -79,6 +79,10 @@ data/                         # Vendored static reference data
 scripts/                      # Operational tools
   run_pipeline.sh             #   Execute SQL, validate, upload discovery tracklets
   db_health_check.sh          #   Diagnostic: replication, dead tuples, indexes
+  refresh_matview_gizmo.sh    #   Nightly refresh (7 stages) + its launchd plist
+  pg_backup_gizmo.sh          #   Nightly pg_dump of css_* schemas + plist
+  heartbeat.sh                #   healthchecks.io pings (sourced by both)
+  *.plist                     #   Every Gizmo launchd agent, incl. PG + tunnel
 notebooks/                    # Jupyter Lab exploration (strip outputs before commit)
   01_query_profiling.ipynb
   02_orbital_elements.ipynb
@@ -218,6 +222,8 @@ Observation history — are live on prod.
 - Half-magnitude bin chart comparing MPC discoveries to NEOMOD3
   population model (Nesvorny et al. 2024, Icarus 411)
 - Undiscovered remainder bars, completeness curve with 1-sigma errors
+- 140 m completeness annotation on the cumulative curve, one decimal
+  ("55.3% at H=21.9"), placed at the active mapping's 140 m H
 - Differential or cumulative modes
 - NEOMOD3 reference table with per-bin completeness
 
@@ -465,6 +471,11 @@ Observation history — are live on prod.
   maintainer line. Release notes card + FAQ (data freshness, NEO
   definition, six-source rationale, orbit-class derivation, map
   projections, mobile, contact). No state, no callbacks.
+- **Operations status card** (2026-09-09): three live healthchecks.io
+  SVG badges — Nightly refresh / Database backup / Public site — from
+  the `STATUS_BADGES` constant. Badge URLs are public by design
+  (read-only badge key, distinct from the ping keys). Empty list hides
+  the card.
 
 ### Survey Groupings
 Stations are mapped to project groups via `STATION_TO_PROJECT`:

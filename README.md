@@ -38,7 +38,7 @@ and only appears on the `dev.hotwireduniverse.org` staging surface
 | **Asteroid Classes** | Cross-tabulation of the full `mpc_orbits` catalog (~1.5M objects, all classes) by orbit type and selected attributes. Class grouping (Fine / Standard / Coarse), NEO/PHA/retrograde filters, H histogram, a–e scatter. |
 | **Tools** | Standalone calculators and converters for planetary-defense work — pack/unpack/validate designation, H↔diameter, Tisserand, orbit classification, parse obs80, date conversions, airmass↔altitude. |
 | **Station Report** *(dev)* | Per-site deep-dive: site code + optional date range yields summary line, year × class breakdown for NEOs and non-NEOs, MPEC-publications stub (Phase 2, ADS-backed). |
-| **About** | Project description, GitHub repo link, contact email, maintainer line, release notes card, FAQ. |
+| **About** | Project description, GitHub repo link, contact email, maintainer line, live operations-status badges (nightly refresh / backup / public site), release notes card, FAQ. |
 
 Each tab has a **Download CSV** button that exports the currently filtered
 data. Shared banner controls: NEO source filter (per-consensus-source
@@ -231,7 +231,8 @@ CSS_MPC_toolkit/
 ├── sandbox/                            #   Analysis notes, exploratory outputs
 └── docs/                               #   Operations + scoping notes
     ├── deployment.md                   #   Server provisioning and operations
-    ├── disaster_recovery.md            #   Nightly-refresh failure playbook
+    ├── disaster_recovery.md            #   Failure playbook: refresh, NVMe, power,
+    │                                   #     schema restore from nightly pg_dump
     ├── source_tables.md                #   Required MPC/SBN tables and columns
     ├── band_corrections.md             #   Photometric band-to-V corrections
     ├── neo_consensus.md                #   Six-source NEO membership design

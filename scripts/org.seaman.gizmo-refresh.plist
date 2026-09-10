@@ -21,8 +21,11 @@
     <key>RunAtLoad</key>
     <false/>
 
-    <!-- launchd's own stdout/stderr; refresh_matview_gizmo.sh writes a
-         per-run log under ~/Claude/mpc_sbn/matview/logs/ -->
+    <!-- launchd's own stdout/stderr. These stay EMPTY in normal operation:
+         refresh_matview_gizmo.sh redirects all of its own output to a
+         per-run log under ~/Claude/mpc_sbn/matview/logs/ (exec >>LOG 2>&1)
+         before anything else runs. A zero-byte launchd.out is not a sign
+         that logging died; look in logs/ and last_refresh_status.json. -->
     <key>StandardOutPath</key>
     <string>/Users/robertseaman/Claude/mpc_sbn/matview/launchd.out</string>
     <key>StandardErrorPath</key>
