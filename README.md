@@ -216,6 +216,11 @@ CSS_MPC_toolkit/
 │   ├── validate_output.sh              #   Output validation checks
 │   ├── upload_release.sh               #   Upload CSV to GitHub Releases
 │   ├── db_health_check.sh              #   Database diagnostic toolkit
+│   ├── refresh_matview_gizmo.sh        #   Nightly refresh, 7 stages (launchd, 06:00 MST)
+│   ├── pg_backup_gizmo.sh              #   Nightly pg_dump of css_* schemas (07:30 MST)
+│   ├── heartbeat.sh                    #   healthchecks.io dead-man's-switch pings
+│   ├── *.plist                         #   Every Gizmo launchd agent (refresh, backup,
+│   │                                   #     dashboards, PostgreSQL, Cloudflare tunnel)
 │   ├── daily_refresh.sh                #   Cron script for daily cache refresh
 │   ├── db_tune_recommendations.sql     #   PostgreSQL tuning guide
 │   └── enable_huge_pages.md            #   Huge pages setup guide (RHEL 8)
