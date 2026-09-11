@@ -82,6 +82,7 @@ scripts/                      # Operational tools
   refresh_matview_gizmo.sh    #   Nightly refresh (7 stages) + its launchd plist
   pg_backup_gizmo.sh          #   Nightly pg_dump of css_* schemas + plist
   tm_backup_check.sh          #   Daily Time Machine freshness check + plist
+  db_up_check.sh              #   Hourly DB liveness + replication check + plist
   heartbeat.sh                #   healthchecks.io pings (sourced by both)
   *.plist                     #   Every Gizmo launchd agent, incl. PG + tunnel
 notebooks/                    # Jupyter Lab exploration (strip outputs before commit)
@@ -620,6 +621,15 @@ agent (`org.seaman.tm-check`, 08:00 MST) runs
 and registered — and pings the `tm-backup` heartbeat. Passphrase:
 `~/Claude/mpc_sbn/backup1_passphrase.txt` + login keychain. Restore
 runbook: `docs/disaster_recovery.md` §G.
+A fourth agent (`org.seaman.db-up`, hourly at :20) runs
+`scripts/db_up_check.sh`: pg_isready + `SELECT 1` + every logical-
+replication subscription has a worker and a message from SBN within
+15 min; pings the `db-up` heartbeat (period 1 h). Added 2026-09-10
+after an NVMe-drop outage sat unnoticed for 8 h behind the parquet
+caches. PostgreSQL itself runs under `local.postgresql18` via the
+`scripts/pg18-start.sh` wrapper (fast shutdown on SIGTERM, stale
+pidfile cleanup — the latter needs `/bin/bash` in Full Disk Access);
+details and the TCC caveat in `docs/disaster_recovery.md` §D.
 
 ### Dev surface
 A second Dash instance runs alongside prod for staging in-flight

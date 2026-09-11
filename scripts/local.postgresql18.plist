@@ -31,6 +31,11 @@
 	</array>
 	<key>RunAtLoad</key>
 	<true/>
+	<!-- Seconds launchd waits after SIGTERM before SIGKILL. The wrapper
+	     turns SIGTERM into a fast shutdown, whose end-of-shutdown
+	     checkpoint on a 300 GB replica can exceed the 20 s default. -->
+	<key>ExitTimeOut</key>
+	<integer>120</integer>
 	<key>StandardErrorPath</key>
 	<string>/opt/homebrew/var/log/postgresql@18.log</string>
 	<key>StandardOutPath</key>

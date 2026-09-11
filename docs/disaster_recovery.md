@@ -199,6 +199,51 @@ drive (caught live in the kernel log). A properly seated cable should not
 do this — treat a recurrence as a loose/marginal Thunderbolt cable or a
 bumped enclosure, and keep other devices off the adjacent ports.
 
+**Second occurrence 2026-09-10, undetected for 8 h:** PG logged
+`could not write to log file: Input/output error` at ~14:38 MST. This
+time the postmaster **hung** instead of dying, so the pidfile stayed
+valid and launchd's KeepAlive relaunch of `local.postgresql18` failed
+every 10 s with `lock file "postmaster.pid" already exists` — 2,728
+times until a 22:15 reboot. Nothing alerted: the site kept serving 200
+from parquet caches and the heartbeats only fire at 06:00 / 07:30 (the
+hourly `db-up` check was added the same night in response). Nothing
+had been plugged into the rear ports; the owner reports a network
+outage around then and workspace tidying nearby — so treat the
+Thunderbolt cable/enclosure as marginal, not just the neighbouring
+ports. After the reboot PG *still* would not start: the stale pidfile's
+PID (704) had been reused by a Safari helper, and Postgres treats a
+live same-user PID as a running postmaster.
+
+**What the launchd wrapper (`scripts/pg18-start.sh`, live copy
+`~/Claude/mpc_sbn/pg18-start.sh`) does about it since 2026-09-10:**
+- Runs postgres as a child and turns launchd's SIGTERM (shutdown,
+  `bootout`, `kickstart -k`) into SIGINT = **fast** shutdown. A bare
+  SIGTERM is a *smart* shutdown that waits for the dashboards' pooled
+  connections forever, gets SIGKILLed, and leaves a stale pidfile.
+  Plist `ExitTimeOut` raised to 120 s for the end-of-shutdown
+  checkpoint. Verified: `bootout` → "database system is shut down",
+  pidfile gone.
+- Before starting, removes a pidfile whose PID is not a postgres
+  process (renamed to `postmaster.pid.stale.<stamp>`). **This needs
+  `/bin/bash` in System Settings → Privacy & Security → Full Disk
+  Access** on Gizmo: under launchd, bash is otherwise denied every
+  read/write on the external volume by TCC ("Operation not permitted",
+  even `ls` of the data directory; `stat` still works, which is why the
+  mount-wait loop is unaffected). `postgres` itself works because it
+  holds an explicit *Removable Volumes* grant — keyed to
+  `/opt/homebrew/Cellar/postgresql@18/18.3/bin/postgres`, so **a
+  Homebrew upgrade that changes that path will silently lose the grant
+  and PG will fail to start under launchd** until the new binary is
+  approved (start it once from Terminal to trigger the prompt, or add
+  it under Full Disk Access). SSH sessions are exempt (Remote Login's
+  full-disk-access option is on), which is why the runbook below works
+  over SSH.
+- A pidfile whose PID *is* a live postgres is left alone and the
+  wrapper exits 1 — launchd retries every 10 s, which is correct while
+  a hung postmaster still owns the directory. Note launchd does **not**
+  relaunch after a clean exit 0 (e.g. a manual `pg_ctl stop`); use
+  `launchctl kickstart` then.
+
 **Recovery (≈1 min; ran cleanly 2026-06-27):**
 1. Confirm the drive is back and writable *before* starting PG:
    ```bash
@@ -207,14 +252,24 @@ bumped enclosure, and keep other devices off the adjacent ports.
    ```
    If unmounted: reseat the Thunderbolt cable at both ends (re-enumerates
    in seconds).
-2. Start PostgreSQL — crash recovery replays the little WAL since the last
-   checkpoint (~2 s). Postgres is managed by the **`local.postgresql18`**
-   LaunchAgent (custom `pg18-start.sh` wrapper + the `PathState` drive-mount
-   guard) — **not** `brew services`; see §E on why the stock
-   `homebrew.mxcl.postgresql@18` agent is disabled:
+2. If a hung postmaster is still around, or the pidfile is stale and the
+   wrapper could not clear it (no Full Disk Access — see above), clear
+   it by hand. Only after confirming no postgres process exists and the
+   pidfile's PID is not one:
+   ```bash
+   pgrep -x postgres                                   # must print nothing
+   ps -p $(head -1 /Volumes/data1/postgresql@18/postmaster.pid) -o command=
+   mv /Volumes/data1/postgresql@18/postmaster.pid ~/Claude/mpc_sbn/postmaster.pid.stale.$(date +%Y%m%d)
+   ```
+   Then start PostgreSQL — crash recovery replays the little WAL since
+   the last checkpoint (~2 s). Postgres is managed by the
+   **`local.postgresql18`** LaunchAgent (custom `pg18-start.sh` wrapper +
+   the `PathState` drive-mount guard) — **not** `brew services`; see §E
+   on why the stock `homebrew.mxcl.postgresql@18` agent is disabled:
    ```bash
    launchctl kickstart -k gui/$(id -u)/local.postgresql18
    pg_isready -h /tmp        # wait for "accepting connections"
+   tail -3 /opt/homebrew/var/log/postgresql@18.log   # wrapper + FATALs land here
    ```
 3. Verify replication resumed + data intact:
    ```bash
