@@ -103,8 +103,11 @@ if ! mkdir "$LOCK_DIR" 2>/dev/null; then
 fi
 trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
 
-# -- Log rotation (keep 30 days) --
+# -- Log rotation (refresh logs 30 days; dashboard logs 90 days) --
+# Dashboard logs carry the APIREQ / REQ lines that the stage-6 summaries
+# roll up; the daily summary text files are kept indefinitely (tiny).
 find "$LOG_ROOT" -maxdepth 1 -name 'refresh_*.log' -mtime +30 -delete 2>/dev/null || true
+find "$HOME/Claude/mpc_sbn/logs" -maxdepth 1 \( -name 'dashboard_2*.log' -o -name 'dashboard-rnd_2*.log' \) -mtime +90 -delete 2>/dev/null || true
 
 cd "$PROJECT_DIR" || { log "FATAL: cannot cd $PROJECT_DIR"; exit 2; }
 hb_ping REFRESH start
@@ -377,6 +380,20 @@ if [[ -x "$APIREQ_SCRIPT" ]]; then
 else
     STAGE6_NOTE="\"apireq_summary\": \"missing\""
     log "stage 6: WARN $APIREQ_SCRIPT missing or not executable"
+fi
+# Inbound usage roll-up (REQ lines → usage_summary_YYYYMMDD.txt), same
+# best-effort contract. Added 2026-09-11.
+USAGE_SCRIPT="$PROJECT_DIR/scripts/usage_summary.sh"
+if [[ -x "$USAGE_SCRIPT" ]]; then
+    if "$USAGE_SCRIPT"; then
+        STAGE6_NOTE="$STAGE6_NOTE, \"usage_summary\": \"ok\""
+    else
+        STAGE6_NOTE="$STAGE6_NOTE, \"usage_summary\": \"fail\""
+        log "stage 6: WARN usage_summary.sh returned non-zero"
+    fi
+else
+    STAGE6_NOTE="$STAGE6_NOTE, \"usage_summary\": \"missing\""
+    log "stage 6: WARN $USAGE_SCRIPT missing or not executable"
 fi
 STAGE6_ELAPSED=$(( $(date +%s) - START ))
 log "stage 6: elapsed=${STAGE6_ELAPSED}s"

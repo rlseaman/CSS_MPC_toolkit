@@ -150,6 +150,48 @@ prod + dev are two processes sharing Gizmo's outbound IP, so JPL can
 see up to ~2× the per-process cap.  NHATS is never called by this
 project.
 
+### Inbound request log — usage tracking (2026-09-11)
+
+Until 2026-09-11 nothing on our side recorded who used the dashboard or
+which tabs they used; the only view was Cloudflare's aggregate zone
+analytics. The app now prints one `REQ` line per page load or Dash
+callback to the dashboard log, beside the `APIREQ` lines, and
+`scripts/usage_summary.sh` (refresh stage 6, alongside
+`apireq_summary.sh`) rolls the trailing day into
+`~/Claude/mpc_sbn/logs/usage_summary_YYYYMMDD.txt`.
+
+```
+REQ ts=2026-09-11T21:03:12Z vid=9f1c02aa cc=US dev=desktop POST /_dash-update-component 200 ms=41 tab=tab-obshist trig=tabs.value out=..obshist-table.data...
+```
+
+**What is recorded**
+
+- `vid` — a keyed BLAKE2 hash (4 bytes) of the Cloudflare-supplied client
+  IP with a salt generated at process start. The nightly restart rotates
+  the salt, so a token identifies one visitor for about a day and cannot
+  be joined across days or reversed to an address.
+- `cc` — Cloudflare's two-letter country code (`CF-IPCountry`).
+- `dev` — `bot` / `mobile` / `desktop` / `none`, derived from the
+  user-agent by regex. The user-agent string itself is **not** logged.
+- method, path, status, server time in ms.
+- For callbacks: the triggering component property ids
+  (`changedPropIds`, or `init` for the page-load fan-out), the output id,
+  and the active tab whenever the callback carries `tabs.value` as an
+  input or state — which most do, so per-tab attribution is good.
+
+**What is not recorded:** raw IPs, user-agents, referrers, cookies,
+query strings, request bodies beyond the component ids above, and
+static-asset fetches (`/assets/`, `/_dash-component-suites/`, …).
+
+**Retention:** dashboard logs are pruned after 90 days by the refresh
+script; the daily summary text files are kept.
+
+**Reading it:** `usage_summary_*.txt` gives page loads, unique visitors,
+country, device class, tab switches, callbacks per tab, top triggers,
+non-2xx responses, slowest callbacks, and bot paths. The dev instance
+(`dashboard-rnd_*.log`) is excluded from the summary — it sits behind
+Cloudflare Access and its traffic is the maintainer.
+
 ## Hardening Backlog
 
 Three items originally deferred.  **Status update 2026-07-16: items 1
