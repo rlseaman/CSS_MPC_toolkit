@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>org.seaman.db-up</string>
+
+    <key>Program</key>
+    <string>/Users/robertseaman/CSS_MPC_toolkit/scripts/db_up_check.sh</string>
+
+    <!-- Hourly at :20 — clear of the 06:00 refresh start, the 07:00
+         orbit-watch, the 07:30 dump and the 08:00 Time Machine check.
+         healthchecks.io check: period 1 h, grace 30 min. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Minute</key>
+        <integer>20</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/robertseaman/Claude/mpc_sbn/logs/db_up.launchd.out</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/robertseaman/Claude/mpc_sbn/logs/db_up.launchd.err</string>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/robertseaman/CSS_MPC_toolkit</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>
