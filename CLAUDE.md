@@ -81,6 +81,7 @@ scripts/                      # Operational tools
   db_health_check.sh          #   Diagnostic: replication, dead tuples, indexes
   refresh_matview_gizmo.sh    #   Nightly refresh (7 stages) + its launchd plist
   pg_backup_gizmo.sh          #   Nightly pg_dump of css_* schemas + plist
+  tm_backup_check.sh          #   Daily Time Machine freshness check + plist
   heartbeat.sh                #   healthchecks.io pings (sourced by both)
   *.plist                     #   Every Gizmo launchd agent, incl. PG + tunnel
 notebooks/                    # Jupyter Lab exploration (strip outputs before commit)
@@ -610,6 +611,15 @@ plus globals to the boot volume under `~/Claude/mpc_sbn/backups/`
 `pg_restore -l`). The replicated MPC tables are not dumped. Restore
 runbook: `docs/disaster_recovery.md` §F. Pings the `pg-backup` heartbeat
 on start / success / fail.
+Off-host copy (2026-09-10): Time Machine backs up Gizmo's boot volume
+hourly to `backup1`, an encrypted APFS volume on a Seagate 2 TB USB
+HDD on a front USB-C port. `/Volumes/data1` (live PGDATA) and the two
+`venv/` trees are excluded; the nightly dumps ride along. A third
+agent (`org.seaman.tm-check`, 08:00 MST) runs
+`scripts/tm_backup_check.sh` — newest snapshot < 26 h, drive mounted
+and registered — and pings the `tm-backup` heartbeat. Passphrase:
+`~/Claude/mpc_sbn/backup1_passphrase.txt` + login keychain. Restore
+runbook: `docs/disaster_recovery.md` §G.
 
 ### Dev surface
 A second Dash instance runs alongside prod for staging in-flight

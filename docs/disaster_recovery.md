@@ -57,12 +57,24 @@ All three data paths are native to **Gizmo**:
   year (~7 GB steady state). Each run verifies the archive with
   `pg_restore -l`, records a sha256, and updates `latest.dump`. The
   replicated MPC tables are not dumped — path A/B re-seeds them from
-  SBN. Restore procedure in §F. No off-host copy yet; the plan is an
-  external drive (Time Machine for the boot volume, which will sweep
-  the dumps along with it).
-- **Heartbeats (added 2026-09-09):** three dead-man's-switch checks on
-  healthchecks.io — `gizmo-refresh`, `pg-backup`, `site-up` — each
-  with period 1 day, grace 2 h. The refresh and backup scripts ping
+  SBN. Restore procedure in §F. The off-host copy is Time Machine
+  (next bullet), which sweeps the dumps along with the boot volume.
+- **Time Machine (added 2026-09-10):** hourly backups of the boot
+  volume to `backup1`, an encrypted APFS volume on a Seagate 2 TB USB
+  HDD plugged into a **front** USB-C port (deliberately not the rear
+  Thunderbolt port next to the PGDATA NVMe — see §D). The APFS
+  passphrase is in `~/Claude/mpc_sbn/backup1_passphrase.txt` (mode
+  600) and in the login keychain so the volume auto-unlocks after an
+  unattended reboot. Excluded: `/Volumes/data1` (a file copy of live
+  PGDATA is not restorable; the replica is rebuildable from SBN) and
+  the two project `venv/` trees (rebuild-only, and they bake in
+  absolute paths). First full backup 73 GB / 760 K files. A daily
+  check (`org.seaman.tm-check`, 08:00 MST, `scripts/tm_backup_check.sh`)
+  verifies the newest backup is < 26 h old and pings `tm-backup`.
+  Restore procedure in §G.
+- **Heartbeats (added 2026-09-09):** four dead-man's-switch checks on
+  healthchecks.io — `gizmo-refresh`, `pg-backup`, `site-up`, and
+  (since 2026-09-10) `tm-backup` — each with period 1 day, grace 2 h. The refresh and backup scripts ping
   `/start` on entry, the bare URL on success, and `/fail` (with a
   reason in the body) on any failure exit, via `scripts/heartbeat.sh`.
   Refresh stage 7 fetches `https://hotwireduniverse.org/` from Gizmo —
@@ -363,6 +375,75 @@ exactly (`source_membership` 254,213 · `orbit_snapshot` 3,686,601 ·
 `ades_overlay.obs` 1,622,353 …), all 11 functions and 17 of 18 indexes
 came back, the two `public`-dependent objects errored as described.
 
+### G) Boot volume lost — restore from Time Machine (`backup1`)
+
+Applies when Gizmo's internal disk (or the whole Mac mini) is gone,
+or when a file under `~` was deleted or overwritten and the nightly
+pg_dump is not the right granularity. `backup1` holds hourly
+snapshots for the last 24 h, dailies for a month, and weeklies back
+to the first backup on 2026-09-10, thinned by Time Machine as the
+2 TB fills.
+
+**What is on it:** the entire boot volume — `~/CSS_MPC_toolkit`,
+`~/CSS_MPC_toolkit_dev`, `~/Claude/mpc_sbn/` (dumps, logs, status
+JSON, `heartbeat.env`, this drive's own passphrase file),
+`~/Library/LaunchAgents/*.plist`, `~/.cloudflared/` (tunnel
+credentials), `~/.ssh`, `~/.pgpass`, Homebrew under `/opt/homebrew`
+(PostgreSQL 18 binaries and config, but **not** PGDATA).
+
+**What is not:** `/Volumes/data1` (PGDATA, ~305 GB) and the two
+`venv/` trees. After a boot-volume restore the database is either
+still intact on the NVMe (path §D: reseat, kickstart
+`local.postgresql18`) or must be re-seeded from SBN (path §B/§C) and
+the `css_*` schemas restored from the newest dump in the restored
+`~/Claude/mpc_sbn/backups/dumps/` (path §F). Rebuild both venvs
+from `requirements.txt`.
+
+**1. Unlock the drive.** On the original Gizmo the login keychain
+unlocks `backup1` at auto-login. On a replacement Mac, or if the
+keychain is gone, plug the drive in and enter the passphrase from
+your password manager (it is the last line of
+`backup1_passphrase.txt`, which is itself only on the boot volume and
+on this drive — so keep the password-manager copy current). From a
+shell:
+
+```bash
+diskutil apfs unlockVolume backup1 -stdinpassphrase   # prompts
+```
+
+**2. Single files or directories** — no reboot needed:
+
+```bash
+tmutil listbackups | tail -3                         # newest snapshots
+tmutil restore -v "$(tmutil latestbackup)/Data/Users/robertseaman/.cloudflared" ~/.cloudflared
+```
+
+(Needs Full Disk Access for the terminal, or `sudo`.)
+
+**3. Whole machine** — boot to Recovery (hold the power button on an
+Apple-silicon mini), choose *Restore from Time Machine*, pick
+`backup1`, enter the passphrase, choose the newest snapshot. Then:
+
+- Re-apply the unattended-boot settings (§E): FileVault off,
+  auto-login on, `pmset autorestart 1`. Migration Assistant does not
+  carry these.
+- Check `launchctl list | grep -e seaman -e rlseaman -e cloudflare -e
+  postgresql18` — user LaunchAgents come back with the home
+  directory but may need `launchctl bootstrap gui/$UID
+  ~/Library/LaunchAgents/<name>.plist` if the restore was done via
+  Migration Assistant rather than a full Recovery restore.
+- Reattach the NVMe; confirm `/Volumes/data1` mounts, then §D step 2.
+- `tmutil setdestination -a /Volumes/backup1` again if `tmutil
+  destinationinfo` comes back empty (the destination ID is stored in
+  `/Library/Preferences/com.apple.TimeMachine.plist`, which a
+  Migration-Assistant restore does not copy).
+- Rotate the Cloudflare tunnel credential and the healthchecks ping
+  URLs if the old drive or Mac is unaccounted for.
+
+**Verify:** `tmutil destinationinfo` lists `backup1`;
+`scripts/tm_backup_check.sh` prints `OK`; site returns 200; all four
+healthchecks green by the next morning.
+
 ## Retained assets
 
 These are kept in-repo and on-disk even though they're no longer
@@ -439,9 +520,24 @@ backlog load will step it up), `n_tables` equal to the live count of
 5 GB pre-flight floor. A FAIL status names the reason; the per-run log
 is under `~/Claude/mpc_sbn/backups/logs/`.
 
-Or, without SSH: the healthchecks.io dashboard shows all three checks
+After the 08:00 MST Time Machine check:
+
+```bash
+ssh robertseaman@192.168.0.157 tail -3 ~/Claude/mpc_sbn/backups/tm_check.log
+```
+
+Expected: an `OK:` line naming the newest snapshot (a
+`YYYY-MM-DD-HHMMSS` stamp within the last hour or two, since Time
+Machine runs hourly) and the drive's free percentage. A `FAIL:` line
+names which of the four checks tripped — not mounted (drive unplugged
+or the encrypted volume did not auto-unlock at login), not a
+destination, newest backup ≥ 26 h old, or no backup at all. The same
+line is the body of the `tm-backup` ping.
+
+Or, without SSH: the healthchecks.io dashboard shows all four checks
 green with the last ping time and the body of the last ping (the
-refresh sends its stage timings; the backup sends dump name and size).
+refresh sends its stage timings; the backup sends dump name and size;
+the Time Machine check sends its OK line).
 Since 2026-09-09 the refresh status JSON also carries `site_check`
 (`ok` or `http_<code>`) and `stage7_s` from the public-URL probe.
 

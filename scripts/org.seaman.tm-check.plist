@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>org.seaman.tm-check</string>
+
+    <key>Program</key>
+    <string>/Users/robertseaman/CSS_MPC_toolkit/scripts/tm_backup_check.sh</string>
+
+    <!-- 08:00 local (Arizona = MST year-round): after the 07:30 pg_dump,
+         so a healthy day means backup1 already holds today's dump.
+         Time Machine itself runs hourly; this only verifies it did. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>8</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- launchd's own stdout/stderr; the script appends one line per run
+         to ~/Claude/mpc_sbn/backups/tm_check.log -->
+    <key>StandardOutPath</key>
+    <string>/Users/robertseaman/Claude/mpc_sbn/backups/tm_check.launchd.out</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/robertseaman/Claude/mpc_sbn/backups/tm_check.launchd.err</string>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/robertseaman/CSS_MPC_toolkit</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>
