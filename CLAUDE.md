@@ -83,6 +83,8 @@ scripts/                      # Operational tools
   pg_backup_gizmo.sh          #   Nightly pg_dump of css_* schemas + plist
   tm_backup_check.sh          #   Daily Time Machine freshness check + plist
   db_up_check.sh              #   Hourly DB liveness + replication check + plist
+  apireq_summary.sh           #   Daily outbound-API tally (refresh stage 6)
+  usage_summary.sh            #   Daily inbound usage tally from REQ lines
   heartbeat.sh                #   healthchecks.io pings (sourced by both)
   *.plist                     #   Every Gizmo launchd agent, incl. PG + tunnel
 notebooks/                    # Jupyter Lab exploration (strip outputs before commit)
@@ -592,7 +594,11 @@ waitress WSGI server. A daily launchd agent
      port rebinds; acceptable for a low-traffic outreach window).
   6. `scripts/apireq_summary.sh` — tally yesterday's outbound HTTP
      volume by host / outcome from the just-rotated dashboard log
-     into `~/Claude/mpc_sbn/logs/apireq_summary_YYYYMMDD.txt`. Best-
+     into `~/Claude/mpc_sbn/logs/apireq_summary_YYYYMMDD.txt`; then
+     `scripts/usage_summary.sh` (2026-09-11) rolls the inbound `REQ`
+     lines (page loads, salted visitor tokens, country, device class,
+     tab switches, callbacks per tab) into `usage_summary_YYYYMMDD.txt`.
+     See `docs/dashboard_security.md` → "Inbound request log". Best-
      effort; no alerts in week 1 (alert block commented in the script,
      enable after a baseline). See `docs/dashboard_security.md` →
      "Cloudflare protection refinements" #5.

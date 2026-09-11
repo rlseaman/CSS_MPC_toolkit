@@ -12,9 +12,11 @@ Usage:
 Then open http://127.0.0.1:8050/ in a browser.
 """
 
+import datetime as _dt
 import hashlib
 import os
 import re
+import secrets
 import sys
 import threading
 import time
@@ -34,6 +36,7 @@ from dash import (ALL, Dash, Input, Output, State, ctx, dash_table, dcc,
                   html, no_update)
 from dash.dcc import send_data_frame
 from dash.exceptions import PreventUpdate
+from flask import g as _flask_g, request as _flask_request
 from plotly.subplots import make_subplots
 
 from lib.db import connect, timed_query
@@ -3111,6 +3114,94 @@ def _add_cache_headers(response):
                                   or "javascript" in response.content_type):
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         response.headers["Pragma"] = "no-cache"
+    return response
+
+
+# ---------------------------------------------------------------------------
+# Inbound request log — usage tracking (2026-09-11)
+# ---------------------------------------------------------------------------
+# One ``REQ`` line per page load / Dash callback, printed to the dashboard
+# log next to the ``APIREQ`` lines and rolled up daily by
+# scripts/usage_summary.sh (refresh stage 6). Deliberately privacy-light:
+#   * no raw IP — ``vid`` is a keyed hash of the Cloudflare-supplied client
+#     IP with a salt generated at process start, so tokens are stable for
+#     one day (the nightly restart rotates the salt) and unlinkable across
+#     days;
+#   * no user-agent string — only a coarse ``dev`` class (bot / mobile /
+#     desktop);
+#   * ``cc`` is Cloudflare's two-letter country code;
+#   * for callbacks: the triggering component(s), the callback's output id,
+#     and the active tab when the callback carries ``tabs.value``.
+# Static asset fetches are skipped. See docs/dashboard_security.md →
+# "Inbound request log".
+_REQLOG_SALT = secrets.token_bytes(16)
+_REQLOG_SKIP = ("/_dash-component-suites/", "/assets/", "/_favicon",
+                "/_dash-layout", "/_dash-dependencies", "/_reload-hash",
+                "/favicon.ico")
+_REQLOG_BOT_RE = re.compile(
+    r"bot|crawl|spider|slurp|fetch|scan|curl|wget|python-requests|httpx|"
+    r"monitor|uptime|preview|facebookexternalhit|headless",
+    re.IGNORECASE)
+_REQLOG_MOBILE_RE = re.compile(r"Mobile|Android|iPhone|iPad", re.IGNORECASE)
+
+
+def _reqlog_device(ua):
+    if not ua:
+        return "none"
+    if _REQLOG_BOT_RE.search(ua):
+        return "bot"
+    if _REQLOG_MOBILE_RE.search(ua):
+        return "mobile"
+    return "desktop"
+
+
+def _reqlog_tab(body):
+    """Return the ``tabs.value`` carried in a Dash callback body, or ``-``."""
+    def walk(items):
+        for it in items or []:
+            if isinstance(it, list):
+                v = walk(it)
+                if v:
+                    return v
+            elif isinstance(it, dict):
+                if it.get("id") == "tabs" and it.get("property") == "value":
+                    return it.get("value")
+        return None
+    return walk(body.get("inputs")) or walk(body.get("state")) or "-"
+
+
+@server.before_request
+def _reqlog_start():
+    _flask_g._reqlog_t0 = time.monotonic()
+
+
+@server.after_request
+def _reqlog_line(response):
+    try:
+        path = _flask_request.path
+        if path.startswith(_REQLOG_SKIP):
+            return response
+        t0 = getattr(_flask_g, "_reqlog_t0", None)
+        ms = int((time.monotonic() - t0) * 1000) if t0 else -1
+        hdr = _flask_request.headers
+        ip = hdr.get("CF-Connecting-IP") or _flask_request.remote_addr or ""
+        vid = (hashlib.blake2b(ip.encode(), key=_REQLOG_SALT,
+                               digest_size=4).hexdigest() if ip else "-")
+        cc = hdr.get("CF-IPCountry", "-")
+        dev = _reqlog_device(hdr.get("User-Agent", ""))
+        trig = out = tab = "-"
+        if path == "/_dash-update-component" and _flask_request.method == "POST":
+            body = _flask_request.get_json(silent=True) or {}
+            changed = body.get("changedPropIds") or []
+            trig = ",".join(str(c) for c in changed)[:160] or "init"
+            out = str(body.get("output", "-"))[:160]
+            tab = str(_reqlog_tab(body))
+        ts = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        print(f"REQ ts={ts} vid={vid} cc={cc} dev={dev} "
+              f"{_flask_request.method} {path} {response.status_code} ms={ms} "
+              f"tab={tab} trig={trig} out={out}", flush=True)
+    except Exception as exc:  # never let logging break a response
+        print(f"REQ log error: {exc!r}", flush=True)
     return response
 
 # ---------------------------------------------------------------------------
