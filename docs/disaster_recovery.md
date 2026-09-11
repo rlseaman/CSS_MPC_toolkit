@@ -226,7 +226,11 @@ live same-user PID as a running postmaster.
 - Before starting, removes a pidfile whose PID is not a postgres
   process (renamed to `postmaster.pid.stale.<stamp>`). **This needs
   `/bin/bash` in System Settings → Privacy & Security → Full Disk
-  Access** on Gizmo: under launchd, bash is otherwise denied every
+  Access** on Gizmo (granted 2026-09-10; verified by planting a pidfile
+  with a live non-postgres PID and watching the wrapper clear it — if
+  a replacement Mac or a TCC reset ever drops the grant, the symptom is
+  `mv: … Operation not permitted` in the launchd log). Under launchd,
+  bash is otherwise denied every
   read/write on the external volume by TCC ("Operation not permitted",
   even `ls` of the data directory; `stat` still works, which is why the
   mount-wait loop is unaffected). `postgres` itself works because it
@@ -516,8 +520,15 @@ Apple-silicon mini), choose *Restore from Time Machine*, pick
   URLs if the old drive or Mac is unaccounted for.
 
 **Verify:** `tmutil destinationinfo` lists `backup1`;
-`scripts/tm_backup_check.sh` prints `OK`; site returns 200; all four
+`scripts/tm_backup_check.sh` prints `OK`; site returns 200; all five
 healthchecks green by the next morning.
+
+**Reboot test record.** 2026-09-10, two reboots: the first popped an
+"APFSUserAgent wants to access key backup1" dialog (the keychain item
+was created from the command line; *Always Allow* fixed its ACL); the
+second came back with `backup1` unlocked and mounted, PostgreSQL shut
+down cleanly by the wrapper and back in 30 s, db-up green at +30 s,
+site 200 by about +60 s.
 
 ## Retained assets
 
