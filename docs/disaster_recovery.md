@@ -68,7 +68,9 @@ All three data paths are native to **Gizmo**:
   unattended reboot. Excluded: `/Volumes/data1` (a file copy of live
   PGDATA is not restorable; the replica is rebuildable from SBN) and
   the two project `venv/` trees (rebuild-only, and they bake in
-  absolute paths). First full backup 73 GB / 760 K files. A daily
+  absolute paths). First full backup 2026-09-10: 44 GB on disk (73 GB
+  / 760 K files scanned), 24 min; verified by mounting the snapshot and
+  checksumming that morning's pg_dump inside it. A daily
   check (`org.seaman.tm-check`, 08:00 MST, `scripts/tm_backup_check.sh`)
   verifies the newest backup is < 26 h old and pings `tm-backup`.
   Restore procedure in §G.
@@ -82,7 +84,7 @@ All three data paths are native to **Gizmo**:
   and pings `site-up` only on a 200. A missed ping or a `/fail` emails
   the maintainer. Ping URLs live in `~/Claude/mpc_sbn/heartbeat.env`
   (mode 600, not in git); if that file is missing the scripts log a
-  line and carry on. Gizmo dark → all three checks go "down" within
+  line and carry on. Gizmo dark → all four checks go "down" within
   ~2 h of their windows, which is the alert the July outage lacked.
 
 The stage-3 restart is a deliberate bridge: Dash holds caches in memory
@@ -411,14 +413,32 @@ shell:
 diskutil apfs unlockVolume backup1 -stdinpassphrase   # prompts
 ```
 
-**2. Single files or directories** — no reboot needed:
+**2. Single files or directories** — no reboot needed. From a
+Terminal *on Gizmo's console* (Full Disk Access granted 2026-09-10):
 
 ```bash
 tmutil listbackups | tail -3                         # newest snapshots
 tmutil restore -v "$(tmutil latestbackup)/Data/Users/robertseaman/.cloudflared" ~/.cloudflared
 ```
 
-(Needs Full Disk Access for the terminal, or `sudo`.)
+Over SSH the lazy `/Volumes/.timemachine/…` mount that `tmutil
+latestbackup` names does not exist (`tmutil restore` / `compare` fail
+with "No such file or directory"). Mount the APFS snapshot yourself
+instead — this needs no sudo and is how the 2026-09-10 verification
+was done:
+
+```bash
+diskutil apfs listSnapshots backup1                  # com.apple.TimeMachine.<stamp>.backup
+M=/private/tmp/tmsnap; mkdir -p $M
+mount_apfs -o rdonly,nobrowse -s com.apple.TimeMachine.<stamp>.backup /Volumes/backup1 $M
+ls "$M/<stamp>.backup/Data/Users/robertseaman/Claude/mpc_sbn/backups/dumps/"
+cp -a "$M/<stamp>.backup/Data/Users/robertseaman/.cloudflared" ~/   # or whatever
+umount $M && rmdir $M
+```
+
+The layout inside a snapshot is `<stamp>.backup/Data/<boot-volume
+paths>`; `Data/Volumes/data1` is empty (excluded) and the two `venv/`
+trees are absent.
 
 **3. Whole machine** — boot to Recovery (hold the power button on an
 Apple-silicon mini), choose *Restore from Time Machine*, pick
