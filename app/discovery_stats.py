@@ -3074,7 +3074,8 @@ def _make_rate_profile(dff, xkey, ymetric, units, t, height):
             marker_color="#4E79A7",
             hovertemplate="%{x:.4g}<br>%{y:,} discoveries<extra></extra>",
         ))
-        ytitle, title = "Discoveries", f"Discovery count vs. {label.lower()}"
+        ytitle = "Discoveries"
+        title = f"Discovery count vs. {label}"
     else:
         agg = grp["_rate"].agg(
             n="size", med="median",
@@ -3102,7 +3103,7 @@ def _make_rate_profile(dff, xkey, ymetric, units, t, height):
                              "<br>n = %{customdata[0]:,}<extra></extra>"),
             showlegend=False))
         ytitle = f"Median motion ({unit_label})"
-        title = f"Motion vs. {label.lower()}  (median, IQR band)"
+        title = f"Motion vs. {label}  (median, IQR band)"
 
     fig.update_layout(
         template=t["template"],
