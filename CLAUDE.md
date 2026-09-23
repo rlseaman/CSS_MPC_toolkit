@@ -23,7 +23,7 @@ Two live replicas of `mpc_sbn` (logical replication from MPC):
 
 ### Critical Performance Rules
 
-- **obs_sbn has 540M+ rows (286 GB)** — NEVER run unfiltered COUNT,
+- **obs_sbn has 553M+ rows (292 GB)** — NEVER run unfiltered COUNT,
   COUNT(DISTINCT), or full-table scans. Always use indexed lookups.
 - **Indexed columns on obs_sbn:** obsid, permid, provid, stn, trkid,
   trksub, trkmpc, obstime, created_at, updated_at, submission_block_id
@@ -68,11 +68,27 @@ lib/                          # Python library layer
   mpec_parser.py              #   MPC.net MPEC list + body fetch / parse (5 req/s)
   ades_export.py              #   ADES XML/PSV generation from NEOCP data
   ades_validate.py            #   XSD validation
+  neo_consensus.py            #   Consensus ingest driver + source_runs logging
+  neo_consensus_*.py          #   One module per source: mpc, mpc_orbits, cneos,
+                              #     neocc, neofixer, lowell
+  identifications.py          #   current_/numbered_identifications resolution
+  nea_catalog.py              #   MPC NEA.txt download + H override
+  pha_catalog.py              #   MPC PHA.txt download
+  sbdb_moid.py                #   JPL SBDB bulk Earth-MOID fetch
+  neo_list.py                 #   NEO list reconciliation helpers
+  solar.py                    #   Solar position / elongation
+  lunar.py                    #   Lunar phase + illumination
+  station_report.py           #   Per-site deep-dive (Tab 11, dev only)
 sql/                          # SQL scripts
   discovery_tracklets.sql     #   Main NEO discovery statistics (43,629 tracklets)
   css_utilities_functions.sql #   PostgreSQL equivalents of Python converters
   obs_summary_all.sql         #   Full-catalog obs aggregate matview (1.6M rows)
   ades_export.sql             #   ADES-ready columns from NEOCP
+  station_report.sql          #   Per-site year x class breakdown (Tab 11)
+  orbit_watch/                #   Daily Orbit News SQL — schema, capture_snapshot,
+                              #     daily_diff, rebuild_events. NOTE: on the
+                              #     station-report branch only, not yet on main
+                              #     (see "Daily Orbit News" below)
   viz/                        #   Reference queries for visualization
 data/                         # Vendored static reference data
   finding_chart/              #   Hipparcos V<6 + IAU constellation boundaries
@@ -85,6 +101,7 @@ scripts/                      # Operational tools
   db_up_check.sh              #   Hourly DB liveness + replication check + plist
   apireq_summary.sh           #   Daily outbound-API tally (refresh stage 6)
   usage_summary.sh            #   Daily inbound usage tally from REQ lines
+  orbit_watch_run_daily.sh    #   Daily Orbit News capture + diff + plist
   heartbeat.sh                #   healthchecks.io pings (sourced by both)
   *.plist                     #   Every Gizmo launchd agent, incl. PG + tunnel
 notebooks/                    # Jupyter Lab exploration (strip outputs before commit)
@@ -636,6 +653,45 @@ caches. PostgreSQL itself runs under `local.postgresql18` via the
 `scripts/pg18-start.sh` wrapper (fast shutdown on SIGTERM, stale
 pidfile cleanup — the latter needs `/bin/bash` in Full Disk Access);
 details and the TCC caveat in `docs/disaster_recovery.md` §D.
+
+### Daily Orbit News (`org.seaman.orbit-watch`)
+A fifth agent fires at 07:00 MST on Gizmo and turns the daily
+`mpc_orbits.updated_at` churn into a feed of objects that crossed a
+planetary-defense boundary. The replica keeps only the latest orbit
+(no element history), so the watch set is snapshotted locally each day.
+
+- **Schema `css_orbit_watch`** (owner `robertseaman`; `claude_ro` has
+  SELECT): `orbit_snapshot` (per-(object, day) element state over the
+  full watch set, ~50 K rows/day), `orbit_event` (append-only
+  boundary-crossing log — the feed itself plus the longitudinal
+  record), and the `v_epoch_migration` view.
+- **Watch set:** `q <= 1.5 AND e < 1`, plus any NEA.txt member
+  (~50 K objects). Classification is element-derived via
+  `classify_from_elements()`, NOT `orbit_type_int`.
+- **Event types:** NEO_ENTER/EXIT (q x 1.3), PHA_ENTER/EXIT
+  (earth_moid <= 0.05 and H <= 22), NEO_/PHA_FIRST_DETERMINED,
+  SUBCLASS_CHANGE, H_REVISION (|dH| >= 0.3), ORBIT_SHIFT
+  (|dq| >= 0.02 or |da| >= 0.05 or |de| >= 0.02). Thresholds tunable.
+- **Branch split — mind this.** The runner and plist
+  (`scripts/orbit_watch_run_daily.sh`, `scripts/org.seaman.orbit-watch.plist`)
+  are on `main`, but the SQL
+  (`sql/orbit_watch/{schema,capture_snapshot,daily_diff,rebuild_events}.sql`)
+  is **only on `station-report`**. A checkout of `main` alone cannot
+  rebuild this job. Design doc:
+  `docs/2026-06-25_daily_orbit_news_design.md`.
+- **The live copy is a STATIC COPY** at `~/orbit_watch_cron/` on Gizmo
+  (`run_daily.sh` + the two SQL files) — re-scp after any repo edit
+  until the job is folded into the nightly refresh. Logs at
+  `~/orbit_watch_cron/orbitwatch_*.log`.
+- **State as of 2026-09-23:** 87 snapshot days since 2026-06-25, 161
+  events. The 2026-07-11..07-14 gap is permanent (power outage).
+- **Not yet done:** promote the SQL to `main`; fold capture+diff into
+  `refresh_matview_gizmo.sh` as stage 3c and retire the standalone
+  agent; build the `--dev-tabs` Orbit News tab; add a rolling-window
+  prune to `orbit_snapshot` that spares any-of-six NEO cohort members;
+  revisit the comet-in-watch-set rule.
+- **This is the only one of the five Gizmo agents with no heartbeat** —
+  a silent failure would go unnoticed until someone read the log.
 
 ### Dev surface
 A second Dash instance runs alongside prod for staging in-flight
