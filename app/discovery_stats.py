@@ -2907,6 +2907,217 @@ def _make_rate_plot(dff, color_by, group_by, t, height):
     return fig
 
 
+# ---------------------------------------------------------------------------
+# Sky-plane motion: units, profile axes, and the two figure builders
+# ---------------------------------------------------------------------------
+# rate_deg_per_day comes out of LOAD_SQL as a haversine first->last endpoint
+# separation over the tracklet span (see discovery_tracklet_stats).  Every
+# display unit below is a pure scale factor off that.
+_RATE_UNITS = {
+    "deg_day":  ("°/day",    1.0),
+    "deg_hr":   ("°/hour",   1.0 / 24.0),
+    "as_min":   ("″/min",    3600.0 / 1440.0),
+    "as_hr":    ("″/hour",   3600.0 / 24.0),
+}
+_RATE_UNIT_DEFAULT = "deg_day"
+
+# Profile x-axes.  Only quantities that actually vary with motion are
+# offered -- e and i were measured at |rho| < 0.12 and are omitted as
+# flat.  (col, label, bin edges)
+_PROFILE_X = {
+    "h": ("Absolute magnitude H", np.arange(13.0, 33.1, 1.0)),
+    "median_v_mag": ("Apparent V at discovery", np.arange(14.0, 24.1, 0.5)),
+    "solar_elong": ("Solar elongation (°, unsigned)",
+                    np.arange(0.0, 180.1, 10.0)),
+    "disc_year": ("Discovery year", None),          # built from the data
+    "q": ("Perihelion q (AU)", np.arange(0.0, 1.31, 0.05)),
+    "avg_dec_deg": ("Declination (°)", np.arange(-90.0, 90.1, 10.0)),
+}
+_PROFILE_MIN_N = 25      # drop bins thinner than this -- noisy medians
+
+
+def _circ_site_options():
+    """Discovery-site dropdown options, busiest site first.
+
+    Built from the discovery table itself, so only codes that have
+    actually made a discovery are offered.
+    """
+    if df is None or "station_code" not in df.columns:
+        return []
+    counts = df["station_code"].value_counts()
+    opts = []
+    for code, n in counts.items():
+        if not code:
+            continue
+        name = STATION_NAMES.get(code)
+        label = f"{code} \u2014 {name}" if name else str(code)
+        opts.append({"label": f"{label}  ({n:,})", "value": code})
+    return opts
+
+
+def _rate_series(dff, units):
+    """rate_deg_per_day rescaled to the requested display unit."""
+    label, factor = _RATE_UNITS.get(units, _RATE_UNITS[_RATE_UNIT_DEFAULT])
+    return dff["rate_deg_per_day"] * factor, label
+
+
+def _make_rate_hist(dff, units, t, height):
+    """Log-binned histogram of sky-plane motion at discovery.
+
+    Log bins are not cosmetic: the sample spans roughly five decades, so
+    linear bins put >99% of it in the first bucket.
+    """
+    r, unit_label = _rate_series(dff, units)
+    r = r[r.notna() & (r > 0)]
+    n_excluded = len(dff) - len(r)
+
+    if len(r) < 2:
+        return _empty_figure("No rate data", t, height)
+
+    lr = np.log10(r.values)
+    edges = np.linspace(lr.min(), lr.max(), 61)
+    counts, _ = np.histogram(lr, bins=edges)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+
+    q1, med, q3 = np.percentile(r.values, [25, 50, 75])
+
+    fig = go.Figure(go.Bar(
+        x=centers, y=counts,
+        width=(edges[1] - edges[0]) * 0.92,
+        marker_color="#4E79A7",
+        customdata=np.column_stack([10 ** edges[:-1], 10 ** edges[1:]]),
+        hovertemplate=("%{customdata[0]:.3g}–%{customdata[1]:.3g} "
+                       + unit_label
+                       + "<br>%{y:,} tracklets<extra></extra>"),
+    ))
+
+    ymax = counts.max() if len(counts) else 1
+    for val, lab, dash, frac in ((q1, f"Q1 {q1:.2f}", "dot", 0.80),
+                                 (med, f"median {med:.2f}", "solid", 0.94),
+                                 (q3, f"Q3 {q3:.2f}", "dot", 0.87)):
+        x = float(np.log10(val))
+        fig.add_shape(type="line", x0=x, x1=x, y0=0, y1=ymax * frac,
+                      line=dict(color="#C1440E", dash=dash,
+                                width=1.8 if dash == "solid" else 1.2))
+        fig.add_annotation(x=x, y=ymax * frac, text=lab, showarrow=False,
+                           yanchor="bottom", xanchor="center",
+                           font=dict(size=10, color="#C1440E"))
+
+    decades = np.arange(np.floor(lr.min()), np.ceil(lr.max()) + 1)
+    fig.update_layout(
+        template=t["template"],
+        paper_bgcolor=t["paper"], plot_bgcolor=t["plot"],
+        height=height,
+        title=f"Sky-plane motion at discovery ({unit_label})",
+        xaxis=dict(title=f"Motion ({unit_label})",
+                   tickmode="array", tickvals=decades,
+                   ticktext=[("%g" % (10.0 ** d)) for d in decades],
+                   range=[edges[0] - 0.05, edges[-1] + 0.05]),
+        yaxis=dict(title="Discovery tracklets"),
+        bargap=0, showlegend=False,
+        margin=dict(l=60, r=20, t=60, b=60),
+    )
+    if n_excluded > 0:
+        fig.add_annotation(
+            text=f"{n_excluded:,} without a rate excluded",
+            xref="paper", yref="paper", x=0.98, y=0.02,
+            showarrow=False, xanchor="right",
+            font=dict(size=10, color=t["subtext"]))
+    return fig
+
+
+def _make_rate_profile(dff, xkey, ymetric, units, t, height):
+    """Binned profile of motion (or discovery count) against xkey.
+
+    Median + interquartile ribbon rather than a 40k-point scatter: the
+    relationships here are non-monotonic (motion vs. solar elongation
+    rises to ~140 deg then falls back toward opposition), and a rank
+    correlation reports that as flat.
+    """
+    label, edges = _PROFILE_X.get(xkey, _PROFILE_X["h"])
+    work = dff.copy()
+
+    if xkey == "solar_elong":
+        if "solar_elong_deg" not in work.columns:
+            return _empty_figure("No elongation data", t, height)
+        work["solar_elong"] = work["solar_elong_deg"].abs()
+
+    if xkey not in work.columns:
+        return _empty_figure(f"No {label} data", t, height)
+
+    if edges is None:                       # disc_year: one bin per year
+        yrs = work["disc_year"].dropna()
+        if yrs.empty:
+            return _empty_figure("No data", t, height)
+        edges = np.arange(int(yrs.min()), int(yrs.max()) + 2) - 0.5
+
+    r, unit_label = _rate_series(work, units)
+    work["_rate"] = r
+    work = work[work[xkey].notna()]
+    if ymetric == "rate":
+        work = work[work["_rate"].notna()]
+    if work.empty:
+        return _empty_figure("No data in range", t, height)
+
+    work["_bin"] = pd.cut(work[xkey], edges, include_lowest=True)
+    grp = work.groupby("_bin", observed=True)
+
+    if ymetric == "count":
+        agg = grp.size().rename("n").reset_index()
+        agg = agg[agg["n"] > 0]
+        if agg.empty:
+            return _empty_figure("No data in range", t, height)
+        agg["_x"] = agg["_bin"].apply(lambda iv: (iv.left + iv.right) / 2.0)
+        fig = go.Figure(go.Bar(
+            x=agg["_x"], y=agg["n"],
+            width=float(np.diff(edges).mean()) * 0.9,
+            marker_color="#4E79A7",
+            hovertemplate="%{x:.4g}<br>%{y:,} discoveries<extra></extra>",
+        ))
+        ytitle, title = "Discoveries", f"Discovery count vs. {label.lower()}"
+    else:
+        agg = grp["_rate"].agg(
+            n="size", med="median",
+            q1=lambda s: s.quantile(0.25),
+            q3=lambda s: s.quantile(0.75)).reset_index()
+        agg = agg[agg["n"] >= _PROFILE_MIN_N]
+        if agg.empty:
+            return _empty_figure(
+                f"No bin reaches {_PROFILE_MIN_N} objects", t, height)
+        agg["_x"] = agg["_bin"].apply(lambda iv: (iv.left + iv.right) / 2.0)
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=list(agg["_x"]) + list(agg["_x"])[::-1],
+            y=list(agg["q3"]) + list(agg["q1"])[::-1],
+            fill="toself", fillcolor="rgba(78,121,167,0.20)",
+            line=dict(width=0), hoverinfo="skip", showlegend=False))
+        fig.add_trace(go.Scatter(
+            x=agg["_x"], y=agg["med"], mode="lines+markers",
+            line=dict(color="#4E79A7", width=2),
+            marker=dict(size=8, color="#4E79A7"),
+            customdata=np.column_stack([agg["n"], agg["q1"], agg["q3"]]),
+            hovertemplate=("%{x:.4g}<br>median %{y:.3g} " + unit_label
+                           + "<br>IQR %{customdata[1]:.3g}–"
+                             "%{customdata[2]:.3g}"
+                             "<br>n = %{customdata[0]:,}<extra></extra>"),
+            showlegend=False))
+        ytitle = f"Median motion ({unit_label})"
+        title = f"Motion vs. {label.lower()}  (median, IQR band)"
+
+    fig.update_layout(
+        template=t["template"],
+        paper_bgcolor=t["paper"], plot_bgcolor=t["plot"],
+        height=height, title=title,
+        xaxis=dict(title=label),
+        yaxis=dict(title=ytitle),
+        showlegend=False,
+        margin=dict(l=60, r=20, t=60, b=60),
+    )
+    if xkey == "median_v_mag":
+        fig.update_xaxes(autorange="reversed")
+    return fig
+
+
 def _make_pa_rose(dff, t, height):
     """Polar histogram of position angle of motion."""
     valid = dff[dff["position_angle_deg"].notna()]
@@ -6466,6 +6677,35 @@ app.layout = html.Div(
                                                 RADIO_LABEL_STYLE,
                                         ),
                                     ]),
+                                    html.Div(children=[
+                                        html.Label("Discovery sites "
+                                                   "(blank = all)",
+                                                   style=LABEL_STYLE),
+                                        dcc.Dropdown(
+                                            id="circ-sites",
+                                            options=_circ_site_options(),
+                                            value=[],
+                                            multi=True,
+                                            placeholder="All sites",
+                                            style={"width": "300px"},
+                                        ),
+                                    ]),
+                                    html.Div(children=[
+                                        html.Label("Motion units",
+                                                   style=LABEL_STYLE),
+                                        dcc.Dropdown(
+                                            id="circ-rate-units",
+                                            options=[
+                                                {"label": lab,
+                                                 "value": key}
+                                                for key, (lab, _)
+                                                in _RATE_UNITS.items()
+                                            ],
+                                            value=_RATE_UNIT_DEFAULT,
+                                            clearable=False,
+                                            style={"width": "150px"},
+                                        ),
+                                    ]),
                                     html.Div(
                                         style={"alignSelf": "flex-end"},
                                         children=[
@@ -6497,6 +6737,61 @@ app.layout = html.Div(
                                     dcc.Graph(id="rate-plot",
                                               config=GRAPH_CONFIG),
                                     dcc.Graph(id="pa-rose",
+                                              config=GRAPH_CONFIG),
+                                ],
+                            ),
+                            # ── Sky-plane motion ───────────────────
+                            html.Div(
+                                style={"display": "flex", "gap": "20px",
+                                       "flexWrap": "wrap",
+                                       "alignItems": "flex-end",
+                                       "marginTop": "25px",
+                                       "marginBottom": "10px"},
+                                children=[
+                                    html.Div(children=[
+                                        html.Label("Profile: x-axis",
+                                                   style=LABEL_STYLE),
+                                        dcc.Dropdown(
+                                            id="circ-profile-x",
+                                            options=[
+                                                {"label": lab,
+                                                 "value": key}
+                                                for key, (lab, _)
+                                                in _PROFILE_X.items()
+                                            ],
+                                            value="h",
+                                            clearable=False,
+                                            style={"width": "260px"},
+                                        ),
+                                    ]),
+                                    html.Div(children=[
+                                        html.Label("Profile: y-axis",
+                                                   style=LABEL_STYLE),
+                                        dcc.RadioItems(
+                                            id="circ-profile-y",
+                                            options=[
+                                                {"label": " Median motion",
+                                                 "value": "rate"},
+                                                {"label": " Discovery count",
+                                                 "value": "count"},
+                                            ],
+                                            value="rate",
+                                            inline=True,
+                                            style=RADIO_STYLE,
+                                            labelStyle=RADIO_LABEL_STYLE,
+                                        ),
+                                    ]),
+                                ],
+                            ),
+                            html.Div(
+                                style={
+                                    "display": "grid",
+                                    "gridTemplateColumns": "1fr 1fr",
+                                    "gap": "20px 10px"},
+                                children=[
+                                    dcc.Graph(id="circ-rate-hist",
+                                              config=GRAPH_CONFIG),
+                                    dcc.Graph(id="circ-rate-profile",
                                               config=GRAPH_CONFIG),
                                 ],
                             ),
@@ -8704,6 +8999,10 @@ def _get_defaults():
         "circ-year-range": [2004, year_max],
         "circ-size-filter": "all",
         "circ-color-by": "survey",
+        "circ-sites": [],
+        "circ-rate-units": _RATE_UNIT_DEFAULT,
+        "circ-profile-x": "h",
+        "circ-profile-y": "rate",
         # Tab 6 — Boxscore
         "box-grouping": "fine",
         "box-filters": [],
@@ -8777,7 +9076,9 @@ _TAB_KEYS = {
                        "comp-venn-labels"},
     "tab-followup": {"fu-year-range", "fu-size-filter", "fu-max-days"},
     "tab-circumstances": {"circ-year-range", "circ-size-filter",
-                          "circ-color-by"},
+                          "circ-color-by", "circ-sites",
+                          "circ-rate-units", "circ-profile-x",
+                          "circ-profile-y"},
     "tab-boxscore": {"box-grouping", "box-filters", "box-h-range"},
     "tab-tools": {"tool-pack-input", "tool-unpack-input",
                    "tool-validate-input", "tool-hmag-h", "tool-hmag-diam",
@@ -8807,6 +9108,7 @@ _RESET_ORDER = [
     "comp-venn-labels",
     "fu-year-range", "fu-size-filter", "fu-max-days",
     "circ-year-range", "circ-size-filter", "circ-color-by",
+    "circ-sites", "circ-rate-units", "circ-profile-x", "circ-profile-y",
     "box-grouping", "box-filters", "box-h-range",
     "tool-pack-input", "tool-unpack-input", "tool-validate-input",
     "tool-hmag-h", "tool-hmag-diam", "tool-hmag-albedo",
@@ -9838,16 +10140,23 @@ def update_followup(year_range, size_filter, max_days, theme_name,
     Output("elongation-hist", "figure"),
     Output("rate-plot", "figure"),
     Output("pa-rose", "figure"),
+    Output("circ-rate-hist", "figure"),
+    Output("circ-rate-profile", "figure"),
     Input("circ-year-range", "value"),
     Input("circ-size-filter", "value"),
     Input("circ-color-by", "value"),
+    Input("circ-sites", "value"),
+    Input("circ-rate-units", "value"),
+    Input("circ-profile-x", "value"),
+    Input("circ-profile-y", "value"),
     Input("group-by", "value"),
     Input("theme-toggle", "value"),
     Input("plot-height", "value"),
     Input("tabs", "value"),
     Input("neo-source-filter", "value"),
 )
-def update_circumstances(year_range, size_filter, color_by, group_by,
+def update_circumstances(year_range, size_filter, color_by, sites,
+                          rate_units, profile_x, profile_y, group_by,
                           theme_name, plot_height, active_tab, neo_source):
     if active_tab != "tab-circumstances" or df is None:
         raise PreventUpdate
@@ -9860,14 +10169,19 @@ def update_circumstances(year_range, size_filter, color_by, group_by,
     filtered = df_view[(df_view["disc_year"] >= y0) & (df_view["disc_year"] <= y1)]
     if size_filter != "all":
         filtered = filtered[filtered["size_class"] == size_filter]
+    if sites:
+        filtered = filtered[filtered["station_code"].isin(sites)]
 
     sky = _make_sky_map(filtered, color_by, group_by, t, height)
     mag = _make_mag_distribution(filtered, color_by, group_by, t, height)
     elong = _make_elongation_hist(filtered, color_by, group_by, t, height)
     rate = _make_rate_plot(filtered, color_by, group_by, t, height)
     pa = _make_pa_rose(filtered, t, height)
+    rate_hist = _make_rate_hist(filtered, rate_units, t, height)
+    rate_prof = _make_rate_profile(filtered, profile_x, profile_y,
+                                   rate_units, t, height)
 
-    return sky, mag, elong, rate, pa
+    return sky, mag, elong, rate, pa, rate_hist, rate_prof
 
 
 # ---------------------------------------------------------------------------
@@ -14746,15 +15060,18 @@ def download_followup(n_clicks, year_range, size_filter):
     Input("btn-download-circumstances", "n_clicks"),
     State("circ-year-range", "value"),
     State("circ-size-filter", "value"),
+    State("circ-sites", "value"),
     prevent_initial_call=True,
 )
-def download_circumstances(n_clicks, year_range, size_filter):
+def download_circumstances(n_clicks, year_range, size_filter, sites):
     if not n_clicks or df is None:
         raise PreventUpdate
     y0, y1 = year_range
     filtered = df[(df["disc_year"] >= y0) & (df["disc_year"] <= y1)]
     if size_filter != "all":
         filtered = filtered[filtered["size_class"] == size_filter]
+    if sites:
+        filtered = filtered[filtered["station_code"].isin(sites)]
     cols = [c for c in _DISCOVERY_EXPORT_COLS if c in filtered.columns]
     return send_data_frame(
         filtered[cols].to_csv, "neo_discovery_circumstances.csv", index=False)
