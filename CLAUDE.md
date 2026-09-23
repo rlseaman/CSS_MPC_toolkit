@@ -329,9 +329,33 @@ Observation history — are live on prod.
 - Apparent V magnitude histogram (band-corrected) at discovery
 - Rate of motion vs. absolute magnitude H scatter (log y-scale)
 - Position angle rose diagram (15° bins, 0=N/90=E convention)
-- Controls: year range, size class filter, color by (survey/size/year)
+- **Sky-plane motion histogram** (added 2026-09-23): log-binned
+  distribution of `rate_deg_per_day` with median / Q1 / Q3 marked.
+  Log bins are required, not cosmetic — the sample spans 0.004–518
+  °/day and linear bins put >99% of it in one bucket.
+- **Binned profile plot** (same date): median motion, or discovery
+  count, against a selectable x-axis — H, apparent V, solar
+  elongation, discovery year, q, or declination. Median line with an
+  IQR ribbon rather than a 42 K-point scatter.
+  - Axes were chosen by measurement. Spearman ρ vs. motion: H +0.61,
+    V −0.50, q −0.31, year +0.21. Eccentricity (−0.11), inclination
+    (−0.02) and tracklet n_obs (+0.07) are flat and not offered.
+  - **Solar elongation is why this is a binned profile and not a
+    correlation.** Its rank correlation is +0.002 — apparently flat —
+    but the relationship is non-monotonic: median motion climbs from
+    0.95 °/day at 45° to ~2.0 at 135°, then falls to 1.77 at
+    opposition. A monotonic statistic cannot see that.
+- Controls: year range, size class filter, color by (survey/size/year),
+  **discovery-site multi-select** (sites that have actually made a
+  discovery, busiest first), **motion units** (°/day, °/hour, ″/min,
+  ″/hour), and the two profile selectors. The site filter applies to
+  every plot on the tab and to the CSV export.
 - Data: `tracklet_obs_all` and `discovery_tracklet_stats` CTEs added
-  to `LOAD_SQL`; same ~44K rows, 6 new columns
+  to `LOAD_SQL`; same ~44K rows, 6 new columns. `rate_deg_per_day` is
+  a haversine first→last endpoint separation over the tracklet span
+  (tracklet = same `trkid` within ±12 h of discovery), so it is a
+  mean rate across the tracklet, not an instantaneous rate, and it is
+  NULL where `span_days = 0` (~300 rows).
 
 ### Tab 8: Observation history
 - Default object on first load is **Apophis (99942)**.  Default class
