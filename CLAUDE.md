@@ -671,9 +671,13 @@ runbook: `docs/disaster_recovery.md` §G.
 A fourth agent (`org.seaman.db-up`, hourly at :20) runs
 `scripts/db_up_check.sh`: pg_isready + `SELECT 1` + every logical-
 replication subscription has a worker and a message from SBN within
-15 min; pings the `db-up` heartbeat (period 1 h). Added 2026-09-10
-after an NVMe-drop outage sat unnoticed for 8 h behind the parquet
-caches. PostgreSQL itself runs under `local.postgresql18` via the
+15 min + the newest `obs_sbn.updated_at` is under 6 h old; pings the
+`db-up` heartbeat (period 1 h). Added 2026-09-10 after an NVMe-drop
+outage sat unnoticed for 8 h behind the parquet caches. The freshness
+test was added 2026-10-27, after SBN's PG18 publisher switch left the
+subscriptions connected but dataless for ~25 h with the check green.
+Longest normal `obs_sbn` gap over 90 days was 3 h 53 min. An upstream
+MPC/SBN pause alerts too, by design. PostgreSQL itself runs under `local.postgresql18` via the
 `scripts/pg18-start.sh` wrapper (fast shutdown on SIGTERM, stale
 pidfile cleanup — the latter needs `/bin/bash` in Full Disk Access);
 details and the TCC caveat in `docs/disaster_recovery.md` §D.
