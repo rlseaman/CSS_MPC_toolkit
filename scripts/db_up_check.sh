@@ -14,7 +14,15 @@
 #      received a message from SBN within MAX_RECEIPT_AGE_MIN minutes
 #      (last_msg_receipt_time advances on keepalives even when upstream is
 #      idle, so an idle publisher does not false-alarm)
-#   4. /Volumes/data1 is mounted and writable (the drive is the usual
+#   4. upstream data is actually arriving: the newest obs_sbn.updated_at
+#      is no older than MAX_DATA_AGE_MIN minutes. Check 3 cannot see this —
+#      during SBN's 2026-10-26 publisher switch the workers stayed up and
+#      keepalives kept arriving while no data flowed for ~25 h, and this
+#      script reported OK throughout. The longest normal gap over the 90
+#      days before that was 3 h 53 min (measured 2026-10-27), hence the
+#      6 h default. An upstream (MPC/SBN) pause alerts too, by design.
+#      MAX(updated_at) is a backward scan of obs_sbn_updated_at_idx, <1 ms.
+#   5. /Volumes/data1 is mounted and writable (the drive is the usual
 #      root cause; report it explicitly)
 #
 # Heartbeat: pings the db-up check on healthchecks.io on success or
@@ -30,6 +38,7 @@ export PGHOST="${PGHOST:-/tmp}"
 export PGUSER="${PGUSER:-claude_ro}"
 DB=mpc_sbn
 MAX_RECEIPT_AGE_MIN="${MAX_RECEIPT_AGE_MIN:-15}"
+MAX_DATA_AGE_MIN="${MAX_DATA_AGE_MIN:-360}"
 DATA_VOL=/Volumes/data1
 LOG_FILE="${LOG_FILE:-$HOME/Claude/mpc_sbn/logs/db_up_check.log}"
 
@@ -74,7 +83,16 @@ if grep -q " BAD$" <<<"$rep"; then
     fail "replication: $(tr '\n' ';' <<<"$rep")"
 fi
 
-# 4. data volume (informational unless broken)
+# 4. upstream data actually arriving (connected-but-idle looks fine to 3)
+data_age=$("$PG_BIN/psql" -d "$DB" -Atq -v ON_ERROR_STOP=1 -c "
+    SELECT round(EXTRACT(EPOCH FROM (now() - MAX(updated_at))) / 60)
+    FROM obs_sbn;" 2>/dev/null) || fail "obs_sbn freshness query failed"
+[[ "$data_age" =~ ^-?[0-9]+$ ]] || fail "obs_sbn freshness: no updated_at value"
+if (( data_age > MAX_DATA_AGE_MIN )); then
+    fail "stale data: newest obs_sbn row is ${data_age} min old (> ${MAX_DATA_AGE_MIN}); replication connected but upstream not delivering"
+fi
+
+# 5. data volume (informational unless broken)
 /sbin/mount | grep -q " on $DATA_VOL " || fail "$DATA_VOL not mounted (PG answered from cache?)"
 if ! ( touch "$DATA_VOL/.db_up_wtest" && rm -f "$DATA_VOL/.db_up_wtest" ) 2>/dev/null; then
     # bash under launchd has no TCC grant for the removable volume, so a
@@ -84,7 +102,7 @@ else
     vol_note="data1 writable"
 fi
 
-msg="OK: $(tr '\n' ';' <<<"$rep") $vol_note"
+msg="OK: $(tr '\n' ';' <<<"$rep") data_age_min=$data_age $vol_note"
 log "$msg"
 hb_ping DB "" "$msg"
 exit 0
