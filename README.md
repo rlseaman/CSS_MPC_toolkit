@@ -219,7 +219,7 @@ CSS_MPC_toolkit/
 │   ├── refresh_matview_gizmo.sh        #   Nightly refresh, 7 stages (launchd, 06:00 MST)
 │   ├── pg_backup_gizmo.sh              #   Nightly pg_dump of css_* schemas (07:30 MST)
 │   ├── tm_backup_check.sh              #   Time Machine freshness check (08:00 MST)
-│   ├── db_up_check.sh                  #   Hourly DB liveness + replication heartbeat
+│   ├── db_up_check.sh                  #   Hourly DB liveness, replication + data-freshness heartbeat
 │   ├── apireq_summary.sh               #   Daily outbound-API tally (refresh stage 6)
 │   ├── usage_summary.sh                #   Daily dashboard usage tally (REQ lines)
 │   ├── heartbeat.sh                    #   healthchecks.io dead-man's-switch pings
