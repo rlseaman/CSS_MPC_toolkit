@@ -59,7 +59,7 @@ fail() {
 }
 
 # 1. postmaster answering
-if ! "$PG_BIN/pg_isready" -h "$PGHOST" -q 2>/dev/null; then
+if ! "$PG_BIN/pg_isready" -h "$PGHOST" -d "$DB" -q 2>/dev/null; then
     fail "pg_isready: no response on $PGHOST"
 fi
 
