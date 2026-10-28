@@ -16,7 +16,9 @@
 --   - obs_sbn recently ANALYZEd on both (for accurate planner choices).
 --
 -- Output format: pipe-delimited, no headers, no footers. Each row begins
--- with a SECTION tag so diffs are easy to scope.
+-- with a SECTION tag so diffs are easy to scope. Every section has an
+-- explicit ORDER BY: UNION ALL output order is plan-dependent and differs
+-- between hosts, which otherwise turns a plain diff into noise.
 
 \pset format unaligned
 \pset fieldsep '|'
@@ -50,7 +52,8 @@ SELECT 'COUNT', 'obs_alterations_redesignations', count(*) FROM public.obs_alter
 SELECT 'COUNT', 'obs_alterations_unassociations', count(*) FROM public.obs_alterations_unassociations UNION ALL
 SELECT 'COUNT', 'obscodes',                       count(*) FROM public.obscodes                       UNION ALL
 SELECT 'COUNT', 'primary_objects',                count(*) FROM public.primary_objects                UNION ALL
-SELECT 'COUNT', 'obs_sbn',                        count(*) FROM public.obs_sbn;
+SELECT 'COUNT', 'obs_sbn',                        count(*) FROM public.obs_sbn
+ORDER BY 2;
 
 -- ---------------------------------------------------------------
 -- Section 2: column schema for all 18 tables.
@@ -91,7 +94,8 @@ SELECT 'BOUND', 'obs_sbn.max_obstime', max(obstime)::text    FROM public.obs_sbn
 SELECT 'BOUND', 'obs_sbn.min_created', min(created_at)::text FROM public.obs_sbn UNION ALL
 SELECT 'BOUND', 'obs_sbn.max_created', max(created_at)::text FROM public.obs_sbn UNION ALL
 SELECT 'BOUND', 'obs_sbn.min_updated', min(updated_at)::text FROM public.obs_sbn UNION ALL
-SELECT 'BOUND', 'obs_sbn.max_updated', max(updated_at)::text FROM public.obs_sbn;
+SELECT 'BOUND', 'obs_sbn.max_updated', max(updated_at)::text FROM public.obs_sbn
+ORDER BY 2;
 
 -- ---------------------------------------------------------------
 -- Section 4: secondary table boundaries for the big ones —
@@ -105,6 +109,7 @@ SELECT 'BOUND', 'current_identifications.max_updated',
 SELECT 'BOUND', 'primary_objects.max_updated',
        max(updated_at)::text FROM public.primary_objects UNION ALL
 SELECT 'BOUND', 'numbered_identifications.max_updated',
-       max(updated_at)::text FROM public.numbered_identifications;
+       max(updated_at)::text FROM public.numbered_identifications
+ORDER BY 2;
 
 \echo '# end of compare_hosts.sql'
