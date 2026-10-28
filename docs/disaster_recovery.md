@@ -130,13 +130,34 @@ If `latest_end_time` is more than a few minutes behind wall-clock, the
 subscription is lagging. If it's hours/days behind or NULL, the worker
 is likely broken.
 
+Then read the server log (`/Volumes/data1/postgresql@18/log/`; on Sibyl
+`pg_current_logfile()` as postgres) for the apply worker's error. Known
+causes, cheapest first:
+
+- **`could not translate host name` / `WAL stream: Operation timed out`**
+  — local network or DNS blip. Workers retry every 30 s and resume on
+  their own (2026-10-28: Gizmo offline 08:40–08:47 MST, no action needed).
+- **`target relation "public.X" is missing replicated column: "Y"`** —
+  schema drift: the publisher's table gained a column ours lacks
+  (logical replication doesn't carry DDL). Copy the type from the other
+  replica and `ALTER TABLE public.X ADD COLUMN Y <type>;` as the table
+  owner; the worker picks it up on its next retry. Hit on Sibyl
+  2026-10-28 with `mpc_orbits.updated_at_aws timestamp(6)`. One failing
+  table stalls every table in that subscription.
+- **No data but workers connected and green** — upstream paused. The
+  db-up freshness test (newest `obs_sbn.updated_at` < 6 h) catches this.
+
 **Recovery:**
 1. First try restarting the subscription worker:
    `ALTER SUBSCRIPTION sbn_css_gizmo_obs_table_sub DISABLE; ENABLE;`
 2. If that doesn't catch up in a reasonable time, the upstream publisher
-   slot may have been dropped. Contact Andrei @ SBN (2026-04 IP-whitelist
-   contact) and reinitialize the subscription from scratch. This takes
-   hours (initial sync of 535M-row `obs_sbn`).
+   slot may have been dropped. Contact Andrei Mamoutkine @ SBN. If SBN
+   can supply a checkpoint, prefer the resume path: verify the
+   checkpoint values, DROP and re-CREATE the subscriptions under the same
+   names with `copy_data = false` (how both replicas moved to SBN's
+   Aurora PG18 publisher, 2026-10-26/27). Only otherwise reinitialize
+   from scratch — hours to days for the 553M-row `obs_sbn`; full plan in
+   `docs/2026-10-26_sbn_resync_runbook.md`.
 3. **While Gizmo replication is out, fall back to MBP-seeded caches**
    (path B below) so the public dashboard stays current-ish.
 
