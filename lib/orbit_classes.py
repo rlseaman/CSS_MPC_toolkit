@@ -54,6 +54,16 @@ A_MB_MIDDLE_OUTER = 2.82  # 5:2 resonance (middle/outer boundary)
 # Amor near/distant boundary
 Q_AMOR_SPLIT = 1.15  # AU
 
+# The project's NEO definition, for selecting NEOs from mpc_orbits: q <= 1.30
+# on the top-level q column (NULL for 0.3% of rows; none of those has an NEO
+# orbit_type_int). Every SQL statement in app/ and sql/ that picks NEOs out of
+# mpc_orbits uses exactly NEO_SQL_PREDICATE -- tests/test_neo_predicate.py
+# checks this. Pure-SQL files can't import it, so they carry the literal.
+# (classify_from_elements() keeps MPC's strict q < 1.3 for the Amor class;
+# the two differ only for an object at exactly q = 1.3.)
+NEO_Q_MAX = 1.30  # AU
+NEO_SQL_PREDICATE = "mo.q <= 1.30"
+
 
 # ---------------------------------------------------------------------------
 # orbit_type_int -> (short_name, long_name, hex_color)

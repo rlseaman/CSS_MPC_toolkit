@@ -62,8 +62,9 @@ correction table.
 ## Coverage
 
 NEOs are selected from `mpc_orbits` using orbital criteria
-(`q < 1.32 AU` or `orbit_type_int IN (0, 1, 2, 3, 20)`). This includes
-near-Earth comets. Objects without orbits in `mpc_orbits` are excluded.
+(`q <= 1.30 AU`; before 2026-11-14, `q < 1.32 AU` or `orbit_type_int IN
+(0, 1, 2, 3, 20)`, which also pulled in ~5,200 Jupiter-coupled non-NEOs).
+This includes near-Earth comets. Objects without orbits in `mpc_orbits` are excluded.
 
 NEOs lacking a discovery observation (`disc = '*'`) in `obs_sbn` will not
 appear in the output. As of 2026-02-08, this affects 2009 US19 and

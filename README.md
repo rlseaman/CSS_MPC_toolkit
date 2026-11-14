@@ -75,7 +75,7 @@ Requires `dash`, `plotly`, `pandas`, `numpy`, `psycopg2` (all in
 
 Computes discovery circumstances for all Near-Earth Objects (NEOs) identified
 from the MPC's orbital element database. NEO selection uses orbital criteria
-(`q < 1.32 AU` or `orbit_type_int IN (0, 1, 2, 3, 20)`), which includes
+(`q <= 1.30 AU`, the same predicate the dashboard uses), which includes
 near-Earth comets.
 
 **Output columns (12):**

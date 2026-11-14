@@ -49,7 +49,8 @@ from lib.sbdb_moid import load_sbdb_moid_lookup
 from lib.solar import (sun_altitude, classify_twilight,
                        _observer_latitude, TWILIGHT_ORDER)
 from lib.identifications import resolve_designation
-from lib.orbit_classes import EXTENDED_ORBIT_TYPES
+from lib.orbit_classes import (EXTENDED_ORBIT_TYPES, NEO_Q_MAX,
+                               NEO_SQL_PREDICATE)
 from lib.station_report import (fetch_station_report,
                                 split_neo_non_neo as _split_station_neo,
                                 summarize as _summarize_station)
@@ -577,7 +578,7 @@ GRAPH_CONFIG = {
 # Data loading
 # ---------------------------------------------------------------------------
 
-LOAD_SQL = """
+LOAD_SQL = f"""
 WITH neo_list AS (
     SELECT
         mo.packed_primary_provisional_designation AS packed_desig,
@@ -595,7 +596,7 @@ WITH neo_list AS (
     LEFT JOIN numbered_identifications ni
         ON ni.packed_primary_provisional_designation
          = mo.packed_primary_provisional_designation
-    WHERE mo.q <= 1.30
+    WHERE {NEO_SQL_PREDICATE}
 ),
 discovery_obs_all AS (
     SELECT neo.unpacked_desig, obs.stn, obs.obsid, obs.trkid, obs.obstime
@@ -760,7 +761,7 @@ WITH neo_list AS MATERIALIZED (
     LEFT JOIN numbered_identifications ni
         ON ni.packed_primary_provisional_designation
          = mo.packed_primary_provisional_designation
-    WHERE mo.q <= 1.30
+    WHERE {NEO_SQL_PREDICATE}
 ),
 discovery_obs_all AS (
     SELECT neo.unpacked_desig, obs.stn, obs.obstime
@@ -823,7 +824,7 @@ CROSS JOIN LATERAL (
 # "recovery only" = total − within-apparition.
 # ---------------------------------------------------------------------------
 
-LIFETIME_FOLLOWUP_SQL = """
+LIFETIME_FOLLOWUP_SQL = f"""
 WITH neo_list AS MATERIALIZED (
     SELECT
         mo.unpacked_primary_provisional_designation AS unpacked_desig,
@@ -837,7 +838,7 @@ WITH neo_list AS MATERIALIZED (
     LEFT JOIN numbered_identifications ni
         ON ni.packed_primary_provisional_designation
          = mo.packed_primary_provisional_designation
-    WHERE mo.q <= 1.30
+    WHERE {NEO_SQL_PREDICATE}
 ),
 discovery_obs_all AS (
     SELECT neo.unpacked_desig, obs.stn, obs.obstime
@@ -1266,7 +1267,7 @@ def load_data():
             q = row.get("q", 0)
             desig_str = str(desig)
             is_comet = desig_str.startswith(("C/", "P/", "D/"))
-            is_borderline = q > 1.30
+            is_borderline = q > NEO_Q_MAX
             if is_comet or is_borderline:
                 return row["h_mpc"]
             return np.nan  # asteroid not in NEA catalog
@@ -10343,7 +10344,7 @@ def _get_cached_summary(mpec_path, title=""):
     # Classify orbit
     q = summary.get("q")
     if q is not None:
-        summary["is_neo"] = q <= 1.3
+        summary["is_neo"] = q <= NEO_Q_MAX
         a = summary.get("a")
         e = summary.get("e")
         i_deg = summary.get("i")
@@ -14590,7 +14591,7 @@ def tool_orbit_class(a, e, i_deg, q):
                    className="subtext",
                    style={"fontSize": "11px", "marginLeft": "6px"}),
     ]
-    if q is not None and q <= 1.3:
+    if q is not None and q <= NEO_Q_MAX:
         items.append(html.Span(
             "  NEO",
             style={"backgroundColor": "#e74c3c", "color": "white",

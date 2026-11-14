@@ -11,10 +11,14 @@
 -- near-Earth asteroids (Atira, Aten, Apollo, Amor) and near-Earth comets.
 --
 -- NEO SELECTION (from mpc_orbits):
---   q < 1.32 AU  OR  orbit_type_int IN (0, 1, 2, 3, 20)
---   Orbit types: 0=Atira, 1=Aten, 2=Apollo, 3=Amor, 20=dual-nature
---   The q threshold slightly exceeds the IAU definition (q < 1.3 AU) to
---   retain objects near the boundary whose orbits may shift on refinement.
+--   q <= 1.30 AU -- the project-wide NEO predicate (lib/orbit_classes.py
+--   NEO_SQL_PREDICATE; checked by tests/test_neo_predicate.py), shared with
+--   the dashboard's LOAD_SQL and the obs_sbn_neo matview.
+--   Until 2026-11-14 this file used `q < 1.32 OR orbit_type_int IN
+--   (0,1,2,3,20)`. That added ~5,900 objects the dashboard didn't have:
+--   671 with 1.30 < q < 1.32, and 5,211 of type 20 -- Jupiter-coupled
+--   (2 < T_J < 3), not NEOs (the old comment called it "dual-nature"). The
+--   type 0-3 fallback added nothing (no such row has q NULL or q >= 1.32).
 --
 -- USAGE:
 --   psql -h host -d mpc_sbn -f sql/discovery_tracklets.sql --csv -o output.csv
@@ -83,7 +87,7 @@ WITH neo_list AS (
     FROM mpc_orbits mo
     LEFT JOIN numbered_identifications ni
         ON ni.packed_primary_provisional_designation = mo.packed_primary_provisional_designation
-    WHERE mo.q < 1.32 OR mo.orbit_type_int IN (0, 1, 2, 3, 20)
+    WHERE mo.q <= 1.30
 ),
 
 -- ==============================================================================

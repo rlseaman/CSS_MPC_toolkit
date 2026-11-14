@@ -73,7 +73,7 @@ def load_discovery_times(designations):
         LEFT JOIN numbered_identifications ni
             ON ni.packed_primary_provisional_designation
              = mo.packed_primary_provisional_designation
-        WHERE mo.q < 1.32 OR mo.orbit_type_int IN (0, 1, 2, 3, 20)
+        WHERE mo.q <= 1.30   -- = sql/discovery_tracklets.sql
     ),
     discovery_obs_all AS (
         SELECT neo.unpacked_desig, neo.is_numbered, neo.asteroid_number,
