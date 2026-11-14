@@ -713,8 +713,8 @@ planetary-defense boundary. The replica keeps only the latest orbit
   diff error, or if today's snapshot has < 40 K rows. Needs a
   healthchecks.io check (period 1 d, grace 2 h) and an `HB_ORBITWATCH=`
   line in `heartbeat.env`; until then the pings log "skipping".
-- **State as of 2026-11-14:** 138 snapshot days since 2026-06-25,
-  ~1,700 events; `orbit_snapshot` ~7.4 M rows / ~1.4 GB, the main
+- **State as of 2026-11-14:** 139 snapshot days since 2026-06-25,
+  1,667 events; `orbit_snapshot` 7.07 M rows / 1.48 GB, the main
   driver of nightly-dump growth (264 MB → 424 MB). 97% of snapshot
   rows are identical to the same object's previous-day row. The
   2026-07-11..07-14 gap is permanent (power outage).
