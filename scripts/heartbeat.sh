@@ -1,8 +1,8 @@
 #!/bin/bash
 # heartbeat.sh — dead-man's-switch pings to healthchecks.io.
 #
-# Sourced (not executed) by refresh_matview_gizmo.sh and
-# pg_backup_gizmo.sh. Never fails the caller: a missing env file, an
+# Sourced (not executed) by refresh_matview_gizmo.sh, pg_backup_gizmo.sh,
+# tm_backup_check.sh, db_up_check.sh and orbit_watch_run_daily.sh. Never fails the caller: a missing env file, an
 # unreachable hc-ping.com, or a bad role just logs a line and returns 0.
 #
 # The ping URLs live OUTSIDE the repo in $HOME/Claude/mpc_sbn/heartbeat.env
@@ -11,6 +11,9 @@
 #     HB_REFRESH=https://hc-ping.com/<uuid>     # gizmo-refresh, 06:00 MST
 #     HB_BACKUP=https://hc-ping.com/<uuid>      # pg-backup, 07:30 MST
 #     HB_SITE=https://hc-ping.com/<uuid>        # site-up (public URL 200)
+#     HB_TM=https://hc-ping.com/<uuid>          # tm-backup, 08:00 MST
+#     HB_DB=https://hc-ping.com/<uuid>          # db-up, hourly (period 1 h)
+#     HB_ORBITWATCH=https://hc-ping.com/<uuid>  # orbit-watch, 07:00 MST
 # Each check is configured on healthchecks.io with period 1 day, grace
 # 2 h. A day with no ping, or an explicit /fail, raises an email alert.
 #

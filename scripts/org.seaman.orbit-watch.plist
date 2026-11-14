@@ -5,8 +5,8 @@
   <key>Label</key><string>org.seaman.orbit-watch</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/sh</string>
-    <string>/Users/robertseaman/orbit_watch_cron/run_daily.sh</string>
+    <string>/bin/bash</string>
+    <string>/Users/robertseaman/CSS_MPC_toolkit/scripts/orbit_watch_run_daily.sh</string>
   </array>
   <key>StartCalendarInterval</key>
   <dict>

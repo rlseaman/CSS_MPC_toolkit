@@ -86,9 +86,7 @@ sql/                          # SQL scripts
   ades_export.sql             #   ADES-ready columns from NEOCP
   station_report.sql          #   Per-site year x class breakdown (Tab 11)
   orbit_watch/                #   Daily Orbit News SQL — schema, capture_snapshot,
-                              #     daily_diff, rebuild_events. NOTE: on the
-                              #     station-report branch only, not yet on main
-                              #     (see "Daily Orbit News" below)
+                              #     daily_diff, rebuild_events
   viz/                        #   Reference queries for visualization
 data/                         # Vendored static reference data
   finding_chart/              #   Hipparcos V<6 + IAU constellation boundaries
@@ -655,7 +653,7 @@ for what to do if a stage fails.
 A second agent (`org.seaman.pg-backup`, 07:30 MST) runs
 `scripts/pg_backup_gizmo.sh`: `pg_dump -Fc` of every `css_*` schema
 plus globals to the boot volume under `~/Claude/mpc_sbn/backups/`
-(~265 MB, ~22 s; 14 daily + 12 monthly retained; verified with
+(~424 MB, ~35 s as of 2026-11 and growing with `orbit_snapshot`; 14 daily + 12 monthly retained; verified with
 `pg_restore -l`). The replicated MPC tables are not dumped. Restore
 runbook: `docs/disaster_recovery.md` §F. Pings the `pg-backup` heartbeat
 on start / success / fail.
@@ -700,26 +698,33 @@ planetary-defense boundary. The replica keeps only the latest orbit
   (earth_moid <= 0.05 and H <= 22), NEO_/PHA_FIRST_DETERMINED,
   SUBCLASS_CHANGE, H_REVISION (|dH| >= 0.3), ORBIT_SHIFT
   (|dq| >= 0.02 or |da| >= 0.05 or |de| >= 0.02). Thresholds tunable.
-- **Branch split — mind this.** The runner and plist
-  (`scripts/orbit_watch_run_daily.sh`, `scripts/org.seaman.orbit-watch.plist`)
-  are on `main`, but the SQL
-  (`sql/orbit_watch/{schema,capture_snapshot,daily_diff,rebuild_events}.sql`)
-  is **only on `station-report`**. A checkout of `main` alone cannot
-  rebuild this job. Design doc:
+- **Code:** runner `scripts/orbit_watch_run_daily.sh` + plist
+  `scripts/org.seaman.orbit-watch.plist`; SQL
+  `sql/orbit_watch/{schema,capture_snapshot,daily_diff,rebuild_events}.sql`
+  — all on `main` since 2026-11-14. Design doc:
   `docs/2026-06-25_daily_orbit_news_design.md`.
-- **The live copy is a STATIC COPY** at `~/orbit_watch_cron/` on Gizmo
-  (`run_daily.sh` + the two SQL files) — re-scp after any repo edit
-  until the job is folded into the nightly refresh. Logs at
-  `~/orbit_watch_cron/orbitwatch_*.log`.
-- **State as of 2026-09-23:** 87 snapshot days since 2026-06-25, 161
-  events. The 2026-07-11..07-14 gap is permanent (power outage).
-- **Not yet done:** promote the SQL to `main`; fold capture+diff into
-  `refresh_matview_gizmo.sh` as stage 3c and retire the standalone
-  agent; build the `--dev-tabs` Orbit News tab; add a rolling-window
-  prune to `orbit_snapshot` that spares any-of-six NEO cohort members;
+- **Runs from the main checkout.** Since 2026-11-14 the plist runs
+  `~/CSS_MPC_toolkit/scripts/orbit_watch_run_daily.sh`, which reads its
+  SQL from `~/CSS_MPC_toolkit/sql/orbit_watch/`, so a `git pull` there
+  deploys edits. The old static copy in `~/orbit_watch_cron/` is
+  retired; that directory now holds only logs
+  (`orbitwatch_*.log`, 30-day prune).
+- **Heartbeat** `ORBITWATCH` (start / ok / fail): fails on a capture or
+  diff error, or if today's snapshot has < 40 K rows. Needs a
+  healthchecks.io check (period 1 d, grace 2 h) and an `HB_ORBITWATCH=`
+  line in `heartbeat.env`; until then the pings log "skipping".
+- **State as of 2026-11-14:** 138 snapshot days since 2026-06-25,
+  ~1,700 events; `orbit_snapshot` ~7.4 M rows / ~1.4 GB, the main
+  driver of nightly-dump growth (264 MB → 424 MB). 97% of snapshot
+  rows are identical to the same object's previous-day row. The
+  2026-07-11..07-14 gap is permanent (power outage).
+- **Not yet done:** decide the `orbit_snapshot` size policy (the planned
+  60-day prune of non-cohort objects removes only ~9% of rows;
+  storing only changed rows would cut ~97% losslessly but needs
+  `compute_events` to diff against each object's latest prior row);
+  fold capture+diff into `refresh_matview_gizmo.sh` as stage 3c and
+  retire the standalone agent; build the `--dev-tabs` Orbit News tab;
   revisit the comet-in-watch-set rule.
-- **This is the only one of the five Gizmo agents with no heartbeat** —
-  a silent failure would go unnoticed until someone read the log.
 
 ### Dev surface
 A second Dash instance runs alongside prod for staging in-flight
