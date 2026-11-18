@@ -648,12 +648,14 @@ waitress WSGI server. A daily launchd agent
      failure exit. Dead-man's switches on healthchecks.io via
      `scripts/heartbeat.sh`; URLs in `~/Claude/mpc_sbn/heartbeat.env`
      (not in git). Added 2026-09-09.
-Total elapsed ~16–19 min in normal operation. See `docs/disaster_recovery.md`
+Total elapsed ~20–25 min in normal operation (Nov 2026); most of the
+day-to-day spread is stage 2's Lowell `astorb.dat.gz` download (107 MB,
+10 s–6 min depending on ftp.lowell.edu). See `docs/disaster_recovery.md`
 for what to do if a stage fails.
 A second agent (`org.seaman.pg-backup`, 07:30 MST) runs
 `scripts/pg_backup_gizmo.sh`: `pg_dump -Fc` of every `css_*` schema
 plus globals to the boot volume under `~/Claude/mpc_sbn/backups/`
-(~424 MB, ~35 s as of 2026-11 and growing with `orbit_snapshot`; 14 daily + 12 monthly retained; verified with
+(~453 MB, ~37 s as of 2026-11-18 and growing with `orbit_snapshot`; 14 daily + 12 monthly retained; verified with
 `pg_restore -l`). The replicated MPC tables are not dumped. Restore
 runbook: `docs/disaster_recovery.md` §F. Pings the `pg-backup` heartbeat
 on start / success / fail.
